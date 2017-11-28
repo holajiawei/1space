@@ -214,6 +214,37 @@ class TestCloudSync(TestCloudSyncBase):
             swift_content = ''.join([chunk for chunk in body])
             self.assertEqual(content, swift_content)
             self.assertEqual(False, 'server' in hdrs)
+            clear_s3_bucket(self.s3_client, s3_mapping['aws_bucket'])
+            clear_swift_container(self.swift_src, s3_mapping['container'])
+
+    def test_s3_archive_range_get(self):
+        content = 's3 archive and get'
+        key = 'test_s3_archive'
+        s3_mapping = self.s3_restore_mapping()
+        s3_key = s3_key_name(s3_mapping, key)
+        self.s3('put_object',
+                Bucket=s3_mapping['aws_bucket'],
+                Key=s3_key,
+                Body=StringIO.StringIO(content))
+
+        hdrs = self.local_swift(
+            'head_object', s3_mapping['container'], key)
+        self.assertIn('server', hdrs)
+        self.assertTrue(hdrs['server'].startswith('Jetty'))
+
+        hdrs, body = self.local_swift(
+            'get_object', s3_mapping['container'], key, content,
+            headers={'Range': 'bytes=0-5'})
+        self.assertEqual(hashlib.md5(content).hexdigest(), hdrs['etag'])
+        swift_content = ''.join([chunk for chunk in body])
+        self.assertEqual(content[:6], swift_content)
+        # There should be a "server" header, set to Jetty for S3Proxy
+        self.assertEqual('Jetty(9.2.z-SNAPSHOT)', hdrs['server'])
+
+        # the object should not be restored
+        hdrs = self.local_swift(
+            'head_object', s3_mapping['container'], key)
+        self.assertTrue('server' in hdrs)
         clear_s3_bucket(self.s3_client, s3_mapping['aws_bucket'])
         clear_swift_container(self.swift_src, s3_mapping['container'])
 
@@ -290,7 +321,7 @@ class TestCloudSync(TestCloudSyncBase):
         self.assertEqual(content, swift_content)
 
         for k in hdrs.keys():
-            self.assertEqual(False, k.startswith('Remote-'))
+            self.assertFalse(k.startswith('Remote-'))
         clear_s3_bucket(self.s3_client, mapping['aws_bucket'])
         clear_swift_container(self.swift_src, mapping['container'])
         clear_swift_container(self.swift_src, 'segments')
@@ -324,6 +355,33 @@ class TestCloudSync(TestCloudSyncBase):
         hdrs, body = self.local_swift('get_object', mapping['container'], key)
         swift_content = ''.join([chunk for chunk in body])
         self.assertEqual(content, swift_content)
+        clear_swift_container(self.swift_dst, mapping['aws_bucket'])
+        clear_swift_container(self.swift_src, mapping['container'])
+
+    def test_swift_archive_range_get(self):
+        content = 'swift archive and get'
+        key = 'test_swift_archive'
+        mapping = self.swift_restore_mapping()
+        self.remote_swift('put_object', mapping['aws_bucket'], key, content)
+
+        hdrs, listing = self.local_swift('get_container', mapping['container'])
+        self.assertEqual(0, int(hdrs['x-container-object-count']))
+        for entry in listing:
+            self.assertIn('content_location', entry)
+            self.assertEqual([swift_content_location(mapping)],
+                             entry['content_location'])
+
+        hdrs, body = self.local_swift(
+            'get_object', mapping['container'], key, content,
+            headers={'Range': 'bytes=0-5'})
+        self.assertEqual(hashlib.md5(content).hexdigest(), hdrs['etag'])
+        swift_content = ''.join([chunk for chunk in body])
+        self.assertEqual(content[:6], swift_content)
+
+        # the object should not be restored
+        hdrs, listing = self.local_swift('get_container', mapping['container'])
+        self.assertEqual(0, int(hdrs['x-container-object-count']))
+
         clear_swift_container(self.swift_dst, mapping['aws_bucket'])
         clear_swift_container(self.swift_src, mapping['container'])
 
@@ -370,7 +428,7 @@ class TestCloudSync(TestCloudSyncBase):
         self.assertEqual(content, swift_content)
 
         for k in hdrs.keys():
-            self.assertEqual(False, k.startswith('Remote-'))
+            self.assertFalse(k.startswith('Remote-'))
         clear_swift_container(self.swift_dst, mapping['aws_bucket'])
         clear_swift_container(self.swift_dst, 'segments')
         clear_swift_container(self.swift_src, mapping['container'])
