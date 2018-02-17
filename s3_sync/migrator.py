@@ -174,6 +174,9 @@ class Migrator(object):
             # NOTE: in the future this may no longer be true, as we may allow
             # remapping buckets/containers during migrations.
             self.config['container'] = self.config['aws_bucket']
+        if self.config.get('protocol') != 'swift' \
+                and 'native' not in self.config:
+            self.config['native'] = True
         self.status = status
         self.work_chunk = work_chunk
         self.max_conns = swift_pool.max_size
@@ -249,14 +252,10 @@ class Migrator(object):
     def _list_source_objects(self):
         state = self.status.get_migration(self.config)
         reset = False
-        list_args = {}
-        if self.config.get('protocol', 's3') == 's3':
-            list_args['native'] = True
         status, keys = self.provider.list_objects(
             state.get('marker', None),
             self.work_chunk,
-            self.config.get('prefix'),
-            **list_args)
+            self.config.get('prefix'))
         if status != 200:
             raise MigrationError(
                 'Failed to list source bucket/container "%s"' %
@@ -264,8 +263,7 @@ class Migrator(object):
         if not keys and state.get('marker'):
             reset = True
             status, keys = self.provider.list_objects(
-                None, self.work_chunk, self.config.get('prefix'),
-                **list_args)
+                None, self.work_chunk, self.config.get('prefix'))
             if status != 200:
                 raise MigrationError(
                     'Failed to list source bucket/container "%s"' %
@@ -352,7 +350,7 @@ class Migrator(object):
         return moved
 
     def _migrate_object(self, container, key):
-        args = {'bucket': container, 'native': True}
+        args = {'bucket': container}
         if self.config.get('protocol', 's3') == 'swift':
             args['resp_chunk_size'] = 65536
         resp = self.provider.get_object(key, **args)
@@ -393,7 +391,7 @@ class Migrator(object):
                         continue
             if meta:
                 resp = self.provider.head_object(
-                    segment_key, container, native=True)
+                    segment_key, container)
                 if resp.status != 200:
                     raise MigrationError('Failed to HEAD %s/%s' % (
                         container, segment_key))

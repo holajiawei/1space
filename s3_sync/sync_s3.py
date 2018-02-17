@@ -203,8 +203,8 @@ class SyncS3(BaseSync):
 
         return response.to_wsgi()
 
-    def head_object(self, key, bucket=None, native=False, **options):
-        if not native:
+    def head_object(self, key, bucket=None, **options):
+        if not self.settings.get('native'):
             key = self.get_s3_name(key)
         if bucket is None:
             bucket = self.aws_bucket
@@ -213,8 +213,8 @@ class SyncS3(BaseSync):
         response.body = ['']
         return response
 
-    def get_object(self, key, bucket=None, native=False, **options):
-        if not native:
+    def get_object(self, key, bucket=None, **options):
+        if not self.settings.get('native'):
             key = self.get_s3_name(key)
         if bucket is None:
             bucket = self.aws_bucket
@@ -271,8 +271,7 @@ class SyncS3(BaseSync):
             with self.client_pool.get_client() as s3_client:
                 return _perform_op(s3_client)
 
-    def list_objects(self, marker, limit, prefix, delimiter=None,
-                     native=False):
+    def list_objects(self, marker, limit, prefix, delimiter=None):
         if limit > 1000:
             limit = 1000
         args = dict(Bucket=self.aws_bucket)
@@ -281,7 +280,7 @@ class SyncS3(BaseSync):
             prefix = ''
         try:
             with self.client_pool.get_client() as s3_client:
-                if native:
+                if self.settings.get('native'):
                     key_prefix = ''
                 else:
                     key_prefix = '%s/%s/%s/' % (

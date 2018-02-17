@@ -83,6 +83,17 @@ class S3SyncShunt(object):
                    cont['container'].encode('utf-8'))
             self.sync_profiles[key] = cont
 
+        for migration in conf['migrations']:
+            profile = dict(migration)
+            # Migrations should have some sane defaults if they aren't present
+            profile.setdefault('restore_object', True)
+            profile.setdefault('container', profile['aws_bucket'])
+            if profile.get('protocol') != 'swift':
+                profile.setdefault('native', True)
+            key = (profile['account'].encode('utf-8'),
+                   profile['container'].encode('utf-8'))
+            self.sync_profiles[key] = profile
+
     def __call__(self, env, start_response):
         req = swob.Request(env)
         try:

@@ -195,14 +195,14 @@ class SyncSwift(BaseSync):
                              req.method)
         return resp.to_wsgi()
 
-    def head_object(self, key, bucket=None, native=False, **options):
+    def head_object(self, key, bucket=None, **options):
         if bucket is None:
             bucket = self.remote_container
         resp = self._call_swiftclient('head_object', bucket, key, **options)
         resp.body = ['']
         return resp
 
-    def get_object(self, key, bucket=None, native=False, **options):
+    def get_object(self, key, bucket=None, **options):
         if bucket is None:
             bucket = self.remote_container
         return self._call_swiftclient(

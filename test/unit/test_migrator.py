@@ -302,7 +302,7 @@ class TestMigrator(unittest.TestCase):
         self.migrator.next_pass()
         create_provider_mock.assert_called_once_with(
             {'aws_bucket': 'bucket', 'container': 'bucket',
-             'account': 'AUTH_test'},
+             'account': 'AUTH_test', 'native': True},
             self.migrator.ic_pool.max_size, False)
         self.migrator._next_pass.assert_called_once_with()
 
@@ -532,8 +532,8 @@ class TestMigrator(unittest.TestCase):
 
         self.migrator.next_pass()
         provider.list_objects.assert_has_calls(
-            [mock.call('zzz', self.migrator.work_chunk, None, native=True),
-             mock.call(None, self.migrator.work_chunk, None, native=True)])
+            [mock.call('zzz', self.migrator.work_chunk, None),
+             mock.call(None, self.migrator.work_chunk, None)])
 
     @mock.patch('s3_sync.migrator.create_provider')
     def test_missing_container(self, create_provider_mock):
@@ -586,7 +586,7 @@ class TestMigrator(unittest.TestCase):
                     self.migrator.config['container'])
             else:
                 provider.list_objects.assert_called_once_with(
-                    None, self.migrator.work_chunk, None, native=True)
+                    None, self.migrator.work_chunk, None)
             self.swift_client.make_path.assert_called_once_with(
                 self.migrator.config['account'],
                 self.migrator.config['container'])
