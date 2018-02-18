@@ -202,6 +202,62 @@ class TestShunt(unittest.TestCase):
             },
         })
 
+    def test_init_with_migrations(self):
+        migrations = [
+            {
+                'account': 'AUTH_s3',
+                'protocol': 's3',
+                'aws_endpoint': '',
+                'aws_identity': 'my-id',
+                'aws_secret': 's3kr!t',
+                'aws_bucket': 'some-bucket',
+            },
+            {
+                'account': 'AUTH_all-their-containers',
+                'protocol': 'swift',
+                'aws_endpoint': 'http://saio:8080/auth/v1.0',
+                'aws_identity': 'test:tester',
+                'aws_secret': 'testing',
+                'aws_bucket': '/*',
+                'remote_account': 'AUTH_all-my-containers',
+            },
+        ]
+        with tempfile.NamedTemporaryFile() as fp:
+            json.dump({"migrations": migrations}, fp)
+            fp.flush()
+            app = shunt.filter_factory(
+                {'conf_file': fp.name})(self.swift).shunted_app
+        self.assertEqual(app.sync_profiles, {
+            ('AUTH_s3', 'some-bucket'): {
+                'account': 'AUTH_s3',
+                'protocol': 's3',
+                'aws_endpoint': '',
+                'aws_identity': 'my-id',
+                'aws_secret': 's3kr!t',
+                'aws_bucket': 'some-bucket',
+                # Wasn't present before! But since we *migrating*,
+                # assume that we *want the data to move*
+                'restore_object': True,
+                # Also, inserted just for the migration, as we don't want to
+                # use the sharded S3 namespace
+                'native': True,
+                # Need a container key, or the provider balks. Migrations move
+                # data from one name to the same name, so crib from aws_bucket
+                'container': 'some-bucket',
+            },
+            ('AUTH_all-their-containers', '/*'): {
+                'account': 'AUTH_all-their-containers',
+                'protocol': 'swift',
+                'aws_endpoint': 'http://saio:8080/auth/v1.0',
+                'aws_identity': 'test:tester',
+                'aws_secret': 'testing',
+                'aws_bucket': '/*',
+                'remote_account': 'AUTH_all-my-containers',
+                'restore_object': True,
+                'container': '/*',
+            },
+        })
+
     def test_unshunted_requests(self):
         def _do_test(path, method='GET'):
             req = swob.Request.blank(path, method=method, environ={

@@ -75,7 +75,7 @@ class S3SyncShunt(object):
             conf = {'containers': []}
 
         self.sync_profiles = {}
-        for cont in conf['containers']:
+        for cont in conf.get('containers', []):
             if cont.get('propagate_delete', True):
                 # object shouldn't exist in remote
                 continue
@@ -83,7 +83,7 @@ class S3SyncShunt(object):
                    cont['container'].encode('utf-8'))
             self.sync_profiles[key] = cont
 
-        for migration in conf['migrations']:
+        for migration in conf.get('migrations', []):
             profile = dict(migration)
             # Migrations should have some sane defaults if they aren't present
             profile.setdefault('restore_object', True)
