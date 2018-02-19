@@ -31,6 +31,9 @@
         "items_chunk": 1000,
         "status_file": "/var/lib/swift-s3-migrator/migrator.status"
     },
+    "proxy_mc_config": {
+        "swift_baseurl": "http://192.168.22.99"
+    },
     "devices": "/srv/node",
     "items_chunk": 1000,
     "log_file": "/var/log/swift-s3-sync.log",

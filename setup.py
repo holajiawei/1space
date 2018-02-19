@@ -14,6 +14,7 @@ setup(name='swift-s3-sync',
           '#egg=container-crawler',
       ],
       install_requires=['boto3==1.3.1'],
+      scripts=['bin/proxymc'],
       entry_points={
           'console_scripts': [
               'swift-s3-sync = s3_sync.__main__:main',
@@ -22,5 +23,8 @@ setup(name='swift-s3-sync',
           ],
           'paste.filter_factory': [
               'cloud-shunt = s3_sync.shunt:filter_factory',
+          ],
+          'paste.app_factory': [
+              'proxymc = s3_sync.proxymc_app:app_factory',
           ],
       })

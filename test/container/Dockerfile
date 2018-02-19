@@ -1,7 +1,8 @@
 FROM bouncestorage/swift-aio:latest
 
 RUN apt-get update && \
-    apt-get install --no-install-recommends -y python-support openjdk-7-jdk wget && \
+    apt-get install --no-install-recommends -y python-support openjdk-7-jdk \
+        wget curl && \
     apt-get clean
 
 RUN pip install -e git://github.com/swiftstack/botocore.git@1.4.32.6#egg=botocore && \
@@ -17,4 +18,4 @@ RUN mkdir /swift-s3-sync && mkdir /var/lib/swift-s3-sync
 EXPOSE 10080
 RUN locale-gen en_US.UTF-8
 ENV LANG='en_US.UTF-8' LANGUAGE='en_US:en' LC_ALL='en_US.UTF-8'
-CMD ["/bin/bash", "/swift-s3-sync/test/container/launch.sh"]
+CMD ["/bin/bash", "-c" "/swift-s3-sync/test/container/launch.sh > /var/log/launch.log 2>&1"]

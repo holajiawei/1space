@@ -15,6 +15,30 @@ limitations under the License.
 """
 
 
+class FakeSwift(object):
+    def __init__(self):
+        self.calls = []
+
+    def __call__(self, env, start_response):
+        self.calls.append(env)
+        # Let the tests set up the responses they want
+        if env.get('__test__.response_dict'):
+            resp_dict = env['__test__.response_dict']
+            method = env['REQUEST_METHOD']
+            if method in resp_dict:
+                status = resp_dict[method].get('status', '200 OK')
+                headers = resp_dict[method].get('headers', [])
+                start_response(status, headers)
+                return resp_dict[method].get('body', '')
+
+        status = env.get('__test__.status', '200 OK')
+        headers = env.get('__test__.headers', [])
+        body = env.get('__test__.body', ['pass'])
+
+        start_response(status, headers)
+        return body
+
+
 class FakeStream(object):
     def __init__(self, size=1024, content=None):
         if content:

@@ -23,7 +23,7 @@ import unittest
 
 from swift.common import swob
 
-from s3_sync import shunt
+from s3_sync import proxy_mc_shunt
 from s3_sync import sync_s3
 from s3_sync import sync_swift
 from s3_sync import utils
@@ -31,7 +31,7 @@ from s3_sync import utils
 from .utils import FakeSwift
 
 
-class TestShunt(unittest.TestCase):
+class TestProxyMCShunt(unittest.TestCase):
     def setUp(self):
         self.patchers = [mock.patch(name) for name in (
             's3_sync.sync_swift.SyncSwift.shunt_object',
@@ -113,35 +113,34 @@ class TestShunt(unittest.TestCase):
         with tempfile.NamedTemporaryFile() as fp:
             json.dump(self.conf, fp)
             fp.flush()
-            self.swift = FakeSwift()
-            self.app = shunt.filter_factory(
-                {'conf_file': fp.name})(self.swift)
+            self.app = proxy_mc_shunt.filter_factory(
+                {'conf_file': fp.name})(FakeSwift())
 
     def tearDown(self):
         for patcher in self.patchers:
             patcher.__exit__()
 
     def test_bad_config_noops(self):
-        app = shunt.filter_factory(
-            {'conf_file': '/etc/doesnt/exist'})(FakeSwift()).shunted_app
+        app = proxy_mc_shunt.filter_factory(
+            {'conf_file': '/etc/doesnt/exist'})(FakeSwift())
         self.assertEqual(app.sync_profiles, {})
 
         with tempfile.NamedTemporaryFile() as fp:
             # empty
-            app = shunt.filter_factory(
-                {'conf_file': fp.name})(FakeSwift()).shunted_app
+            app = proxy_mc_shunt.filter_factory(
+                {'conf_file': fp.name})(FakeSwift())
             self.assertEqual(app.sync_profiles, {})
 
             # not json
             fp.write('{"containers":')
             fp.flush()
-            app = shunt.filter_factory(
-                {'conf_file': fp.name})(FakeSwift()).shunted_app
+            app = proxy_mc_shunt.filter_factory(
+                {'conf_file': fp.name})(FakeSwift())
             self.assertEqual(app.sync_profiles, {})
 
     def test_init(self):
         self.maxDiff = None
-        self.assertEqual(self.app.shunted_app.sync_profiles, {
+        self.assertEqual(self.app.sync_profiles, {
             ('AUTH_a', 'sw\xc3\xa9ft'): {
                 'account': 'AUTH_a',
                 'container': 'sw\xc3\xa9ft'.decode('utf-8'),
@@ -177,62 +176,6 @@ class TestShunt(unittest.TestCase):
                 'aws_bucket': 'dest-bucket',
                 'aws_identity': 'user',
                 'aws_secret': 'key',
-            },
-        })
-
-    def test_init_with_migrations(self):
-        migrations = [
-            {
-                'account': 'AUTH_s3',
-                'protocol': 's3',
-                'aws_endpoint': '',
-                'aws_identity': 'my-id',
-                'aws_secret': 's3kr!t',
-                'aws_bucket': 'some-bucket',
-            },
-            {
-                'account': 'AUTH_all-their-containers',
-                'protocol': 'swift',
-                'aws_endpoint': 'http://saio:8080/auth/v1.0',
-                'aws_identity': 'test:tester',
-                'aws_secret': 'testing',
-                'aws_bucket': '/*',
-                'remote_account': 'AUTH_all-my-containers',
-            },
-        ]
-        with tempfile.NamedTemporaryFile() as fp:
-            json.dump({"migrations": migrations}, fp)
-            fp.flush()
-            app = shunt.filter_factory(
-                {'conf_file': fp.name})(self.swift).shunted_app
-        self.assertEqual(app.sync_profiles, {
-            ('AUTH_s3', 'some-bucket'): {
-                'account': 'AUTH_s3',
-                'protocol': 's3',
-                'aws_endpoint': '',
-                'aws_identity': 'my-id',
-                'aws_secret': 's3kr!t',
-                'aws_bucket': 'some-bucket',
-                # Wasn't present before! But since we *migrating*,
-                # assume that we *want the data to move*
-                'restore_object': True,
-                # Also, inserted just for the migration, as we don't want to
-                # use the sharded S3 namespace
-                'native': True,
-                # Need a container key, or the provider balks. Migrations move
-                # data from one name to the same name, so crib from aws_bucket
-                'container': 'some-bucket',
-            },
-            ('AUTH_all-their-containers', '/*'): {
-                'account': 'AUTH_all-their-containers',
-                'protocol': 'swift',
-                'aws_endpoint': 'http://saio:8080/auth/v1.0',
-                'aws_identity': 'test:tester',
-                'aws_secret': 'testing',
-                'aws_bucket': '/*',
-                'remote_account': 'AUTH_all-my-containers',
-                'restore_object': True,
-                'container': '/*',
             },
         })
 
@@ -398,42 +341,43 @@ class TestShunt(unittest.TestCase):
             mock_call.return_value = resp
             req = swob.Request.blank(u'/v1/%s/foo' % path, environ=env)
             status, headers, body_iter = req.call_application(self.app)
-            resp_body = b''.join(body_iter)
-            path = path.encode('utf-8')
-            account = path.split('/', 1)[0]
+            resp_body = ''
+            while True:
+                data = body_iter.read()
+                if not data:
+                    break
+                resp_body += data
             if not is_put_back:
-                self.assertEqual(
-                    [(e['REQUEST_METHOD'], e['PATH_INFO'])
-                     for e in self.swift.calls],
-                    [
-                        ('HEAD', '/v1/%s' % account),
-                        ('GET', '/v1/%s/foo' % path),
-                    ])
+                self.assertEqual(1, len(self.app.app.calls))
             elif is_slo:
+                self.assertEqual(4, len(self.app.app.calls))
                 self.assertEqual(
-                    [(e['REQUEST_METHOD'], e['PATH_INFO'])
-                     for e in self.swift.calls],
-                    [
-                        ('HEAD', '/v1/%s' % account),
-                        ('GET', '/v1/%s/foo' % path),
-                        ('PUT', '/v1/%s/segments' % account),
-                        ('PUT', '/v1/%s/segments/part1' % account),
-                        ('PUT', '/v1/%s/foo' % path),
-                    ])
+                    'PUT', self.app.app.calls[1]['REQUEST_METHOD'])
+                account = path.split('/', 1)[0]
+                self.assertEqual((u'/v1/%s/segments' % account),
+                                 self.app.app.calls[1]['PATH_INFO'])
+                self.assertEqual(
+                    'PUT', self.app.app.calls[2]['REQUEST_METHOD'])
+                self.assertEqual((u'/v1/%s/segments/part1' % account),
+                                 self.app.app.calls[2]['PATH_INFO'])
+                self.assertEqual(
+                    'PUT', self.app.app.calls[3]['REQUEST_METHOD'])
+                self.assertEqual((u'/v1/%s/foo' % path).encode('utf-8'),
+                                 self.app.app.calls[3]['PATH_INFO'])
                 self.assertEqual('multipart-manifest=put',
-                                 self.swift.calls[-1]['QUERY_STRING'])
+                                 self.app.app.calls[3]['QUERY_STRING'])
             else:
+                self.assertEqual(2, len(self.app.app.calls))
                 self.assertEqual(
-                    [(e['REQUEST_METHOD'], e['PATH_INFO'])
-                     for e in self.swift.calls],
-                    [
-                        ('HEAD', '/v1/%s' % account),
-                        ('GET', '/v1/%s/foo' % path),
-                        ('PUT', '/v1/%s/foo' % path),
-                    ])
+                    'PUT', self.app.app.calls[1]['REQUEST_METHOD'])
+                self.assertEqual((u'/v1/%s/foo' % path).encode('utf-8'),
+                                 self.app.app.calls[1]['PATH_INFO'])
+            self.assertEqual('GET', self.app.app.calls[0]['REQUEST_METHOD'])
+            self.assertEqual((u'/v1/%s/foo' % path).encode('utf-8'),
+                             self.app.app.calls[0]['PATH_INFO'])
             self.assertEqual(payload, resp_body)
             mock_call.reset_mock()
-            self.swift.calls = []
+            self.app.app.calls = []
 
     def test_list_container_no_shunt(self):
         req = swob.Request.blank(
@@ -451,14 +395,12 @@ class TestShunt(unittest.TestCase):
                     'hash': 'ffff',
                     'bytes': 42,
                     'last_modified': 'date',
-                    'content_type': 'type',
-                    'content_location': 'mock-s3:bucket'},
+                    'content_type': 'type'},
                    {'name': u'unicod\xe9',
                     'hash': 'ffff',
                     'bytes': 1000,
                     'last_modified': 'date',
-                    'content_type': 'type',
-                    'content_location': 'mock-s3:bucket'}]),
+                    'content_type': 'type'}]),
             (200, [])]
         req = swob.Request.blank(
             '/v1/AUTH_a/s3',
@@ -471,21 +413,19 @@ class TestShunt(unittest.TestCase):
             mock.call('', 10000, '', ''),
             mock.call('unicod\xc3\xa9', 10000, '', '')])
         names = body_iter.split('\n')
-        self.assertEqual(['abc', u'unicod\xe9'.encode('utf-8')], names)
+        self.assertEqual(['abc', u'unicod\xe9'], names)
 
     def test_list_container_shunt_s3_xml(self):
         elements = [{'name': 'abc',
                      'hash': 'ffff',
                      'bytes': 42,
                      'last_modified': 'date',
-                     'content_type': 'type',
-                     'content_location': 'http://some-swift'},
+                     'content_type': 'type'},
                     {'name': u'unicod\xc3\xa9',
                      'hash': 'ffff',
                      'bytes': 1000,
                      'last_modified': 'date',
-                     'content_type': 'type',
-                     'content_location': 'http://some-swift'}]
+                     'content_type': 'type'}]
         self.mock_list_s3.side_effect = [
             (200, elements), (200, [])]
         req = swob.Request.blank(
@@ -507,12 +447,8 @@ class TestShunt(unittest.TestCase):
                 if elem.tag == 'container':
                     self.assertEqual('s3', elem.get('name'))
                 elif elem.tag == 'object':
-                    for k in elements[element_index].keys():
-                        if k == 'content_location':
-                            self.assertTrue(k not in cur_elem_properties)
-                        else:
-                            self.assertEqual(elements[element_index][k],
-                                             cur_elem_properties[k])
+                    self.assertEqual(elements[element_index],
+                                     cur_elem_properties)
                     element_index += 1
                 else:
                     try:
@@ -526,17 +462,14 @@ class TestShunt(unittest.TestCase):
                      'hash': 'ffff',
                      'bytes': 42,
                      'last_modified': 'date',
-                     'content_type': 'type',
-                     'content_location': 'mock-s3:bucket'},
+                     'content_type': 'type'},
                     {'name': u'unicod\xc3\xa9',
                      'hash': 'ffff',
                      'bytes': 1000,
                      'last_modified': 'date',
-                     'content_type': 'type',
-                     'content_location': 'mock-s3:bucket'}]
-        mock_result = [dict(entry) for entry in elements]
+                     'content_type': 'type'}]
         self.mock_list_s3.side_effect = [
-            (200, mock_result), (200, [])]
+            (200, elements), (200, [])]
         req = swob.Request.blank(
             '/v1/AUTH_a/s3',
             environ={'__test__.status': '200 OK',
@@ -557,12 +490,8 @@ class TestShunt(unittest.TestCase):
                 if elem.tag == 'container':
                     self.assertEqual('s3', elem.get('name'))
                 elif elem.tag == 'object':
-                    for k in elements[element_index].keys():
-                        if k == 'content_location':
-                            self.assertTrue(k not in cur_elem_properties)
-                        else:
-                            self.assertEqual(elements[element_index][k],
-                                             cur_elem_properties[k])
+                    self.assertEqual(elements[element_index],
+                                     cur_elem_properties)
                     element_index += 1
                 else:
                     try:
@@ -576,17 +505,14 @@ class TestShunt(unittest.TestCase):
                      'hash': 'ffff',
                      'bytes': 42,
                      'last_modified': 'date',
-                     'content_type': 'type',
-                     'content_location': 's3-account:bucket'},
+                     'content_type': 'type'},
                     {'name': u'unicod\xc3\xa9',
                      'hash': 'ffff',
                      'bytes': 1000,
                      'last_modified': 'date',
-                     'content_type': 'type',
-                     'content_location': 's3-account:bucket'}]
-        mock_result = [dict(entry) for entry in elements]
+                     'content_type': 'type'}]
         self.mock_list_s3.side_effect = [
-            (200, mock_result), (200, [])]
+            (200, elements), (200, [])]
         req = swob.Request.blank(
             '/v1/AUTH_a/s3?format=json',
             environ={'__test__.status': '200 OK',
@@ -599,28 +525,21 @@ class TestShunt(unittest.TestCase):
             mock.call(u'unicod\xc3\xa9'.encode('utf-8'), 10000, '', '')])
         results = json.loads(body_iter)
         for i, entry in enumerate(results):
-            for k in entry.keys():
-                if k == 'content_location':
-                    self.assertEqual([elements[i][k]], entry[k])
-                else:
-                    self.assertEqual(elements[i][k], entry[k])
+            self.assertEqual(elements[i], entry)
 
     def test_list_container_accept_json(self):
         elements = [{'name': 'abc',
                      'hash': 'ffff',
                      'bytes': 42,
                      'last_modified': 'date',
-                     'content_type': 'type',
-                     'content_location': 'mock-s3:bucket'},
+                     'content_type': 'type'},
                     {'name': u'unicod\xc3\xa9',
                      'hash': 'ffff',
                      'bytes': 1000,
                      'last_modified': 'date',
-                     'content_type': 'type',
-                     'content_location': 'mock-s3:bucket'}]
-        mock_result = [dict(entry) for entry in elements]
+                     'content_type': 'type'}]
         self.mock_list_s3.side_effect = [
-            (200, mock_result), (200, [])]
+            (200, elements), (200, [])]
         req = swob.Request.blank(
             '/v1/AUTH_a/s3',
             environ={'__test__.status': '200 OK',
@@ -634,13 +553,9 @@ class TestShunt(unittest.TestCase):
             mock.call(u'unicod\xc3\xa9'.encode('utf-8'), 10000, '', '')])
         results = json.loads(body_iter)
         for i, entry in enumerate(results):
-            for k in elements[i].keys():
-                if k == 'content_location':
-                    self.assertEqual([elements[i][k]], entry[k])
-                else:
-                    self.assertEqual(elements[i][k], entry[k])
+            self.assertEqual(elements[i], entry)
 
-    @mock.patch('s3_sync.shunt.create_provider')
+    @mock.patch('s3_sync.proxy_mc_shunt.create_provider')
     def test_list_container_shunt_all_containers(self, create_mock):
         create_mock.return_value = mock.Mock()
         create_mock.return_value.list_objects.return_value = (200, [])
@@ -681,14 +596,12 @@ class TestShunt(unittest.TestCase):
                     'hash': 'ffff',
                     'bytes': 42,
                     'last_modified': 'date',
-                    'content_type': 'type',
-                    'content_location': 'http://some-swift'},
+                    'content_type': 'type'},
                    {'name': u'unicod\xe9',
                     'hash': 'ffff',
                     'bytes': 1000,
                     'last_modified': 'date',
-                    'content_type': 'type',
-                    'content_location': 'http://some-swift'}]),
+                    'content_type': 'type'}]),
             (200, [])]
         req = swob.Request.blank(
             '/v1/AUTH_a/sw\xc3\xa9ft',
@@ -701,49 +614,4 @@ class TestShunt(unittest.TestCase):
             mock.call('', 10000, '', ''),
             mock.call(u'unicod\xe9'.encode('utf-8'), 10000, '', '')])
         names = body_iter.split('\n')
-        self.assertEqual(['abc', u'unicod\xe9'.encode('utf-8')], names)
-
-    def test_list_container_shunt_with_duplicates(self):
-        self.mock_list_swift.side_effect = [
-            (200, [{'subdir': u'a/',
-                    'content_location': 'http://some-swift'},
-                   {'name': u'unicod\xe9',
-                    'hash': 'ffff',
-                    'bytes': 1000,
-                    'last_modified': 'date',
-                    'content_type': 'type',
-                    'content_location': 'http://some-swift'},
-                   {'subdir': u'z/',
-                    'content_location': 'http://some-swift'},
-                   {'name': u'zzzzz',
-                    'hash': 'ffff',
-                    'bytes': 1000,
-                    'last_modified': 'date',
-                    'content_type': 'type',
-                    'content_location': 'http://some-swift'}]),
-            (200, [])]
-        # simulate being partially migrated
-        local_data = [
-            {'name': u'a',
-             'hash': 'ffff',
-             'bytes': 42,
-             'last_modified': 'date',
-             'content_type': 'type'},
-            {'name': u'unicod\xe9',
-             'hash': 'ffff',
-             'bytes': 1000,
-             'last_modified': 'date',
-             'content_type': 'type'},
-        ]
-        req = swob.Request.blank(
-            '/v1/AUTH_a/sw\xc3\xa9ft?delimiter=/&limit=4',
-            environ={'__test__.status': '200 OK',
-                     '__test__.body': json.dumps(local_data),
-                     'swift.trans_id': 'id'})
-        status, headers, body_iter = req.call_application(self.app)
-        self.assertEqual(self.mock_shunt_swift.mock_calls, [])
-        self.mock_list_swift.assert_called_once_with('', 4, '', '/')
-        names = body_iter.split('\n')
-        self.assertEqual(names, [
-            'a', 'a/', u'unicod\xe9'.encode('utf-8'), 'z/',
-        ])
+        self.assertEqual(['abc', u'unicod\xe9'], names)
