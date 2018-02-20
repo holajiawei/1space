@@ -26,9 +26,19 @@ import unittest
 
 
 def clear_swift_container(client, container):
-    _, list_results = client.get_container(container)
+    try:
+        _, list_results = client.get_container(container)
+    except swiftclient.exceptions.ClientException as e:
+        if e.http_status == 404:
+            return
+        raise
     for obj in list_results:
-        client.delete_object(container, obj['name'])
+        try:
+            client.delete_object(container, obj['name'])
+        except swiftclient.exceptions.ClientException as e:
+            if e.http_status == 404:
+                continue
+            raise
 
 
 def clear_s3_bucket(client, bucket):
@@ -152,6 +162,8 @@ class TestCloudSyncBase(unittest.TestCase):
 
         for container in \
                 self.test_conf['containers'] + self.test_conf['migrations']:
+            if container['container'].startswith('no-auto-'):
+                continue
             if container['protocol'] == 'swift':
                 self.swift_dst.put_container(container['aws_bucket'])
             else:
@@ -167,7 +179,9 @@ class TestCloudSyncBase(unittest.TestCase):
     def tearDownClass(self):
         if 'NO_TEARDOWN' in os.environ:
             return
-        for container in self.test_conf['containers']:
+        all_containers = self.test_conf['containers'] + \
+            self.test_conf['migrations']
+        for container in all_containers:
             if container['protocol'] == 'swift':
                 self._remove_swift_container(
                     self.swift_dst, container['aws_bucket'])
@@ -179,7 +193,7 @@ class TestCloudSyncBase(unittest.TestCase):
                         continue
                 self.s3_client.delete_bucket(Bucket=container['aws_bucket'])
 
-        for container in self.test_conf['containers']:
+        for container in all_containers:
             self._remove_swift_container(
                 self.swift_src, container['container'])
 
@@ -196,7 +210,11 @@ class TestCloudSyncBase(unittest.TestCase):
     @staticmethod
     def _remove_swift_container(client, container):
         clear_swift_container(client, container)
-        client.delete_container(container)
+        try:
+            client.delete_container(container)
+        except swiftclient.exceptions.ClientException as e:
+            if e.http_status == 404:
+                return
 
     def local_swift(self, method, *args, **kwargs):
         return getattr(self.swift_src, method)(*args, **kwargs)
