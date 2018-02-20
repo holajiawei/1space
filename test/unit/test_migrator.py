@@ -537,13 +537,17 @@ class TestMigrator(unittest.TestCase):
 
     @mock.patch('s3_sync.migrator.create_provider')
     def test_missing_container(self, create_provider_mock):
-        tests = [{'protocol': 'swift'}, {}]
+        tests = [
+            ({'protocol': 'swift'}, {'x-container-meta-foo': 'foo'}),
+            ({}, {}),
+            ({'protocol': 'swift'}, {'x-container-read': '.r*',
+                                     'x-container-write': 'AUTH_bob'})
+        ]
         provider = create_provider_mock.return_value
         config = self.migrator.config
 
-        for test in tests:
-            test_config = dict(config, **test)
-            self.migrator.config = test_config
+        for test_config, container_headers in tests:
+            self.migrator.config = dict(config, **test_config)
 
             provider.reset_mock()
             self.swift_client.reset_mock()
@@ -555,7 +559,7 @@ class TestMigrator(unittest.TestCase):
             if self.migrator.config.get('protocol') == 'swift':
                 resp = mock.Mock()
                 resp.status = 200
-                resp.headers = {'x-container-meta-foo': 'foo'}
+                resp.headers = container_headers
                 provider.head_bucket.return_value = resp
                 headers = resp.headers
             else:
@@ -563,11 +567,19 @@ class TestMigrator(unittest.TestCase):
 
             self.swift_client.iter_objects.return_value = iter([])
             self.swift_client.container_exists.side_effect = (False, True)
+            self.swift_client.make_path.return_value = '/'.join(
+                ['http://test/v1', self.migrator.config['account'],
+                 self.migrator.config['container']])
+
+            def fake_app(env, func):
+                return func(200, [])
+
+            self.swift_client.app.side_effect = fake_app
 
             self.migrator.status.get_migration.return_value = {}
 
             self.migrator.next_pass()
-            if test.get('protocol') == 'swift':
+            if test_config.get('protocol') == 'swift':
                 provider.list_objects.assert_called_once_with(
                     None, self.migrator.work_chunk, None)
                 provider.head_bucket.assert_called_once_with(
@@ -575,9 +587,17 @@ class TestMigrator(unittest.TestCase):
             else:
                 provider.list_objects.assert_called_once_with(
                     None, self.migrator.work_chunk, None, native=True)
-            self.swift_client.create_container.assert_called_once_with(
+            self.swift_client.make_path.assert_called_once_with(
                 self.migrator.config['account'],
-                self.migrator.config['container'], headers)
+                self.migrator.config['container'])
+            called_env = self.swift_client.app.mock_calls[0][1][0]
+            for k, v in headers.items():
+                self.assertEqual(
+                    v, called_env['HTTP_' + k.replace('-', '_').upper()])
+            self.assertEqual(self.migrator.config['account'],
+                             called_env['PATH_INFO'].split('/')[2])
+            self.assertEqual(self.migrator.config['container'],
+                             called_env['PATH_INFO'].split('/')[3])
 
     @mock.patch('s3_sync.migrator.create_provider')
     def test_head_container_error(self, create_provider_mock):
@@ -613,15 +633,22 @@ class TestMigrator(unittest.TestCase):
         self.swift_client.iter_objects.return_value = iter([])
         self.swift_client.container_exists.return_value = False
 
+        def fake_app(env, func):
+                return func(200, [])
+
+        self.swift_client.app.side_effect = fake_app
+        self.swift_client.make_path.return_value = '/'.join(
+            ['http://test/v1', self.migrator.config['account'],
+             self.migrator.config['container']])
+
         time_mock.time.side_effect = (0, 0, 1)
         self.migrator.status.get_migration.return_value = {}
 
         with self.assertRaises(s3_sync.migrator.MigrationError) as e:
             self.migrator.next_pass()
             self.assertEqual('Timeout', e.msg.split()[0])
-        self.swift_client.create_container.assert_called_once_with(
-            self.migrator.config['account'], self.migrator.config['container'],
-            {})
+        self.swift_client.make_path.assert_called_once_with(
+            self.migrator.config['account'], self.migrator.config['container'])
         self.swift_client.container_exists.assert_has_calls(
             [mock.call(self.migrator.config['account'],
                        self.migrator.config['container'])] * 2)
@@ -666,14 +693,21 @@ class TestMigrator(unittest.TestCase):
             }
         }
 
-        containers = {segments_container: False,
+        containers = {segments_container[1:]: False,
                       self.migrator.config['container']: False}
+
+        swift_404_resp = mock.Mock()
+        swift_404_resp.status_int = 404
 
         def container_exists(_, container):
             return containers[container]
 
-        def create_container(_, container, headers):
-            containers[container] = True
+        def fake_app(env, func):
+            containers[env['PATH_INFO'].split('/')[3]] = True
+            return func(200, [])
+
+        def _make_path(account, container):
+            return '/'.join(['http://test/v1', account, container])
 
         def get_object(name, **args):
             if name not in objects.keys():
@@ -692,12 +726,16 @@ class TestMigrator(unittest.TestCase):
             resp.headers = objects[name]['remote_headers']
             return resp
 
+        def upload_object(body, account, container, key, headers):
+            if not containers[container]:
+                raise UnexpectedResponse('', swift_404_resp)
+
         self.swift_client.container_exists.side_effect = container_exists
-        self.swift_client.create_container.side_effect = create_container
-        swift_head_resp = mock.Mock()
-        swift_head_resp.status_int = 404
+        self.swift_client.app.side_effect = fake_app
+        self.swift_client.make_path.side_effect = _make_path
         self.swift_client.get_object_metadata.side_effect = UnexpectedResponse(
-            '', swift_head_resp)
+            '', swift_404_resp)
+        self.swift_client.upload_object.side_effect = upload_object
 
         bucket_resp = mock.Mock()
         bucket_resp.status = 200
@@ -727,14 +765,29 @@ class TestMigrator(unittest.TestCase):
                        'slo',
                        objects['slo']['expected_headers'])])
 
+        called_env = self.swift_client.app.mock_calls[0][1][0]
+        self.assertEqual(self.migrator.config['account'],
+                         called_env['PATH_INFO'].split('/')[2])
+        self.assertEqual(self.migrator.config['container'],
+                         called_env['PATH_INFO'].split('/')[3])
+        called_env = self.swift_client.app.mock_calls[1][1][0]
+        self.assertEqual(self.migrator.config['account'],
+                         called_env['PATH_INFO'].split('/')[2])
+        self.assertEqual(segments_container[1:],
+                         called_env['PATH_INFO'].split('/')[3])
+
+        parts = {'part1': False, 'part2': False, 'slo': False}
         for call in self.swift_client.upload_object.mock_calls:
             body, acct, cont, obj, headers = call[1]
+            if parts[obj]:
+                continue
             if obj.startswith('part'):
                 self.assertEqual(segments_container[1:], cont)
                 self.assertEqual('object body', ''.join(body))
             else:
                 self.assertEqual(self.migrator.config['container'], cont)
                 self.assertEqual(manifest, json.loads(''.join(body)))
+            parts[obj] = True
 
 
 class TestStatus(unittest.TestCase):
