@@ -117,6 +117,31 @@ class S3SyncShunt(object):
                                       per_account)
         return self.app(env, start_response)
 
+    def iter_remote(self, sync_profile, per_account, marker, limit, prefix,
+                    delimiter):
+        provider = create_provider(sync_profile, max_conns=1,
+                                   per_account=per_account)
+        while True:
+            status, resp = provider.list_objects(
+                marker, limit, prefix, delimiter)
+            if status != 200:
+                self.logger.error('Failed to list the remote store: %s' % resp)
+                break
+            if not resp:
+                break
+            for item in resp:
+                if 'name' in item:
+                    marker = item['name']
+                else:
+                    marker = item['subdir']
+                item['content_location'] = [item['content_location']]
+                yield item, marker
+            # WSGI supplies the request parameters as UTF-8 encoded
+            # strings. We should do the same when submitting
+            # subsequent requests.
+            marker = marker.encode('utf-8')
+        yield None, None  # just to simplify some book-keeping
+
     def handle_listing(self, req, start_response, sync_profile, cont,
                        per_account):
         limit = int(req.params.get(
@@ -141,83 +166,45 @@ class S3SyncShunt(object):
             start_response(status, headers)
             return app_iter
 
-        provider = create_provider(sync_profile, max_conns=1,
-                                   per_account=per_account)
-        cloud_status, resp = provider.list_objects(
-            marker, limit, prefix, delimiter)
-        if cloud_status != 200:
-            self.logger.error('Failed to list the remote store: %s' % resp)
-            resp = []
-        if not resp:
+        remote_iter = self.iter_remote(sync_profile, per_account, marker,
+                                       limit, prefix, delimiter)
+        remote_item, remote_key = next(remote_iter)
+        if not remote_item:
             start_response(status, headers)
             return app_iter
 
         internal_resp = json.load(utils.FileLikeIter(app_iter))
         spliced_response = []
-        internal_index = 0
-        cloud_index = 0
-        while True:
+        for local_item in internal_resp:
             if len(spliced_response) == limit:
                 break
 
-            if len(resp) == cloud_index and \
-                    len(internal_resp) == internal_index:
+            if not remote_item:
+                spliced_response.append(local_item)
+                continue
+
+            if 'name' in local_item:
+                local_key = local_item['name']
+            else:
+                local_key = local_item['subdir']
+
+            while remote_item and remote_key < local_key:
+                spliced_response.append(remote_item)
+                remote_item, remote_key = next(remote_iter)
+
+            if remote_key == local_key:
+                # duplicate!
+                remote_item['content_location'].append('swift')
+                spliced_response.append(remote_item)
+                remote_item, remote_key = next(remote_iter)
+            else:
+                spliced_response.append(local_item)
+
+        while remote_item:
+            if len(spliced_response) == limit:
                 break
-
-            if internal_index < len(internal_resp):
-                if 'name' in internal_resp[internal_index]:
-                    internal_name = internal_resp[internal_index]['name']
-                elif 'subdir' in internal_resp[internal_index]:
-                    internal_name = internal_resp[internal_index]['subdir']
-            else:
-                internal_name = None
-
-            if cloud_index < len(resp):
-                if 'name' in resp[cloud_index]:
-                    cloud_name = resp[cloud_index]['name']
-                else:
-                    cloud_name = resp[cloud_index]['subdir']
-            else:
-                cloud_name = None
-
-            if cloud_name is not None:
-                added = False
-
-                if internal_name is None or \
-                        (internal_name is not None and
-                         cloud_name < internal_name):
-                    resp[cloud_index]['content_location'] = [
-                        resp[cloud_index]['content_location']]
-                    spliced_response.append(resp[cloud_index])
-                    cloud_index += 1
-                    added = True
-
-                if internal_name is not None and cloud_name == internal_name:
-                    resp[cloud_index]['content_location'] = [
-                        resp[cloud_index]['content_location'], 'swift']
-                    spliced_response.append(resp[cloud_index])
-                    cloud_index += 1
-                    internal_index += 1
-                    added = True
-
-                if len(resp) == cloud_index:
-                    # WSGI supplies the request parameters as UTF-8 encoded
-                    # strings. We should do the same when submitting
-                    # subsequent requests.
-                    cloud_status, resp = provider.list_objects(
-                        cloud_name.encode('utf-8'), limit, prefix,
-                        delimiter)
-                    if cloud_status != 200:
-                        self.logger.error(
-                            'Failed to list the remote store: %s' % resp)
-                        resp = []
-                    cloud_index = 0
-
-                if added:
-                    continue
-
-            spliced_response.append(internal_resp[internal_index])
-            internal_index += 1
+            spliced_response.append(remote_item)
+            remote_item, _junk = next(remote_iter)
 
         res = self._format_listing_response(spliced_response, resp_type, cont)
         dict_headers = dict(headers)
