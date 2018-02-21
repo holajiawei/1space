@@ -46,37 +46,46 @@ class TestMigratorUtils(unittest.TestCase):
             ({'account': 'AUTH_account',
               'aws_bucket': 'bucket',
               'aws_identity': 'id',
-              'aws_credential': 'secret'},
+              'aws_secret': 'secret'},
              {'account': 'AUTH_account',
               'aws_bucket': 'bucket',
               'aws_identity': 'id',
-              'aws_credential': 'secret',
+              'aws_secret': 'secret',
               'status': {'moved': 100,
                          'scanned': 200}},
              True),
             ({'account': 'AUTH_account',
               'aws_bucket': 'bucket',
               'aws_identity': 'id',
-              'aws_credential': 'secret'},
+              'aws_secret': 'secret'},
              {'account': 'AUTH_account',
               'aws_bucket': 'other_bucket',
               'aws_identity': 'id',
-              'aws_credential': 'secret',
+              'aws_secret': 'secret',
               'status': {'moved': 100,
                          'scanned': 200}},
              False),
             ({'account': 'AUTH_account',
               'aws_bucket': 'bucket',
               'aws_identity': 'id',
-              'aws_credential': 'secret'},
+              'aws_secret': 'secret'},
              {'account': 'AUTH_account',
               'aws_bucket': 'bucket',
               'aws_identity': 'id',
-              'aws_credential': 'secret',
+              'aws_secret': 'secret',
               'aws_endpoint': 'http://s3-clone',
               'status': {'moved': 100,
                          'scanned': 200}},
-             False)]
+             False),
+            ({'account': 'swift',
+              'aws_bucket': 'bucket',
+              'aws_identity': 'aws access key',
+              'aws_secret': 'old secret'},
+             {'account': 'swift',
+              'aws_bucket': 'bucket',
+              'aws_identity': 'aws access key',
+              'aws_secret': 'new secret'},
+             True)]
 
         for left, right, expected in test_cases:
             self.assertEqual(
@@ -218,7 +227,7 @@ class TestMigratorUtils(unittest.TestCase):
             status.status_list = status_list
 
             if not status_list:
-                migration = {}
+                migration = {'aws_identity': 'aws id', 'aws_secret': 'secret'}
             else:
                 migration = dict(status_list[0])
 
@@ -234,7 +243,11 @@ class TestMigratorUtils(unittest.TestCase):
             # gets the 1st argument in the call argument list
             written = ''.join([call[1][0] for call in
                                mock_file.write.mock_calls])
-            self.assertEqual(json.loads(written), [migration])
+            written_conf = json.loads(written)
+            for entry in written_conf:
+                self.assertTrue('aws_secret' not in entry)
+            del migration['aws_secret']
+            self.assertEqual(written_conf, [migration])
 
     @mock.patch('s3_sync.migrator.os.mkdir')
     @mock.patch('s3_sync.migrator.open')
@@ -249,13 +262,15 @@ class TestMigratorUtils(unittest.TestCase):
         status.status_list = []
         with mock.patch('time.time') as mock_time:
             mock_time.return_value = start
-            status.save_migration({}, 'marker', 100, 100, False)
+            status.save_migration(
+                {'aws_identity': 'aws id', 'aws_secret': 'secret'},
+                'marker', 100, 100, False)
         mock_mkdir.assert_called_once_with('/fake', mode=0755)
         written = ''.join([call[1][0] for call in mock_file.write.mock_calls])
-        self.assertEqual(json.loads(written),
-                         [{'status': {
-                             'marker': 'marker', 'moved_count': 100,
-                             'scanned_count': 100, 'finished': start}}])
+        self.assertEqual(json.loads(written), [
+            {'aws_identity': 'aws id',
+             'status': {'marker': 'marker', 'moved_count': 100,
+                        'scanned_count': 100, 'finished': start}}])
 
     @mock.patch('s3_sync.migrator.os.mkdir')
     @mock.patch('s3_sync.migrator.open')
@@ -269,7 +284,9 @@ class TestMigratorUtils(unittest.TestCase):
         status = s3_sync.migrator.Status('/fake/location')
         status.status_list = []
         with self.assertRaises(IOError) as cm:
-            status.save_migration({}, 'marker', 100, 100, False)
+            status.save_migration(
+                {'aws_identity': 'aws id', 'aws_secret': 'secret'},
+                'marker', 100, 100, False)
         mock_mkdir.assert_called_once_with('/fake', mode=0755)
         self.assertEqual(errno.EPERM, cm.exception.errno)
 
@@ -279,7 +296,9 @@ class TestMigratorUtils(unittest.TestCase):
         status = s3_sync.migrator.Status('/fake/location')
         status.status_list = []
         with self.assertRaises(IOError) as err:
-            status.save_migration({}, 'marker', 100, 100, False)
+            status.save_migration(
+                {'aws_identity': 'aws id', 'aws_secret': 'secret'},
+                'marker', 100, 100, False)
         self.assertEqual(errno.EPERM, err.exception.errno)
 
     def setup_status_file_path(self):
@@ -982,7 +1001,7 @@ class TestStatus(unittest.TestCase):
         }, status)
 
     def test_update_status_finished_new_move_resets_last(self):
-        # ok, back to borning nothing
+        # ok, back to boring nothing
         status = {
             'finished': self.start - 3,
             'moved_count': 1,
@@ -1022,7 +1041,7 @@ class TestStatus(unittest.TestCase):
         }, status)
 
     def test_update_status_clean_finish_does_not_reset_last(self):
-        # and we'll stay this way, indefinately...
+        # and we'll stay this way, indefinitely...
         status = {
             'finished': self.start - 2,
             'moved_count': 0,

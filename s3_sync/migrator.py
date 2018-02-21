@@ -52,6 +52,8 @@ def equal_migration(left, right):
     for k in left.keys():
         if k == 'status':
             continue
+        if k == 'aws_secret':
+            continue
         if left[k] != right[k]:
             return False
     return True
@@ -154,10 +156,13 @@ class Status(object):
             if equal_migration(entry, migration):
                 if 'status' not in entry:
                     entry['status'] = {}
+                if 'aws_secret' in entry:
+                    del entry['aws_secret']
                 status = entry['status']
                 break
         else:
             entry = dict(migration)
+            del entry['aws_secret']
             entry['status'] = {}
             self.status_list.append(entry)
             status = entry['status']
