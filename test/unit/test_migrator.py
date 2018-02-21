@@ -27,6 +27,7 @@ from swift.common.internal_client import UnexpectedResponse
 from swift.common.utils import Timestamp
 import time
 import unittest
+from tempfile import NamedTemporaryFile
 
 
 def create_timestamp(epoch_ts):
@@ -280,6 +281,86 @@ class TestMigratorUtils(unittest.TestCase):
         with self.assertRaises(IOError) as err:
             status.save_migration({}, 'marker', 100, 100, False)
         self.assertEqual(errno.EPERM, err.exception.errno)
+
+    def setup_status_file_path(self):
+        self.temp_file = NamedTemporaryFile()
+        self.temp_file.__enter__()
+        self.status_file_path = self.temp_file.name
+        self.addCleanup(lambda: self.temp_file.__exit__(None, None, None))
+
+    def test_status_prune(self):
+        self.setup_status_file_path()
+        with open(self.status_file_path, 'w') as wf:
+            json.dump([
+                {
+                    "account": "AUTH_dev",
+                    "aws_bucket": "bucket.example.com",
+                    "aws_identity": "identity",
+                    "aws_secret": "secret",
+                    "container": "bucket.example.com",
+                    "prefix": "",
+                    "protocol": "s3",
+                    "remote_account": "",
+                    "status": {
+                        "finished": 1519177565.416393,
+                        "last_finished": 1519177190.048912,
+                        "last_moved_count": 0,
+                        "last_scanned_count": 1,
+                        "marker": "blah",
+                        "moved_count": 0,
+                        "scanned_count": 1
+                    }
+                }, {
+                    "account": "AUTH_dev2",
+                    "aws_bucket": "bucket2.example.com",
+                    "aws_identity": "identity",
+                    "aws_secret": "secret",
+                    "container": "bucket2.example.com",
+                    "prefix": "",
+                    "protocol": "s3",
+                    "remote_account": "",
+                    "status": {
+                        "finished": 1519177178.41313,
+                        "last_finished": 1519177173.780246,
+                        "last_moved_count": 1,
+                        "last_scanned_count": 1,
+                        "marker": "blah",
+                        "moved_count": 1,
+                        "scanned_count": 1
+                    }
+                },
+            ], wf)
+        status = s3_sync.migrator.Status(self.status_file_path)
+        status.prune([{
+            "account": "AUTH_dev2",
+            "aws_bucket": "bucket2.example.com",
+            "aws_identity": "identity",
+            "aws_secret": "secret",
+            "container": "bucket2.example.com",
+            "prefix": "",
+            "protocol": "s3",
+            "remote_account": "",
+        }])
+        with open(self.status_file_path) as rf:
+            self.assertEqual(json.load(rf), [{
+                "account": "AUTH_dev2",
+                "aws_bucket": "bucket2.example.com",
+                "aws_identity": "identity",
+                "aws_secret": "secret",
+                "container": "bucket2.example.com",
+                "prefix": "",
+                "protocol": "s3",
+                "remote_account": "",
+                "status": {
+                    "finished": 1519177178.41313,
+                    "last_finished": 1519177173.780246,
+                    "last_moved_count": 1,
+                    "last_scanned_count": 1,
+                    "marker": "blah",
+                    "moved_count": 1,
+                    "scanned_count": 1
+                }
+            }])
 
 
 class TestMigrator(unittest.TestCase):

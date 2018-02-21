@@ -117,20 +117,36 @@ class Status(object):
         self.status_location = status_location
         self.status_list = None
 
+    def load_status_list(self):
+        try:
+            with open(self.status_location) as fh:
+                self.status_list = json.load(fh)
+        except IOError as e:
+            if e.errno == errno.ENOENT:
+                self.status_list = []
+            else:
+                raise
+
     def get_migration(self, migration):
         if not self.status_list:
-            try:
-                with open(self.status_location) as fh:
-                    self.status_list = json.load(fh)
-            except IOError as e:
-                if e.errno == errno.ENOENT:
-                    self.status_list = []
-                else:
-                    raise
+            self.load_status_list()
         for entry in self.status_list:
             if equal_migration(entry, migration):
                 return entry.get('status', {})
         return {}
+
+    def save_status_list(self):
+        try:
+            with open(self.status_location, 'w') as fh:
+                fh.truncate()
+                json.dump(self.status_list, fh)
+        except IOError as e:
+            if e.errno == errno.ENOENT:
+                os.mkdir(os.path.dirname(self.status_location), mode=0755)
+                with open(self.status_location, 'w') as fh:
+                    json.dump(self.status_list, fh)
+            else:
+                raise
 
     def save_migration(self, migration, marker, moved_count, scanned_count,
                        stats_reset=False):
@@ -148,17 +164,21 @@ class Status(object):
 
         status['marker'] = marker
         _update_status_counts(status, moved_count, scanned_count, stats_reset)
-        try:
-            with open(self.status_location, 'w') as fh:
-                fh.truncate()
-                json.dump(self.status_list, fh)
-        except IOError as e:
-            if e.errno == errno.ENOENT:
-                os.mkdir(os.path.dirname(self.status_location), mode=0755)
-                with open(self.status_location, 'w') as fh:
-                    json.dump(self.status_list, fh)
-            else:
-                raise
+        self.save_status_list()
+
+    def prune(self, migrations):
+        self.load_status_list()
+        keep_status_list = []
+        for entry in self.status_list:
+            entry_is_configured = False
+            for migration in migrations:
+                if equal_migration(entry, migration):
+                    entry_is_configured = True
+                    break
+            if entry_is_configured:
+                keep_status_list.append(entry)
+        self.status_list = keep_status_list
+        self.save_status_list()
 
 
 class MigrationError(Exception):
@@ -514,7 +534,6 @@ def main():
     load_swift(logger_name, args.once)
 
     logger = logging.getLogger(logger_name)
-    migration_status = Status(migrator_conf['status_file'])
 
     pool_size = migrator_conf.get('workers', 10)
     swift_dir = conf.get('swift_dir', '/etc/swift')
@@ -533,6 +552,8 @@ def main():
     poll_interval = float(conf.get('poll_interval', 5))
 
     migrations = conf.get('migrations', [])
+    migration_status = Status(migrator_conf['status_file'])
+    migration_status.prune(migrations)
 
     run(migrations, migration_status, internal_pool, logger, items_chunk,
         node_id, nodes, poll_interval, args.once)
