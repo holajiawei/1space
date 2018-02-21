@@ -437,7 +437,7 @@ class TestShunt(unittest.TestCase):
             mock.call('', 10000, '', ''),
             mock.call('unicod\xc3\xa9', 10000, '', '')])
         names = body_iter.split('\n')
-        self.assertEqual(['abc', u'unicod\xe9'], names)
+        self.assertEqual(['abc', u'unicod\xe9'.encode('utf-8')], names)
 
     def test_list_container_shunt_s3_xml(self):
         elements = [{'name': 'abc',
@@ -667,4 +667,49 @@ class TestShunt(unittest.TestCase):
             mock.call('', 10000, '', ''),
             mock.call(u'unicod\xe9'.encode('utf-8'), 10000, '', '')])
         names = body_iter.split('\n')
-        self.assertEqual(['abc', u'unicod\xe9'], names)
+        self.assertEqual(['abc', u'unicod\xe9'.encode('utf-8')], names)
+
+    def test_list_container_shunt_with_duplicates(self):
+        self.mock_list_swift.side_effect = [
+            (200, [{'subdir': u'a/',
+                    'content_location': 'http://some-swift'},
+                   {'name': u'unicod\xe9',
+                    'hash': 'ffff',
+                    'bytes': 1000,
+                    'last_modified': 'date',
+                    'content_type': 'type',
+                    'content_location': 'http://some-swift'},
+                   {'subdir': u'z/',
+                    'content_location': 'http://some-swift'},
+                   {'name': u'zzzzz',
+                    'hash': 'ffff',
+                    'bytes': 1000,
+                    'last_modified': 'date',
+                    'content_type': 'type',
+                    'content_location': 'http://some-swift'}]),
+            (200, [])]
+        # simulate being partially migrated
+        local_data = [
+            {'name': u'a',
+             'hash': 'ffff',
+             'bytes': 42,
+             'last_modified': 'date',
+             'content_type': 'type'},
+            {'name': u'unicod\xe9',
+             'hash': 'ffff',
+             'bytes': 1000,
+             'last_modified': 'date',
+             'content_type': 'type'},
+        ]
+        req = swob.Request.blank(
+            '/v1/AUTH_a/sw\xc3\xa9ft?delimiter=/&limit=4',
+            environ={'__test__.status': '200 OK',
+                     '__test__.body': json.dumps(local_data),
+                     'swift.trans_id': 'id'})
+        status, headers, body_iter = req.call_application(self.app)
+        self.assertEqual(self.mock_shunt_swift.mock_calls, [])
+        self.mock_list_swift.assert_called_once_with('', 4, '', '/')
+        names = body_iter.split('\n')
+        self.assertEqual(names, [
+            'a', 'a/', u'unicod\xe9'.encode('utf-8'), 'z/',
+        ])

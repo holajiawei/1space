@@ -314,7 +314,8 @@ class S3SyncShunt(object):
                                 '<?xml version="1.0" encoding="UTF-8"?>', 1)
 
         # Default to plain format
-        return '\n'.join([entry['name'] for entry in list_results])
+        return u'\n'.join(entry['name'] if 'name' in entry else entry['subdir']
+                          for entry in list_results).encode('utf-8')
 
 
 def filter_factory(global_conf, **local_conf):
