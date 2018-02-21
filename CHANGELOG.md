@@ -1,8 +1,8 @@
-## 0.1.24.3 (2018-02-20)
+## 0.1.25 (2018-02-21)
 
 Features:
 
-    - swift-s3-verify now makes assertions about the reponses received, rather
+    - swift-s3-verify now makes assertions about the responses received, rather
       relying on tracebacks.
     - swift-s3-verify now accepts a `--account` override when using the Swift
       protocol.
@@ -13,6 +13,9 @@ Features:
     - The shunt can now restore `206 Partial Content` responses that in fact
       contain the entire content.
     - Keep migrator scan and moved counts for last run in status file
+    - The shunt now supports configured migrations.
+    - Swift Container ACLs are propagated to created containers during whole
+      account migrations.
 
 Bug fixes:
 
@@ -21,6 +24,11 @@ Bug fixes:
     - swift-s3-verify now works against AWS.
     - Do translate headers twice from the remote to local. In the case of S3,
       this would mangle the ETag, causing the PUT to fail.
+    - Do not display objects twice in shunted listings for migrations or
+      archive sync mappings after restore.
+    - Do not duplicate secrets in status file.
+    - Stale status entries for migrations are removed for unconfigured
+      migrations startup.
 
 
 ## 0.1.24 (2018-02-01)
