@@ -33,6 +33,7 @@ from .provider_factory import create_provider
 from .utils import (convert_to_local_headers, convert_to_swift_headers,
                     SWIFT_TIME_FMT)
 from swift.common.internal_client import UnexpectedResponse
+from swift.common.swob import Request
 from swift.common.utils import FileLikeIter, Timestamp
 
 
@@ -282,13 +283,24 @@ class Migrator(object):
                 raise MigrationError('Failed to HEAD bucket/container %s' %
                                      container)
             headers = {}
+            acl_hdrs = ['x-container-read', 'x-container-write']
             for hdr in resp.headers:
-                if hdr.startswith('x-container-meta-'):
+                if hdr.startswith('x-container-meta-') or hdr in acl_hdrs:
                     headers[hdr] = resp.headers[hdr]
         else:
             headers = {}
-        internal_client.create_container(
-            self.config['account'], container, headers)
+
+        req = Request.blank(
+            internal_client.make_path(self.config['account'], container),
+            environ={'REQUEST_METHOD': 'PUT',
+                     'swift_owner': True},
+            headers=headers)
+
+        resp = req.get_response(internal_client.app)
+        if resp.status_int // 100 != 2:
+            raise UnexpectedResponse('Failed to create container %s: %d' % (
+                container, resp.status_int), resp)
+
         start = time.time()
         while time.time() - start < timeout:
             if not internal_client.container_exists(

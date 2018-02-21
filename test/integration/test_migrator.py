@@ -15,6 +15,8 @@ limitations under the License.
 """
 
 import StringIO
+import swiftclient
+import urllib
 from . import (TestCloudSyncBase, clear_swift_container, clear_s3_bucket,
                wait_for_condition)
 
@@ -106,3 +108,38 @@ class TestMigrator(TestCloudSyncBase):
 
         clear_swift_container(self.swift_dst, migration['aws_bucket'])
         clear_swift_container(self.swift_src, migration['container'])
+
+    def test_container_meta(self):
+        migration = self._find_migration(
+            lambda cont: cont['container'] == 'no-auto-acl')
+
+        self.remote_swift('put_container', migration['aws_bucket'],
+                          headers={'x-container-read': 'AUTH_test2',
+                                   'x-container-write': 'AUTH_test2',
+                                   'x-container-meta-test': 'test metadata'})
+
+        def _check_container_created():
+            try:
+                return self.local_swift(
+                    'get_container', migration['container'])
+            except swiftclient.exceptions.ClientException as e:
+                if e.http_status == 404:
+                    return False
+                raise
+
+        hdrs, listing = wait_for_condition(5, _check_container_created)
+        self.assertIn('x-container-meta-test', hdrs)
+        self.assertEqual('test metadata', hdrs['x-container-meta-test'])
+
+        scheme, rest = self.SWIFT_CREDS['authurl'].split(':', 1)
+        swift_host, _ = urllib.splithost(rest)
+
+        remote_swift = swiftclient.client.Connection(
+            authurl=self.SWIFT_CREDS['authurl'],
+            user=self.SWIFT_CREDS['dst']['user'],
+            key=self.SWIFT_CREDS['dst']['key'],
+            os_options={'object_storage_url': '%s://%s/v1/AUTH_test' % (
+                scheme, swift_host)})
+        remote_swift.put_object(migration['container'], 'test', 'test')
+        hdrs, body = remote_swift.get_object(migration['container'], 'test')
+        self.assertEqual(body, 'test')
