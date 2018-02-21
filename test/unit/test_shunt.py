@@ -417,12 +417,14 @@ class TestShunt(unittest.TestCase):
                     'hash': 'ffff',
                     'bytes': 42,
                     'last_modified': 'date',
-                    'content_type': 'type'},
+                    'content_type': 'type',
+                    'content_location': 'mock-s3:bucket'},
                    {'name': u'unicod\xe9',
                     'hash': 'ffff',
                     'bytes': 1000,
                     'last_modified': 'date',
-                    'content_type': 'type'}]),
+                    'content_type': 'type',
+                    'content_location': 'mock-s3:bucket'}]),
             (200, [])]
         req = swob.Request.blank(
             '/v1/AUTH_a/s3',
@@ -442,12 +444,14 @@ class TestShunt(unittest.TestCase):
                      'hash': 'ffff',
                      'bytes': 42,
                      'last_modified': 'date',
-                     'content_type': 'type'},
+                     'content_type': 'type',
+                     'content_location': 'http://some-swift'},
                     {'name': u'unicod\xc3\xa9',
                      'hash': 'ffff',
                      'bytes': 1000,
                      'last_modified': 'date',
-                     'content_type': 'type'}]
+                     'content_type': 'type',
+                     'content_location': 'http://some-swift'}]
         self.mock_list_s3.side_effect = [
             (200, elements), (200, [])]
         req = swob.Request.blank(
@@ -469,8 +473,12 @@ class TestShunt(unittest.TestCase):
                 if elem.tag == 'container':
                     self.assertEqual('s3', elem.get('name'))
                 elif elem.tag == 'object':
-                    self.assertEqual(elements[element_index],
-                                     cur_elem_properties)
+                    for k in elements[element_index].keys():
+                        if k == 'content_location':
+                            self.assertTrue(k not in cur_elem_properties)
+                        else:
+                            self.assertEqual(elements[element_index][k],
+                                             cur_elem_properties[k])
                     element_index += 1
                 else:
                     try:
@@ -484,14 +492,17 @@ class TestShunt(unittest.TestCase):
                      'hash': 'ffff',
                      'bytes': 42,
                      'last_modified': 'date',
-                     'content_type': 'type'},
+                     'content_type': 'type',
+                     'content_location': 'mock-s3:bucket'},
                     {'name': u'unicod\xc3\xa9',
                      'hash': 'ffff',
                      'bytes': 1000,
                      'last_modified': 'date',
-                     'content_type': 'type'}]
+                     'content_type': 'type',
+                     'content_location': 'mock-s3:bucket'}]
+        mock_result = [dict(entry) for entry in elements]
         self.mock_list_s3.side_effect = [
-            (200, elements), (200, [])]
+            (200, mock_result), (200, [])]
         req = swob.Request.blank(
             '/v1/AUTH_a/s3',
             environ={'__test__.status': '200 OK',
@@ -512,8 +523,12 @@ class TestShunt(unittest.TestCase):
                 if elem.tag == 'container':
                     self.assertEqual('s3', elem.get('name'))
                 elif elem.tag == 'object':
-                    self.assertEqual(elements[element_index],
-                                     cur_elem_properties)
+                    for k in elements[element_index].keys():
+                        if k == 'content_location':
+                            self.assertTrue(k not in cur_elem_properties)
+                        else:
+                            self.assertEqual(elements[element_index][k],
+                                             cur_elem_properties[k])
                     element_index += 1
                 else:
                     try:
@@ -527,14 +542,17 @@ class TestShunt(unittest.TestCase):
                      'hash': 'ffff',
                      'bytes': 42,
                      'last_modified': 'date',
-                     'content_type': 'type'},
+                     'content_type': 'type',
+                     'content_location': 's3-account:bucket'},
                     {'name': u'unicod\xc3\xa9',
                      'hash': 'ffff',
                      'bytes': 1000,
                      'last_modified': 'date',
-                     'content_type': 'type'}]
+                     'content_type': 'type',
+                     'content_location': 's3-account:bucket'}]
+        mock_result = [dict(entry) for entry in elements]
         self.mock_list_s3.side_effect = [
-            (200, elements), (200, [])]
+            (200, mock_result), (200, [])]
         req = swob.Request.blank(
             '/v1/AUTH_a/s3?format=json',
             environ={'__test__.status': '200 OK',
@@ -547,21 +565,28 @@ class TestShunt(unittest.TestCase):
             mock.call(u'unicod\xc3\xa9'.encode('utf-8'), 10000, '', '')])
         results = json.loads(body_iter)
         for i, entry in enumerate(results):
-            self.assertEqual(elements[i], entry)
+            for k in entry.keys():
+                if k == 'content_location':
+                    self.assertEqual([elements[i][k]], entry[k])
+                else:
+                    self.assertEqual(elements[i][k], entry[k])
 
     def test_list_container_accept_json(self):
         elements = [{'name': 'abc',
                      'hash': 'ffff',
                      'bytes': 42,
                      'last_modified': 'date',
-                     'content_type': 'type'},
+                     'content_type': 'type',
+                     'content_location': 'mock-s3:bucket'},
                     {'name': u'unicod\xc3\xa9',
                      'hash': 'ffff',
                      'bytes': 1000,
                      'last_modified': 'date',
-                     'content_type': 'type'}]
+                     'content_type': 'type',
+                     'content_location': 'mock-s3:bucket'}]
+        mock_result = [dict(entry) for entry in elements]
         self.mock_list_s3.side_effect = [
-            (200, elements), (200, [])]
+            (200, mock_result), (200, [])]
         req = swob.Request.blank(
             '/v1/AUTH_a/s3',
             environ={'__test__.status': '200 OK',
@@ -575,7 +600,11 @@ class TestShunt(unittest.TestCase):
             mock.call(u'unicod\xc3\xa9'.encode('utf-8'), 10000, '', '')])
         results = json.loads(body_iter)
         for i, entry in enumerate(results):
-            self.assertEqual(elements[i], entry)
+            for k in elements[i].keys():
+                if k == 'content_location':
+                    self.assertEqual([elements[i][k]], entry[k])
+                else:
+                    self.assertEqual(elements[i][k], entry[k])
 
     @mock.patch('s3_sync.shunt.create_provider')
     def test_list_container_shunt_all_containers(self, create_mock):
@@ -618,12 +647,14 @@ class TestShunt(unittest.TestCase):
                     'hash': 'ffff',
                     'bytes': 42,
                     'last_modified': 'date',
-                    'content_type': 'type'},
+                    'content_type': 'type',
+                    'content_location': 'http://some-swift'},
                    {'name': u'unicod\xe9',
                     'hash': 'ffff',
                     'bytes': 1000,
                     'last_modified': 'date',
-                    'content_type': 'type'}]),
+                    'content_type': 'type',
+                    'content_location': 'http://some-swift'}]),
             (200, [])]
         req = swob.Request.blank(
             '/v1/AUTH_a/sw\xc3\xa9ft',

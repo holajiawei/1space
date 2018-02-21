@@ -181,24 +181,41 @@ class S3SyncShunt(object):
                 cloud_name = None
 
             if cloud_name is not None:
+                added = False
+
                 if internal_name is None or \
                         (internal_name is not None and
-                         cloud_name <= internal_name):
+                         cloud_name < internal_name):
+                    resp[cloud_index]['content_location'] = [
+                        resp[cloud_index]['content_location']]
                     spliced_response.append(resp[cloud_index])
                     cloud_index += 1
-                    if len(resp) == cloud_index:
-                        # WSGI supplies the request parameters as UTF-8 encoded
-                        # strings. We should do the same when submitting
-                        # subsequent requests.
-                        cloud_status, resp = provider.list_objects(
-                            cloud_name.encode('utf-8'), limit, prefix,
-                            delimiter)
-                        if cloud_status != 200:
-                            self.logger.error(
-                                'Failed to list the remote store: %s' % resp)
-                            resp = []
-                        cloud_index = 0
+                    added = True
+
+                if internal_name is not None and cloud_name == internal_name:
+                    resp[cloud_index]['content_location'] = [
+                        resp[cloud_index]['content_location'], 'swift']
+                    spliced_response.append(resp[cloud_index])
+                    cloud_index += 1
+                    internal_index += 1
+                    added = True
+
+                if len(resp) == cloud_index:
+                    # WSGI supplies the request parameters as UTF-8 encoded
+                    # strings. We should do the same when submitting
+                    # subsequent requests.
+                    cloud_status, resp = provider.list_objects(
+                        cloud_name.encode('utf-8'), limit, prefix,
+                        delimiter)
+                    if cloud_status != 200:
+                        self.logger.error(
+                            'Failed to list the remote store: %s' % resp)
+                        resp = []
+                    cloud_index = 0
+
+                if added:
                     continue
+
             spliced_response.append(internal_resp[internal_index])
             internal_index += 1
 

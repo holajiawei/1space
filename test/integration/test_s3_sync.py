@@ -91,7 +91,7 @@ class TestCloudSync(TestCloudSyncBase):
         self.assertEqual(0, int(swift_hdrs['x-container-object-count']))
         self.assertEqual(etag, entry['hash'])
         self.assertEqual(
-            expected_location,
+            [expected_location],
             entry['content_location'])
         self.assertEqual(etag, get_etag(key))
 
@@ -283,8 +283,8 @@ class TestCloudSync(TestCloudSyncBase):
         hdrs, listing = self.local_swift('get_container', mapping['container'])
         self.assertEqual(1, int(hdrs['x-container-object-count']))
         # We get back an entry for the remote and the local object
-        self.assertIn('content_location', listing[0])
-        self.assertFalse('content_location' in listing[1])
+        self.assertEqual(1, len(listing))
+        self.assertEqual(2, len(listing[0]['content_location']))
         hdrs, body = self.local_swift('get_object', mapping['container'], key)
         swift_content = ''.join([chunk for chunk in body])
         self.assertEqual(content, swift_content)
@@ -305,7 +305,7 @@ class TestCloudSync(TestCloudSyncBase):
         self.assertEqual(0, int(hdrs['x-container-object-count']))
         for entry in listing:
             self.assertIn('content_location', entry)
-            self.assertEqual(swift_content_location(mapping),
+            self.assertEqual([swift_content_location(mapping)],
                              entry['content_location'])
 
         hdrs, body = self.local_swift(
@@ -319,9 +319,8 @@ class TestCloudSync(TestCloudSyncBase):
         self.assertEqual(1, int(hdrs['x-container-object-count']))
         # We get back an entry for the remote and the local object
         self.assertIn('content_location', listing[0])
-        self.assertEqual(swift_content_location(mapping),
+        self.assertEqual([swift_content_location(mapping), 'swift'],
                          listing[0]['content_location'])
-        self.assertFalse('content_location' in listing[1])
         hdrs, body = self.local_swift('get_object', mapping['container'], key)
         swift_content = ''.join([chunk for chunk in body])
         self.assertEqual(content, swift_content)
@@ -346,7 +345,7 @@ class TestCloudSync(TestCloudSyncBase):
         self.assertEqual(0, int(hdrs['x-container-object-count']))
         for entry in listing:
             self.assertIn('content_location', entry)
-            self.assertEqual(swift_content_location(mapping),
+            self.assertEqual([swift_content_location(mapping)],
                              entry['content_location'])
 
         slo_etag = hashlib.md5(''.join([
@@ -364,9 +363,8 @@ class TestCloudSync(TestCloudSyncBase):
         self.assertEqual(1, int(hdrs['x-container-object-count']))
         # We get back an entry for the remote and the local object
         self.assertIn('content_location', listing[0])
-        self.assertEqual(swift_content_location(mapping),
+        self.assertEqual([swift_content_location(mapping), 'swift'],
                          listing[0]['content_location'])
-        self.assertFalse('content_location' in listing[1])
         hdrs, body = self.local_swift('get_object', mapping['container'], key)
         swift_content = ''.join([chunk for chunk in body])
         self.assertEqual(content, swift_content)
