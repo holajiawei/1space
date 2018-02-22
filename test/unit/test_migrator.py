@@ -122,7 +122,7 @@ class TestMigratorUtils(unittest.TestCase):
                 with self.assertRaises(expected):
                     s3_sync.migrator.cmp_object_entries(left, right)
 
-    @mock.patch('s3_sync.migrator.open')
+    @mock.patch('__builtin__.open')
     def test_status_get(self, mock_open):
         mock_file = mock.Mock()
         mock_file.__enter__ = lambda *args: mock_file
@@ -163,14 +163,14 @@ class TestMigratorUtils(unittest.TestCase):
                 self.assertEqual(
                     migration['status'], status.get_migration(query))
 
-    @mock.patch('s3_sync.migrator.open')
+    @mock.patch('__builtin__.open')
     def test_status_get_missing(self, mock_open):
         mock_open.side_effect = IOError(errno.ENOENT, 'missing file')
 
         status = s3_sync.migrator.Status('/fake/location')
         self.assertEqual({}, status.get_migration({}))
 
-    @mock.patch('s3_sync.migrator.open')
+    @mock.patch('__builtin__.open')
     def test_status_get_errors(self, mock_open):
         mock_open.side_effect = IOError(errno.EPERM, 'denied')
 
@@ -179,7 +179,7 @@ class TestMigratorUtils(unittest.TestCase):
             status.get_migration({})
         self.assertEqual(errno.EPERM, e.exception.errno)
 
-    @mock.patch('s3_sync.migrator.open')
+    @mock.patch('__builtin__.open')
     def test_status_save(self, mock_open):
         mock_file = mock.Mock()
         mock_file.__enter__ = lambda *args: mock_file
@@ -250,7 +250,7 @@ class TestMigratorUtils(unittest.TestCase):
             self.assertEqual(written_conf, [migration])
 
     @mock.patch('s3_sync.migrator.os.mkdir')
-    @mock.patch('s3_sync.migrator.open')
+    @mock.patch('__builtin__.open')
     def test_status_save_create(self, mock_open, mock_mkdir):
         start = int(time.time()) + 1
         mock_file = mock.Mock()
@@ -273,7 +273,7 @@ class TestMigratorUtils(unittest.TestCase):
                         'scanned_count': 100, 'finished': start}}])
 
     @mock.patch('s3_sync.migrator.os.mkdir')
-    @mock.patch('s3_sync.migrator.open')
+    @mock.patch('__builtin__.open')
     def test_status_save_create_raises(self, mock_open, mock_mkdir):
         mock_file = mock.Mock()
         mock_file.__enter__ = lambda *args: mock_file
@@ -290,7 +290,7 @@ class TestMigratorUtils(unittest.TestCase):
         mock_mkdir.assert_called_once_with('/fake', mode=0755)
         self.assertEqual(errno.EPERM, cm.exception.errno)
 
-    @mock.patch('s3_sync.migrator.open')
+    @mock.patch('__builtin__.open')
     def test_status_save_raises(self, mock_open):
         mock_open.side_effect = IOError(errno.EPERM, 'denied')
         status = s3_sync.migrator.Status('/fake/location')
