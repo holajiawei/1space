@@ -27,7 +27,9 @@ from swift.common.internal_client import UnexpectedResponse
 from swift.common.utils import Timestamp
 import time
 import unittest
-from tempfile import NamedTemporaryFile
+from tempfile import NamedTemporaryFile, mkdtemp
+import shutil
+import os
 
 
 def create_timestamp(epoch_ts):
@@ -364,6 +366,7 @@ class TestMigratorUtils(unittest.TestCase):
                     "aws_identity": "identity",
                     "aws_secret": "secret",
                     "container": "bucket.example.com",
+                    "all_buckets": True,
                     "prefix": "",
                     "protocol": "s3",
                     "remote_account": "",
@@ -382,6 +385,7 @@ class TestMigratorUtils(unittest.TestCase):
                     "aws_identity": "identity",
                     "aws_secret": "secret",
                     "container": "bucket2.example.com",
+                    "all_buckets": True,
                     "prefix": "",
                     "protocol": "s3",
                     "remote_account": "",
@@ -407,12 +411,13 @@ class TestMigratorUtils(unittest.TestCase):
             "remote_account": "",
         }])
         with open(self.status_file_path) as rf:
-            self.assertEqual(json.load(rf), [{
+            self.assertEqual(json.load(rf), json.loads(json.dumps([{
                 "account": "AUTH_dev2",
                 "aws_bucket": "bucket2.example.com",
                 "aws_identity": "identity",
                 "aws_secret": "secret",
                 "container": "bucket2.example.com",
+                "all_buckets": True,
                 "prefix": "",
                 "protocol": "s3",
                 "remote_account": "",
@@ -425,7 +430,7 @@ class TestMigratorUtils(unittest.TestCase):
                     "moved_count": 1,
                     "scanned_count": 1
                 }
-            }])
+            }])))
 
     def test_prune_all_buckets_migration(self):
         existing_status = json.loads(json.dumps([
@@ -594,6 +599,7 @@ class TestMigrator(unittest.TestCase):
         self.assertEqual(buckets[0]['name'],
                          self.migrator.config['aws_bucket'])
         self.assertEqual(buckets[0]['name'], provider_mock.aws_bucket)
+        self.assertTrue(self.migrator.config['all_buckets'])
 
     @mock.patch('s3_sync.migrator.create_provider')
     def test_list_buckets_error(self, create_provider_mock):
@@ -602,11 +608,11 @@ class TestMigrator(unittest.TestCase):
         self.migrator.config = {'aws_bucket': '/*'}
         with self.assertRaises(s3_sync.migrator.MigrationError):
             self.migrator.next_pass()
-        self.assertEqual({'aws_bucket': '/*', 'container': '.'},
-                         self.migrator.config)
+        expected_conf = {'aws_bucket': '/*', 'container': '.',
+                         'all_buckets': True}
+        self.assertEqual(expected_conf, self.migrator.config)
         create_provider_mock.assert_called_once_with(
-            {'aws_bucket': '/*', 'container': '.'},
-            self.migrator.ic_pool.max_size, False)
+            expected_conf, self.migrator.ic_pool.max_size, False)
 
     @mock.patch('s3_sync.migrator.create_provider')
     def test_migrate_objects(self, create_provider_mock):
@@ -784,6 +790,98 @@ class TestMigrator(unittest.TestCase):
 
             for call in self.swift_client.upload_object.mock_calls:
                 self.assertEqual('object body', ''.join(call[1][0]))
+
+    @mock.patch('s3_sync.migrator.create_provider')
+    def test_migrate_all_containers_next_pass(self, create_provider_mock):
+        provider_mock = mock.Mock()
+        buckets = [{'name': 'bucket1'}, {'name': 'bucket2'}]
+        provider_mock.list_buckets.return_value = ProviderResponse(
+            True, 200, [], buckets)
+        provider_mock.list_objects.return_value = (200, [{'name': 'obj'}])
+        provider_mock.get_object.return_value = ProviderResponse(
+            True, 200, {'last-modified': create_timestamp(1.5e9)},
+            StringIO(''))
+        self.swift_client.iter_objects.return_value = iter([])
+        create_provider_mock.return_value = provider_mock
+        self.migrator.config = {
+            'account': 'AUTH_dev',
+            'aws_bucket': '/*',
+        }
+        temp_dir = mkdtemp()
+        self.addCleanup(lambda: shutil.rmtree(temp_dir))
+        status_file = os.path.join(temp_dir, 'migrator.status')
+        self.migrator.status = s3_sync.migrator.Status(status_file)
+        with mock.patch('time.time', return_value=100.0):
+            self.migrator.next_pass()
+        self.assertEqual('Copied bucket1/obj\nCopied bucket2/obj\n',
+                         self.stream.getvalue())
+        with open(status_file) as f:
+            status = json.load(f)
+        self.assertEqual(status, [{
+            'status': {
+                'marker': 'obj',
+                'moved_count': 1,
+                'finished': 100.0,
+                'scanned_count': 1,
+            },
+            'account': 'AUTH_dev',
+            'container': 'bucket1',
+            'all_buckets': True,
+            'aws_bucket': 'bucket1',
+        }, {
+            'status': {
+                'marker': 'obj',
+                'moved_count': 1,
+                'finished': 100.0,
+                'scanned_count': 1,
+            },
+            'account': 'AUTH_dev',
+            'container': 'bucket2',
+            'all_buckets': True,
+            'aws_bucket': 'bucket2',
+        }])
+        self.migrator.config = {
+            'account': 'AUTH_dev',
+            'aws_bucket': 'bucket3',
+            'container': 'bucket3',
+        }
+        with mock.patch('time.time', return_value=100.0):
+            self.migrator.next_pass()
+        with open(status_file) as f:
+            status = json.load(f)
+        self.assertEqual(status, [{
+            'status': {
+                'marker': 'obj',
+                'moved_count': 1,
+                'finished': 100.0,
+                'scanned_count': 1,
+            },
+            'account': 'AUTH_dev',
+            'container': 'bucket1',
+            'all_buckets': True,
+            'aws_bucket': 'bucket1',
+        }, {
+            'status': {
+                'marker': 'obj',
+                'moved_count': 1,
+                'finished': 100.0,
+                'scanned_count': 1,
+            },
+            'account': 'AUTH_dev',
+            'container': 'bucket2',
+            'all_buckets': True,
+            'aws_bucket': 'bucket2',
+        }, {
+            'status': {
+                'marker': 'obj',
+                'moved_count': 1,
+                'finished': 100.0,
+                'scanned_count': 1,
+            },
+            'account': 'AUTH_dev',
+            'container': 'bucket3',
+            'aws_bucket': 'bucket3',
+        }])
 
     @mock.patch('s3_sync.migrator.create_provider')
     def test_migrate_objects_reset(self, create_provider_mock):

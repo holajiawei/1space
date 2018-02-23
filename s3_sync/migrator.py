@@ -43,7 +43,7 @@ TIME_DIFF = 2
 LAST_MODIFIED_FMT = '%a, %d %b %Y %H:%M:%S %Z'
 EPOCH = datetime.datetime.utcfromtimestamp(0)
 
-IGNORE_KEYS = set(('status', 'aws_secret'))
+IGNORE_KEYS = set(('status', 'aws_secret', 'all_buckets'))
 
 
 def equal_migration(left, right):
@@ -224,6 +224,7 @@ class Migrator(object):
             self._next_pass()
             return
 
+        self.config['all_buckets'] = True
         self.config['container'] = '.'
         self.provider = create_provider(
             self.config, self.max_conns, False)
