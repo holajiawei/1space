@@ -1,3 +1,16 @@
+## 0.1.26 (2018-02-23)
+
+Features:
+
+    - Status records generated from migrations configured for all buckets
+      within a single account now include an `all_buckets` flag. Collecting
+      agents may use it to perform aggregation.
+
+Bug fixes:
+
+    - Fix a bug in migration status reporting which resulted in an unbounded
+      growth of status files.
+
 ## 0.1.25 (2018-02-21)
 
 Features:
