@@ -391,9 +391,11 @@ class TestMigrator(unittest.TestCase):
         pool.item.return_value.__enter__ = lambda *args: self.swift_client
         pool.item.return_value.__exit__ = lambda *args: None
         pool.max_size = 11
+        self.logger = logging.getLogger()
+        self.stream = StringIO()
+        self.logger.addHandler(logging.StreamHandler(self.stream))
         self.migrator = s3_sync.migrator.Migrator(
-            config, None, 1000, pool, None, 0, 1)
-        self.migrator.logger = mock.Mock()
+            config, None, 1000, pool, self.logger, 0, 1)
         self.migrator.status = mock.Mock()
 
     @mock.patch('s3_sync.migrator.create_provider')
@@ -405,6 +407,16 @@ class TestMigrator(unittest.TestCase):
              'account': 'AUTH_test', 'native': True},
             self.migrator.ic_pool.max_size, False)
         self.migrator._next_pass.assert_called_once_with()
+
+    @mock.patch('s3_sync.migrator.create_provider')
+    def test_all_buckets_next_pass_fails(self, create_provider_mock):
+        self.migrator.config['aws_bucket'] = '/*'
+        self.migrator._next_pass = mock.Mock(side_effect=Exception('kaboom'))
+        create_provider_mock.return_value.list_buckets.return_value = \
+            ProviderResponse(True, 200, [], [{'name': 'bucket'}])
+        self.migrator.next_pass()
+        self.assertEqual('Failed to migrate bucket: kaboom',
+                         self.stream.getvalue().splitlines()[0])
 
     @mock.patch('s3_sync.migrator.create_provider')
     def test_all_containers(self, create_provider_mock):

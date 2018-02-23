@@ -157,12 +157,12 @@ class Status(object):
                 if 'status' not in entry:
                     entry['status'] = {}
                 if 'aws_secret' in entry:
-                    del entry['aws_secret']
+                    entry.pop('aws_secret', None)
                 status = entry['status']
                 break
         else:
             entry = dict(migration)
-            del entry['aws_secret']
+            entry.pop('aws_secret', None)
             entry['status'] = {}
             self.status_list.append(entry)
             status = entry['status']
@@ -238,9 +238,9 @@ class Migrator(object):
                 try:
                     self._next_pass()
                 except Exception as e:
-                    self.logger.log_error('Failed to migrate %s: %s' % (
-                                          container['name'], e))
-                    self.logger.log_error(''.join(traceback.format_exc()))
+                    self.logger.error('Failed to migrate %s: %s' % (
+                        container['name'], e))
+                    self.logger.error(''.join(traceback.format_exc()))
 
     def _next_pass(self):
         is_reset, keys, local_marker = self._list_source_objects()
