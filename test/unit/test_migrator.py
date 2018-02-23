@@ -41,35 +41,37 @@ def create_list_timestamp(epoch_ts):
 
 
 class TestMigratorUtils(unittest.TestCase):
+    maxDiff = None
+
     def test_migration_comparison(self):
         test_cases = [
-            ({'account': 'AUTH_account',
+            ({'account': 'AUTH_account1',
               'aws_bucket': 'bucket',
               'aws_identity': 'id',
               'aws_secret': 'secret'},
-             {'account': 'AUTH_account',
+             {'account': 'AUTH_account1',
               'aws_bucket': 'bucket',
               'aws_identity': 'id',
               'aws_secret': 'secret',
               'status': {'moved': 100,
                          'scanned': 200}},
              True),
-            ({'account': 'AUTH_account',
+            ({'account': 'AUTH_account2',
               'aws_bucket': 'bucket',
               'aws_identity': 'id',
               'aws_secret': 'secret'},
-             {'account': 'AUTH_account',
+             {'account': 'AUTH_account2',
               'aws_bucket': 'other_bucket',
               'aws_identity': 'id',
               'aws_secret': 'secret',
               'status': {'moved': 100,
                          'scanned': 200}},
              False),
-            ({'account': 'AUTH_account',
+            ({'account': 'AUTH_account3',
               'aws_bucket': 'bucket',
               'aws_identity': 'id',
               'aws_secret': 'secret'},
-             {'account': 'AUTH_account',
+             {'account': 'AUTH_account3',
               'aws_bucket': 'bucket',
               'aws_identity': 'id',
               'aws_secret': 'secret',
@@ -77,19 +79,64 @@ class TestMigratorUtils(unittest.TestCase):
               'status': {'moved': 100,
                          'scanned': 200}},
              False),
-            ({'account': 'swift',
+            ({'account': 'swift1',
+              'aws_bucket': 'bucket',
+              'aws_identity': 'aws access key',
+              'aws_secret': 'the secret'},
+             {'account': 'swift1',
+              'aws_bucket': 'bucket',
+              'aws_identity': 'aws access key',
+              'status': {'moved': 100,
+                         'scanned': 200}},
+             True),
+            ({'account': 'swift2',
               'aws_bucket': 'bucket',
               'aws_identity': 'aws access key',
               'aws_secret': 'old secret'},
-             {'account': 'swift',
+             {'account': 'swift2',
               'aws_bucket': 'bucket',
               'aws_identity': 'aws access key',
               'aws_secret': 'new secret'},
-             True)]
-
+             True),
+            ({'account': 'swift3',
+              'aws_bucket': 'bucket',
+              'aws_identity': 'aws access key',
+              'status': {'moved': 100,
+                         'scanned': 200}},
+             {'account': 'swift3',
+              'aws_bucket': '/*',
+              'aws_identity': 'aws access key',
+              'aws_secret': 'new secret'},
+             True),
+            ({'account': 'swift4',
+              'aws_bucket': 'bucket',
+              'container': 'bucket',
+              'aws_identity': 'aws access key',
+              'aws_secret': 'old secret'},
+             {'account': 'swift4',
+              'aws_bucket': 'bucket',
+              'aws_identity': 'aws access key',
+              'status': {'moved': 100,
+                         'scanned': 200}},
+             True),
+        ]
+        failures = []
         for left, right, expected in test_cases:
-            self.assertEqual(
-                expected, s3_sync.migrator.equal_migration(left, right))
+            try:
+                self.assertEqual(
+                    expected, s3_sync.migrator.equal_migration(left, right))
+            except AssertionError:
+                failures.append('%s %s %s' % (
+                    left, '!=' if expected else '==', right))
+            left, right = right, left
+            try:
+                self.assertEqual(
+                    expected, s3_sync.migrator.equal_migration(left, right))
+            except AssertionError:
+                failures.append('%s %s %s' % (
+                    left, '!=' if expected else '==', right))
+        if failures:
+            self.fail('Unexpected results:\n' + '\n'.join(failures))
 
     def test_listing_comparison(self):
         test_cases = [
@@ -355,7 +402,6 @@ class TestMigratorUtils(unittest.TestCase):
             "aws_bucket": "bucket2.example.com",
             "aws_identity": "identity",
             "aws_secret": "secret",
-            "container": "bucket2.example.com",
             "prefix": "",
             "protocol": "s3",
             "remote_account": "",
@@ -380,6 +426,112 @@ class TestMigratorUtils(unittest.TestCase):
                     "scanned_count": 1
                 }
             }])
+
+    def test_prune_all_buckets_migration(self):
+        existing_status = json.loads(json.dumps([
+            {
+                "account": "AUTH_dev",
+                "aws_bucket": "bucket.example.com",
+                "aws_identity": "identity",
+                "aws_secret": "secret",
+                "container": "bucket.example.com",
+                "prefix": "",
+                "protocol": "s3",
+                "remote_account": "",
+                "status": {
+                    "finished": 1519177565.416393,
+                    "last_finished": 1519177190.048912,
+                    "last_moved_count": 0,
+                    "last_scanned_count": 1,
+                    "marker": "blah",
+                    "moved_count": 0,
+                    "scanned_count": 1
+                }
+            }, {
+                "account": "AUTH_dev",
+                "aws_bucket": "bucket2.example.com",
+                "aws_identity": "identity",
+                "aws_secret": "secret",
+                "container": "bucket2.example.com",
+                "prefix": "",
+                "protocol": "s3",
+                "remote_account": "",
+                "status": {
+                    "finished": 1519177178.41313,
+                    "last_finished": 1519177173.780246,
+                    "last_moved_count": 1,
+                    "last_scanned_count": 1,
+                    "marker": "blah",
+                    "moved_count": 1,
+                    "scanned_count": 1
+                }
+            },
+        ]))
+        self.setup_status_file_path()
+        with open(self.status_file_path, 'w') as wf:
+            json.dump(existing_status, wf)
+        status = s3_sync.migrator.Status(self.status_file_path)
+        status.prune([{
+            "account": "AUTH_dev",
+            "aws_bucket": "/*",
+            "aws_identity": "identity",
+            "aws_secret": "secret",
+            "prefix": "",
+            "protocol": "s3",
+            "remote_account": "",
+        }])
+        with open(self.status_file_path) as rf:
+            self.assertEqual(json.load(rf), existing_status)
+
+    def test_status_get_migration(self):
+        config = {
+            'aws_secret': 'admin',
+            'account': 'AUTH_dev',
+            'protocol': 'swift',
+            'aws_identity': 'dev',
+            'prefix': '',
+            'container': 'd12738cf0aa74bb1bdb4136f6ca76794_6',
+            'aws_endpoint': 'http://192.168.22.101/auth/v1.0',
+            'remote_account': '',
+            'aws_bucket': 'd12738cf0aa74bb1bdb4136f6ca76794_6',
+        }
+        self.setup_status_file_path()
+        status = s3_sync.migrator.Status(self.status_file_path)
+        status.load_status_list()
+        status.save_migration(config, 'end', 0, 1000, stats_reset=True)
+        status.save_migration(config, 'end', 0, 1000, stats_reset=True)
+        with open(self.status_file_path) as rf:
+            self.assertEqual(1, len(json.load(rf)))
+
+    @mock.patch('s3_sync.migrator.json.load')
+    def test_load_corrupt_json(self, mock_json_load):
+        mock_json_load.side_effect = ValueError(
+            'No JSON object could be decoded')
+
+        self.setup_status_file_path()
+        status = s3_sync.migrator.Status(self.status_file_path)
+        status.load_status_list()
+        self.assertEqual([], status.status_list)
+
+    def test_load_status(self):
+        status_list = [{
+            'aws_identity': 'swift1',
+            'aws_bucket': 'container1',
+            'status': {
+                'marker': 'foo',
+                'moved_count': 100,
+                'scanned_count': 200,
+                'finished': 1519177178.41313,
+                'last_finished': 1519177173.780246,
+                'last_moved_count': 1,
+                'last_scanned_count': 1
+            }}]
+        self.setup_status_file_path()
+        with open(self.status_file_path, 'w') as status_file:
+            json.dump(status_list, status_file)
+        status = s3_sync.migrator.Status(self.status_file_path)
+        status.load_status_list()
+        self.assertEqual(status_list, status.status_list)
 
 
 class TestMigrator(unittest.TestCase):

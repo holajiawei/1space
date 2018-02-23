@@ -43,19 +43,23 @@ TIME_DIFF = 2
 LAST_MODIFIED_FMT = '%a, %d %b %Y %H:%M:%S %Z'
 EPOCH = datetime.datetime.utcfromtimestamp(0)
 
+IGNORE_KEYS = set(('status', 'aws_secret'))
+
 
 def equal_migration(left, right):
-    key_diff = set(left.keys()) ^ set(right.keys())
-    if key_diff:
-        if len(key_diff) > 1 or key_diff.pop() != 'status':
-            return False
-    for k in left.keys():
-        if k == 'status':
+    for k in set(left.keys()) | set(right.keys()):
+        if k in IGNORE_KEYS:
             continue
-        if k == 'aws_secret':
-            continue
-        if left[k] != right[k]:
+        if not (k in left and k in right):
+            if k == 'container':
+                continue
             return False
+        if k in ('aws_bucket', 'container') and (
+                left[k] == '/*' or right[k] == '/*'):
+            continue
+        if left[k] == right[k]:
+            continue
+        return False
     return True
 
 
@@ -120,13 +124,16 @@ class Status(object):
         self.status_list = None
 
     def load_status_list(self):
+        self.status_list = []
         try:
             with open(self.status_location) as fh:
-                self.status_list = json.load(fh)
+                try:
+                    self.status_list = json.load(fh)
+                except ValueError as e:
+                    if str(e) != 'No JSON object could be decoded':
+                        raise
         except IOError as e:
-            if e.errno == errno.ENOENT:
-                self.status_list = []
-            else:
+            if e.errno != errno.ENOENT:
                 raise
 
     def get_migration(self, migration):
@@ -175,13 +182,10 @@ class Status(object):
         self.load_status_list()
         keep_status_list = []
         for entry in self.status_list:
-            entry_is_configured = False
             for migration in migrations:
                 if equal_migration(entry, migration):
-                    entry_is_configured = True
+                    keep_status_list.append(entry)
                     break
-            if entry_is_configured:
-                keep_status_list.append(entry)
         self.status_list = keep_status_list
         self.save_status_list()
 
