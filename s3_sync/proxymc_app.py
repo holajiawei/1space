@@ -23,7 +23,9 @@ from swift.proxy.controllers.base import Controller
 from swift.proxy.server import Application as ProxyApplication
 
 from .provider_factory import create_provider
-from .utils import ClosingResourceIterable
+from .utils import (
+    ClosingResourceIterable, filter_hop_by_hop_headers,
+    convert_to_swift_headers)
 
 
 class ProxyMCController(Controller):
@@ -39,8 +41,8 @@ class ProxyMCController(Controller):
         self.container_name = container_name  # UTF8-encoded string
         self.object_name = object_name  # UTF8-encoded string
 
-        aco_str = urllib.quote('/'.join((
-            account_name, container_name, object_name)))
+        aco_str = urllib.quote('/'.join(filter(None, (
+            account_name, container_name, object_name))))
 
         # XXX duplicated logic with s3_sync.shunt.S3SyncShunt.__call__
         if (not self.sync_profile['provider'] and
@@ -59,13 +61,50 @@ class ProxyMCController(Controller):
                                   aco_str)
             raise swob.HTTPForbidden()
 
+    def forward_raw_swift_req(self, req):
+        scheme, netloc, _, _, _ = urlsplit(self.app.swift_baseurl)
+        ssl = (scheme == 'https')
+        swift_host, swift_port = utils.parse_socket_string(netloc,
+                                                           443 if ssl else 80)
+        swift_port = int(swift_port)
+        if ssl:
+            conn = bufferedhttp.HTTPSConnection(swift_host, port=swift_port)
+        else:
+            conn = bufferedhttp.BufferedHTTPConnection(swift_host,
+                                                       port=swift_port)
+        conn.path = req.path_qs
+        conn.putrequest(req.method, req.path_qs, skip_host=True)
+        for header, value in filter_hop_by_hop_headers(req.headers.items()):
+            if header.lower() == 'host':
+                continue
+            conn.putheader(header, str(value))
+        conn.putheader('Host', str(swift_host))
+        conn.endheaders()
+
+        resp = conn.getresponse()
+        headers = dict(filter_hop_by_hop_headers(resp.getheaders()))
+        # XXX If this is a GET, do we want to "tee" the Swift object into the
+        # remote (S3) store as it's fed back out to the client??
+        body_len = 0 if req.method == 'HEAD' \
+            else int(headers['content-length'])
+        app_iter = ClosingResourceIterable(
+            resource=conn, data_src=resp,
+            length=body_len)
+        return swob.Response(app_iter=app_iter,
+                             status=resp.status,
+                             headers=headers,
+                             request=req)
+
     def GETorHEAD(self, req):
         # Note: account operations were already filtered out in
         # get_controller()
         if not self.object_name:
             # container listing; we'll list the remote store first, then
             # overlay any listing results from the onprem Swift cluster.
-            pass
+            #
+            # ... but for now, just only forward to onprem Swift cluster just
+            # so we get a valid response back to a client instead of a 500.
+            return self.forward_raw_swift_req(req)
 
         # Try "remote" (with respect to config--this store should actually be
         # "closer" to this daemon) first
@@ -83,40 +122,7 @@ class ProxyMCController(Controller):
 
         # Nope... try "local" (with respect to config--this swift cluster
         # should actually be "further away from" this daemon) swift.
-
-        # TODO: refactor this "talk raw to real Swift cluster" stuff into some
-        # helper method or whatever.
-        scheme, netloc, _, _, _ = urlsplit(self.app.swift_baseurl)
-        ssl = (scheme == 'https')
-        swift_host, swift_port = utils.parse_socket_string(netloc,
-                                                           443 if ssl else 80)
-        swift_port = int(swift_port)
-        if ssl:
-            conn = bufferedhttp.HTTPSConnection(swift_host, port=swift_port)
-        else:
-            conn = bufferedhttp.BufferedHTTPConnection(swift_host,
-                                                       port=swift_port)
-        conn.path = req.path_qs
-        conn.putrequest(req.method, req.path_qs, skip_host=True)
-        for header, value in req.headers.items():
-            if header.lower() == 'host':
-                continue
-            conn.putheader(header, str(value))
-        conn.putheader('Host', str(swift_host))
-        conn.endheaders()
-
-        resp = conn.getresponse()
-        headers = dict(resp.getheaders())
-        # XXX should probably use filter_hop_by_hop_headers() here
-        # XXX If this is a GET, do we want to "tee" the Swift object into the
-        # remote (S3) store as it's fed back out to the client??
-        app_iter = ClosingResourceIterable(
-            resource=conn, data_src=resp,
-            length=int(headers['content-length']))
-        return swob.Response(app_iter=app_iter,
-                             status=resp.status,
-                             headers=headers,
-                             request=req)
+        return self.forward_raw_swift_req(req)
 
     @utils.public
     def GET(self, req):
@@ -134,8 +140,20 @@ class ProxyMCController(Controller):
             # container create; we'll ... just do something?  store user
             # metadata headers in S3 so it can be sync'ed down into the Swift
             # cluster later?  Who knows!
-            pass
-        pass
+            self.app.logger.debug('Forwarding container PUT to real Swift')
+            return self.forward_raw_swift_req(req)
+        self.app.logger.debug('put_object_from_swift_req: %s %r %r',
+                              self.object_name, self.provider.__dict__, req)
+        remote_resp = self.provider.put_object_from_swift_req(
+            self.object_name, req)
+        self.app.logger.debug('PUT(%s): %r', self.object_name, remote_resp)
+        resp_meta = remote_resp['ResponseMetadata']
+        resp_headers = convert_to_swift_headers(resp_meta['HTTPHeaders'])
+        resp_body = remote_resp.get('Body', [''])
+        return swob.Response(app_iter=resp_body,
+                             status=int(resp_meta['HTTPStatusCode']),
+                             headers=resp_headers,
+                             request=req)
 
     @utils.public
     def POST(self, req):

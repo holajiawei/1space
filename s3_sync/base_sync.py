@@ -142,13 +142,16 @@ class BaseSync(object):
             self.aws_bucket,
         )
 
-    def upload_object(self, name, storage_policy_index):
+    def put_object_from_swift_req(self, swift_key, req):
+        raise NotImplementedError()
+
+    def upload_object(self, name, storage_policy_index, internal_client):
         raise NotImplementedError()
 
     def update_metadata(self, swift_key, swift_meta):
         raise NotImplementedError()
 
-    def delete_object(self, name):
+    def delete_object(self, name, internal_client):
         raise NotImplementedError()
 
     def shunt_object(self, request, name):

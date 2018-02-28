@@ -18,4 +18,4 @@ RUN mkdir /swift-s3-sync && mkdir /var/lib/swift-s3-sync
 EXPOSE 10080
 RUN locale-gen en_US.UTF-8
 ENV LANG='en_US.UTF-8' LANGUAGE='en_US:en' LC_ALL='en_US.UTF-8'
-CMD ["/bin/bash", "-c" "/swift-s3-sync/test/container/launch.sh > /var/log/launch.log 2>&1"]
+CMD ["/bin/bash", "/swift-s3-sync/test/container/launch.sh"]

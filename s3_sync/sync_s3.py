@@ -31,6 +31,7 @@ from .base_sync import BaseSync
 from .base_sync import ProviderResponse
 from .utils import (
     convert_to_s3_headers, convert_to_swift_headers, FileWrapper,
+    filter_hop_by_hop_headers,
     SLOFileWrapper, ClosingResourceIterable, get_slo_etag, check_slo,
     SLO_ETAG_FIELD, SLO_HEADER, SWIFT_USER_META_PREFIX, SWIFT_TIME_FMT)
 
@@ -90,6 +91,39 @@ class SyncS3(BaseSync):
                     set_list_objects_encoding_type_url)
             return s3_client
         return boto_client_factory
+
+    def put_object_from_swift_req(self, swift_key, req):
+        # Uploads an object to the object store, without any private APIs used
+        # or accessible (i.e. no internal_client tricks), using a Swift API
+        # swift.common.swob.Request instance as a guide.
+
+        input_headers = filter_hop_by_hop_headers(req.headers.items())
+        # convert_to_s3_headers expects a dict, not iterable of (k, v) tuples
+        s3_headers = convert_to_s3_headers(dict(input_headers))
+        s3_key = self.get_s3_name(swift_key)
+        self.logger.debug("S3 PUT: %s headers: %r", s3_key, s3_headers)
+
+        # TODO: sniff around for SLO PUT and convert to a multipart upload S3
+        # thing.
+
+        with self.client_pool.get_client() as s3_client:
+            self.logger.debug('Uploading %s with meta: %r',
+                              s3_key, s3_headers)
+            input_len = req.headers.get('Content-Length', None)
+            content_type = req.headers.get('Content-Type', None)
+            params = dict(
+                Bucket=self.aws_bucket,
+                Key=s3_key,
+                Body=req.body_file,
+                Metadata=s3_headers,
+            )
+            if input_len:
+                params['ContentLength'] = int(input_len)
+            if content_type:
+                params['ContentType'] = content_type
+            if self._is_amazon() and self.encryption:
+                params['ServerSideEncryption'] = 'AES256'
+            return s3_client.put_object(**params)
 
     def upload_object(self, swift_key, storage_policy_index, internal_client):
         s3_key = self.get_s3_name(swift_key)

@@ -42,6 +42,10 @@ databases for the container. For example, in a three replica policy, there would
 be three HEAD requests if an object PUT was performed (but only one PUT against
 the remote store in the common case).
 
+`proxymc` runs as a standalone process, intended to be used in a public cloud
+somewhere. It provides a Swift API endpoint with access to the shared namespace
+per the same config file that `swift-s3-sync` uses.
+
 ### How to setup and use
 
 `swift-s3-sync` depends on:
@@ -90,6 +94,32 @@ conf_file = <Path to swift-s3-sync config file>
 
 This middleware should be in the pipeline before the DLO/SLO middleware.
 
+To configure the proxymc servers, you have to have a minimal proxy-server-like
+config file:
+```
+[DEFAULT]
+...
+
+[pipeline:main]
+pipeline = healthcheck proxy-logging cache proxy-logging proxy-server
+
+[app:proxy-server]
+# Calling this "proxy-server" in the pipeline is a little white lie to keep the
+# swift3 pipeline check from blowing up (if we were to make swift3 work in the
+# future)
+use = egg:swift-s3-sync#proxymc
+conf_file = /.../swift-s3-sync.conf
+
+[filter:healthcheck]
+use = egg:swift#healthcheck
+
+[filter:cache]
+use = egg:swift#memcache
+
+[filter:proxy-logging]
+use = egg:swift#proxy_logging
+```
+
 ### Trying it out
 
 If you have docker and docker-compose already you can easily get started in the root directory:
@@ -98,13 +128,14 @@ If you have docker and docker-compose already you can easily get started in the 
 docker-compose up -d
 ```
 
-Our current development/test environment only defines one container
-`swift-s3-sync`.  It is based on the
+Our current development/test environment only defines one Docker container
+named `swift-s3-sync`.  It is based on the
 [bouncestorage/swift-aio](https://hub.docker.com/r/bouncestorage/swift-aio/).
 The Dockerfile adds S3Proxy, backed by the file system and uses a Swift
 all-in-one docker container as the base.  The Compose file maps the current
 source tree into the container, so that it operates on your current state.
-Port 8080 is the Swift Proxy server, whereas 10080 is the S3Proxy.
+Port 8080 is the Swift Proxy server, port 10080 is the S3Proxy, and port 8081
+is the proxymc server.
 
 Tests pre-configure multiple
 [policies](https://github.com/swiftstack/swift-s3-sync/blob/master/test/container/swift-s3-sync.conf).
