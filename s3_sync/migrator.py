@@ -249,24 +249,26 @@ class Migrator(object):
                     self.logger.error(''.join(traceback.format_exc()))
 
     def _next_pass(self):
-        is_reset, keys, local_marker = self._list_source_objects()
-
         worker_pool = eventlet.GreenPool(self.workers)
         for _ in xrange(self.workers):
             worker_pool.spawn_n(self._upload_worker)
-        moved = self._find_missing_objects(keys, local_marker)
+        is_reset = False
+        marker, scanned, copied = self._find_missing_objects()
+        if scanned == 0 and marker:
+            is_reset = True
+            marker, scanned, copied = self._find_missing_objects(marker='')
+
         self.object_queue.join()
         self._stop_workers(self.object_queue)
 
         self.check_errors()
-        if not keys:
+        if scanned == 0:
             return
 
-        marker = keys[-1]['name']
-        moved -= self.errors.qsize()
+        copied -= self.errors.qsize()
         # TODO: record the number of errors, as well
         self.status.save_migration(
-            self.config, marker, moved, len(keys), is_reset)
+            self.config, marker, copied, scanned, is_reset)
 
     def check_errors(self):
         while not self.errors.empty():
@@ -279,31 +281,6 @@ class Migrator(object):
         for _ in range(self.workers):
             q.put(None)
         q.join()
-
-    def _list_source_objects(self):
-        state = self.status.get_migration(self.config)
-        reset = False
-        status, keys = self.provider.list_objects(
-            state.get('marker', None),
-            self.work_chunk,
-            self.config.get('prefix'))
-        if status != 200:
-            raise MigrationError(
-                'Failed to list source bucket/container "%s"' %
-                self.config['aws_bucket'])
-        if not keys and state.get('marker'):
-            reset = True
-            status, keys = self.provider.list_objects(
-                None, self.work_chunk, self.config.get('prefix'))
-            if status != 200:
-                raise MigrationError(
-                    'Failed to list source bucket/container "%s"' %
-                    self.config['aws_bucket'])
-        if not reset:
-            local_marker = state.get('marker', '')
-        else:
-            local_marker = ''
-        return reset, keys, local_marker
 
     def _create_container(self, container, internal_client, timeout=1):
         if self.config.get('protocol') == 'swift':
@@ -340,45 +317,77 @@ class Migrator(object):
                 return
         raise MigrationError('Timeout while creating container %s' % container)
 
-    def _find_missing_objects(self, source_list, marker):
-        moved = 0
+    def _iter_source_container(self, container, marker):
+        status, keys = self.provider.list_objects(
+            marker, self.work_chunk, self.config.get('prefix'))
+        if status != 200:
+            raise MigrationError(
+                'Failed to list source bucket/container "%s"' %
+                self.config['aws_bucket'])
+        if not keys and marker:
+            raise StopIteration
+        for key in keys:
+            yield key
+        yield None
+
+    def _find_missing_objects(self, marker=None):
+        container = self.config['container']
+        state = self.status.get_migration(self.config)
+        if marker is None:
+            marker = state.get('marker', '')
+
+        try:
+            source_iter = self._iter_source_container(container, marker)
+        except StopIteration:
+            source_iter = iter([])
+
+        copied = 0
+        scanned = 0
         with self.ic_pool.item() as ic:
             try:
                 local_iter = ic.iter_objects(self.config['account'],
-                                             self.config['container'],
+                                             container,
                                              marker=marker)
                 local = next(local_iter, None)
                 if not local:
                     if not ic.container_exists(self.config['account'],
-                                               self.config['container']):
-                        self._create_container(self.config['container'], ic)
+                                               container):
+                        self._create_container(container, ic)
             except UnexpectedResponse as e:
                 if e.resp.status_int != 404:
                     raise
-                self._create_container(self.config['container'], ic)
+                self._create_container(container, ic)
 
-            index = 0
-            while index < len(source_list):
+            remote = next(source_iter, None)
+            if remote:
+                marker = remote['name']
+            while remote:
                 # NOTE: the listing from the given marker may return fewer than
                 # the number of items we should process. We will process all of
                 # the keys that were returned in the listing and restart on the
                 # following iteration.
-                if not local or local['name'] > source_list[index]['name']:
+                if not local or local['name'] > remote['name']:
                     self.object_queue.put((
-                        self.config['aws_bucket'], source_list[index]['name']))
-                    index += 1
-                    moved += 1
-                elif local['name'] < source_list[index]:
+                        self.config['aws_bucket'], remote['name']))
+                    copied += 1
+                    scanned += 1
+                    remote = next(source_iter, None)
+                    if remote:
+                        marker = remote['name']
+                elif local['name'] < remote['name']:
                     local = next(local_iter, None)
                 else:
-                    cmp_ret = cmp_object_entries(local, source_list[index])
+                    cmp_ret = cmp_object_entries(local, remote)
                     if cmp_ret < 0:
                         self.object_queue.put((self.config['aws_bucket'],
-                                               source_list[index]['name']))
-                        moved += 1
+                                               remote['name']))
+                        copied += 1
+                    remote = next(source_iter, None)
                     local = next(local_iter, None)
-                    index += 1
-        return moved
+                    scanned += 1
+                    if remote:
+                        marker = remote['name']
+        return marker, scanned, copied
 
     def _migrate_object(self, container, key):
         args = {'bucket': container}

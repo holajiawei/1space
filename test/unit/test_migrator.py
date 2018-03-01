@@ -916,7 +916,7 @@ class TestMigrator(unittest.TestCase):
         self.migrator.next_pass()
         provider.list_objects.assert_has_calls(
             [mock.call('zzz', self.migrator.work_chunk, None),
-             mock.call(None, self.migrator.work_chunk, None)])
+             mock.call('', self.migrator.work_chunk, None)])
 
     @mock.patch('s3_sync.migrator.create_provider')
     def test_missing_container(self, create_provider_mock):
@@ -964,12 +964,12 @@ class TestMigrator(unittest.TestCase):
             self.migrator.next_pass()
             if test_config.get('protocol') == 'swift':
                 provider.list_objects.assert_called_once_with(
-                    None, self.migrator.work_chunk, None)
+                    '', self.migrator.work_chunk, None)
                 provider.head_bucket.assert_called_once_with(
                     self.migrator.config['container'])
             else:
                 provider.list_objects.assert_called_once_with(
-                    None, self.migrator.work_chunk, None)
+                    '', self.migrator.work_chunk, None)
             self.swift_client.make_path.assert_called_once_with(
                 self.migrator.config['account'],
                 self.migrator.config['container'])
