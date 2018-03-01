@@ -277,17 +277,20 @@ class SyncSwift(BaseSync):
             with self.client_pool.get_client() as swift_client:
                 return _perform_op(swift_client)
 
-    def list_objects(self, marker, limit, prefix, delimiter=None):
+    def list_objects(self, marker, limit, prefix, delimiter=None,
+                     bucket=None):
+        if bucket is None:
+            bucket = self.remote_container
         try:
             with self.client_pool.get_client() as swift_client:
                 hdrs, results = swift_client.get_container(
-                    self.remote_container, marker=marker, limit=limit,
+                    bucket, marker=marker, limit=limit,
                     prefix=prefix, delimiter=delimiter)
                 for entry in results:
                     entry['content_location'] = '%s;%s;%s' % (
                         self.endpoint,
                         self.settings['aws_identity'],
-                        self.remote_container)
+                        bucket)
                 return (200, results)
         except swiftclient.exceptions.ClientException as e:
             return (e.http_status, e.message)

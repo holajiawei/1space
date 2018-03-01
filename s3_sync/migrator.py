@@ -253,6 +253,7 @@ class Migrator(object):
         for _ in xrange(self.workers):
             worker_pool.spawn_n(self._upload_worker)
         is_reset = False
+        self._manifests = set()
         marker, scanned, copied = self._find_missing_objects()
         if scanned == 0 and marker:
             is_reset = True
@@ -317,46 +318,54 @@ class Migrator(object):
                 return
         raise MigrationError('Timeout while creating container %s' % container)
 
-    def _iter_source_container(self, container, marker):
-        status, keys = self.provider.list_objects(
-            marker, self.work_chunk, self.config.get('prefix'))
-        if status != 200:
-            raise MigrationError(
-                'Failed to list source bucket/container "%s"' %
-                self.config['aws_bucket'])
-        if not keys and marker:
-            raise StopIteration
-        for key in keys:
-            yield key
+    def _iter_source_container(
+            self, container, marker, prefix, list_all):
+        next_marker = marker
+
+        while True:
+            status, keys = self.provider.list_objects(
+                next_marker, self.work_chunk, prefix, bucket=container)
+            if status != 200:
+                raise MigrationError(
+                    'Failed to list source bucket/container "%s"' %
+                    self.config['aws_bucket'])
+            if not keys and marker and marker == next_marker:
+                raise StopIteration
+            for key in keys:
+                yield key
+            if not list_all or not keys:
+                break
+            next_marker = keys[-1]['name']
         yield None
 
-    def _find_missing_objects(self, marker=None):
-        container = self.config['container']
-        state = self.status.get_migration(self.config)
+    def _find_missing_objects(
+            self, container=None, marker=None, prefix=None, list_all=False):
+        if container is None:
+            container = self.config['container']
         if marker is None:
+            state = self.status.get_migration(self.config)
             marker = state.get('marker', '')
+        if prefix is None:
+            prefix = self.config.get('prefix', '')
 
         try:
-            source_iter = self._iter_source_container(container, marker)
+            source_iter = self._iter_source_container(
+                container, marker, prefix, list_all)
         except StopIteration:
             source_iter = iter([])
 
         copied = 0
         scanned = 0
         with self.ic_pool.item() as ic:
-            try:
-                local_iter = ic.iter_objects(self.config['account'],
-                                             container,
-                                             marker=marker)
-                local = next(local_iter, None)
-                if not local:
-                    if not ic.container_exists(self.config['account'],
-                                               container):
-                        self._create_container(container, ic)
-            except UnexpectedResponse as e:
-                if e.resp.status_int != 404:
-                    raise
-                self._create_container(container, ic)
+            local_iter = ic.iter_objects(self.config['account'],
+                                         container,
+                                         marker=marker,
+                                         prefix=prefix)
+            local = next(local_iter, None)
+            if not local:
+                if not ic.container_exists(self.config['account'],
+                                           container):
+                    self._create_container(container, ic)
 
             remote = next(source_iter, None)
             if remote:
@@ -367,8 +376,7 @@ class Migrator(object):
                 # the keys that were returned in the listing and restart on the
                 # following iteration.
                 if not local or local['name'] > remote['name']:
-                    self.object_queue.put((
-                        self.config['aws_bucket'], remote['name']))
+                    self.object_queue.put((container, remote['name']))
                     copied += 1
                     scanned += 1
                     remote = next(source_iter, None)
@@ -400,18 +408,31 @@ class Migrator(object):
                 container, key, resp.body))
         put_headers = convert_to_local_headers(
             resp.headers.items(), remove_timestamp=False)
-        if 'x-object-manifest' in resp.headers:
-            self.logger.warning('Skipping Dynamic Large Object %s/%s' % (
-                container, key))
+        if 'x-object-manifest' in resp.headers and\
+                (container, key) not in self._manifests:
+            self.logger.warning(
+                'Migrating Dynamic Large Object %s/%s -- results may not be '
+                'consistent' % (container, key))
             resp.body.close()
-            return
-        if 'x-static-large-object' in resp.headers:
+            self._migrate_dlo(container, key, put_headers)
+        elif 'x-static-large-object' in resp.headers:
             # We have to move the segments and then move the manifest file
             resp.body.close()
             self._migrate_slo(container, key, put_headers)
         else:
             self._upload_object(
                 container, key, FileLikeIter(resp.body), put_headers)
+
+    def _migrate_dlo(self, container, key, headers):
+        dlo_container, prefix = headers['x-object-manifest'].split('/', 1)
+        self._manifests.add((container, key))
+        self._find_missing_objects(
+            dlo_container, '', prefix=prefix, list_all=True)
+        if dlo_container != container or not key.startswith(prefix):
+            # The DLO prefix can include the manifest object, which doesn't
+            # have to be 0-sized. We have to be careful not to end up recursing
+            # infinitely in that case.
+            self.object_queue.put((container, key))
 
     def _migrate_slo(self, slo_container, key, headers):
         manifest = self.provider.get_manifest(key, slo_container)

@@ -915,8 +915,8 @@ class TestMigrator(unittest.TestCase):
 
         self.migrator.next_pass()
         provider.list_objects.assert_has_calls(
-            [mock.call('zzz', self.migrator.work_chunk, None),
-             mock.call('', self.migrator.work_chunk, None)])
+            [mock.call('zzz', self.migrator.work_chunk, '', bucket='bucket'),
+             mock.call('', self.migrator.work_chunk, '', bucket='bucket')])
 
     @mock.patch('s3_sync.migrator.create_provider')
     def test_missing_container(self, create_provider_mock):
@@ -964,12 +964,12 @@ class TestMigrator(unittest.TestCase):
             self.migrator.next_pass()
             if test_config.get('protocol') == 'swift':
                 provider.list_objects.assert_called_once_with(
-                    '', self.migrator.work_chunk, None)
+                    '', self.migrator.work_chunk, '', bucket='bucket')
                 provider.head_bucket.assert_called_once_with(
                     self.migrator.config['container'])
             else:
                 provider.list_objects.assert_called_once_with(
-                    '', self.migrator.work_chunk, None)
+                    '', self.migrator.work_chunk, '', bucket='bucket')
             self.swift_client.make_path.assert_called_once_with(
                 self.migrator.config['account'],
                 self.migrator.config['container'])
@@ -1208,6 +1208,144 @@ class TestMigrator(unittest.TestCase):
         self.assertEqual(1, len(fake_provider.client_pool.client_pool))
         self.migrator.close()
         conn_mock.http_conn[1].request_session.close.assert_called_once_with()
+
+    @mock.patch('s3_sync.migrator.create_provider')
+    def test_migrate_dlo(self, create_provider_mock):
+        self.migrator.config['protocol'] = 'swift'
+        provider = create_provider_mock.return_value
+        self.migrator.status.get_migration.return_value = {}
+        segments_container = 'dlo-segments'
+
+        objects = {
+            'dlo': {
+                'remote_headers': {
+                    'x-object-meta-custom': 'dlo-meta',
+                    'last-modified': create_timestamp(1.5e9),
+                    'x-object-manifest': '%s/' % segments_container},
+                'expected_headers': {
+                    'x-object-meta-custom': 'dlo-meta',
+                    'x-timestamp': Timestamp(1.5e9).internal,
+                    'x-object-manifest': '%s/' % segments_container}
+            },
+            '1': {
+                'remote_headers': {
+                    'x-object-meta-part': 'part-1',
+                    'last-modified': create_timestamp(1.4e9)},
+                'expected_headers': {
+                    'x-object-meta-part': 'part-1',
+                    'x-timestamp': Timestamp(1.4e9).internal}
+            },
+            '2': {
+                'remote_headers': {
+                    'x-object-meta-part': 'part-2',
+                    'last-modified': create_timestamp(1.1e9)},
+                'expected_headers': {
+                    'x-object-meta-part': 'part-2',
+                    'x-timestamp': Timestamp(1.1e9).internal}
+            },
+            '3': {
+                'remote_headers': {
+                    'x-object-meta-part': 'part-3',
+                    'last-modified': create_timestamp(1.2e9)},
+                'expected_headers': {
+                    'x-object-meta-part': 'part-3',
+                    'x-timestamp': Timestamp(1.2e9).internal}
+            }
+        }
+
+        containers = {segments_container: False,
+                      self.migrator.config['container']: False}
+
+        swift_404_resp = mock.Mock()
+        swift_404_resp.status_int = 404
+
+        def container_exists(_, container):
+            return containers[container]
+
+        def fake_app(env, func):
+            containers[env['PATH_INFO'].split('/')[3]] = True
+            return func(200, [])
+
+        def _make_path(account, container):
+            return '/'.join(['http://test/v1', account, container])
+
+        def get_object(name, **args):
+            if name not in objects.keys():
+                raise RuntimeError('Unknown object: %s' % name)
+            if name == 'dlo':
+                return ProviderResponse(
+                    True, 200, objects[name]['remote_headers'], StringIO(''))
+            return ProviderResponse(
+                True, 200, objects[name]['remote_headers'],
+                StringIO('object body'))
+
+        def upload_object(body, account, container, key, headers):
+            if not containers[container]:
+                raise UnexpectedResponse('', swift_404_resp)
+
+        def list_objects(marker, chunk, prefix, bucket=None):
+            if bucket is None or bucket == self.migrator.config['container']:
+                return (200, [{'name': 'dlo'}])
+            elif bucket == segments_container:
+                if marker == '':
+                    return (200, [{'name': '1'}, {'name': '2'}, {'name': '3'}])
+                if marker == '3':
+                    return (200, [])
+            raise RuntimeError('Unknown container')
+
+        self.swift_client.container_exists.side_effect = container_exists
+        self.swift_client.app.side_effect = fake_app
+        self.swift_client.make_path.side_effect = _make_path
+        self.swift_client.upload_object.side_effect = upload_object
+
+        bucket_resp = mock.Mock()
+        bucket_resp.status = 200
+        bucket_resp.headers = {}
+
+        provider.head_bucket.return_value = bucket_resp
+        provider.list_objects.side_effect = list_objects
+        provider.get_object.side_effect = get_object
+        self.swift_client.iter_objects.return_value = iter([])
+
+        self.migrator.next_pass()
+
+        self.swift_client.upload_object.assert_has_calls(
+            [mock.call(mock.ANY, self.migrator.config['account'],
+                       'dlo-segments', '1',
+                       objects['1']['expected_headers']),
+             mock.call(mock.ANY, self.migrator.config['account'],
+                       'dlo-segments', '2',
+                       objects['2']['expected_headers']),
+             mock.call(mock.ANY, self.migrator.config['account'],
+                       'dlo-segments', '3',
+                       objects['3']['expected_headers']),
+             mock.call(mock.ANY, self.migrator.config['account'],
+                       self.migrator.config['container'], 'dlo',
+                       objects['dlo']['expected_headers'])])
+
+        called_env = self.swift_client.app.mock_calls[0][1][0]
+        self.assertEqual(self.migrator.config['account'],
+                         called_env['PATH_INFO'].split('/')[2])
+        self.assertEqual(self.migrator.config['container'],
+                         called_env['PATH_INFO'].split('/')[3])
+        called_env = self.swift_client.app.mock_calls[1][1][0]
+        self.assertEqual(self.migrator.config['account'],
+                         called_env['PATH_INFO'].split('/')[2])
+        self.assertEqual(segments_container,
+                         called_env['PATH_INFO'].split('/')[3])
+
+        parts = {'1': False, '2': False, '3': False, 'dlo': False}
+        for call in self.swift_client.upload_object.mock_calls:
+            body, acct, cont, obj, headers = call[1]
+            if parts[obj]:
+                continue
+            if obj != 'dlo':
+                self.assertEqual(segments_container, cont)
+                self.assertEqual('object body', ''.join(body))
+            else:
+                self.assertEqual(self.migrator.config['container'], cont)
+                self.assertEqual('', ''.join(body))
+            parts[obj] = True
 
 
 class TestStatus(unittest.TestCase):
