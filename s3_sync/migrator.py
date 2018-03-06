@@ -274,9 +274,13 @@ class Migrator(object):
     def check_errors(self):
         while not self.errors.empty():
             container, key, err = self.errors.get()
-            self.logger.error('Failed to migrate %s/%s' % (
-                container, key))
-            self.logger.error(''.join(traceback.format_exception(*err)))
+            if type(err) == str:
+                self.logger.error('Failed to migrate %s/%s: %s' % (
+                    container, key, err))
+            else:
+                self.logger.error('Failed to migrate %s/%s: %s' % (
+                    container, key, err[1]))
+                self.logger.error(''.join(traceback.format_exception(*err)))
 
     def _stop_workers(self, q):
         for _ in range(self.workers):
@@ -338,6 +342,42 @@ class Migrator(object):
             next_marker = keys[-1]['name']
         yield None
 
+    def _check_large_objects(self, container, key, client):
+        local_meta = client.get_object_metadata(
+            self.config['account'], container, key)
+        remote_resp = self.provider.head_object(key)
+
+        if 'x-object-manifest' in remote_resp.headers and\
+                'x-object-manifest' in local_meta:
+            if remote_resp.headers['x-object-manifest'] !=\
+                    local_meta['x-object-manifest']:
+                self.errors.put((
+                    container, key,
+                    'Dynamic Large objects with differing manifests: '
+                    '%s %s' % (remote_resp.headers['x-object-manifest'],
+                               local_meta['x-object-manifest'])))
+            # TODO: once swiftclient supports query_string on HEAD requests, we
+            # would be able to compare the ETag of the manifest object itself.
+            return
+
+        if 'x-static-large-object' in remote_resp.headers and\
+                'x-static-large-object' in local_meta:
+            # We have to GET the manifests and cannot rely on the ETag, as
+            # these are not guaranteed to be in stable order from Swift. Once
+            # that issue is fixed in Swift, we can compare ETags.
+            status, headers, local_manifest = client.get_object(
+                self.config['account'], container, key, {})
+            remote_manifest = self.provider.get_manifest(key, bucket=container)
+            if json.load(FileLikeIter(local_manifest)) != remote_manifest:
+                self.errors.put((
+                    container, key,
+                    'Matching date, but differing SLO manifests'))
+            return
+
+        self.errors.put((
+            container, key,
+            'Mismatching ETag for regular objects with the same date'))
+
     def _find_missing_objects(
             self, container=None, marker=None, prefix=None, list_all=False):
         if container is None:
@@ -385,11 +425,17 @@ class Migrator(object):
                 elif local['name'] < remote['name']:
                     local = next(local_iter, None)
                 else:
-                    cmp_ret = cmp_object_entries(local, remote)
-                    if cmp_ret < 0:
-                        self.object_queue.put((self.config['aws_bucket'],
-                                               remote['name']))
-                        copied += 1
+                    try:
+                        cmp_ret = cmp_object_entries(local, remote)
+                    except MigrationError:
+                        # This should only happen if we are comparing large
+                        # objects: there will be an ETag mismatch.
+                        self._check_large_objects(
+                            container, remote['name'], ic)
+                    else:
+                        if cmp_ret < 0:
+                            self.object_queue.put((container, remote['name']))
+                            copied += 1
                     remote = next(source_iter, None)
                     local = next(local_iter, None)
                     scanned += 1

@@ -1347,6 +1347,66 @@ class TestMigrator(unittest.TestCase):
                 self.assertEqual('', ''.join(body))
             parts[obj] = True
 
+    @mock.patch('s3_sync.migrator.create_provider')
+    def test_etag_mismatch(self, create_provider_mock):
+        self.migrator.config['protocol'] = 'swift'
+        provider = create_provider_mock.return_value
+        self.migrator.status.get_migration.return_value = {}
+
+        objects = {
+            'dlo': {
+                'list_entry': {
+                    'last_modified': create_list_timestamp(1.5e9),
+                    'hash': 'deadbeef'},
+                'headers': {
+                    'x-object-manifest': 'segments/',
+                    'last_modified': create_timestamp(1.5e9)
+                }
+            },
+            'slo': {
+                'list_entry': {
+                    'last_modified': create_list_timestamp(1.4e9),
+                    'hash': 'feedbead'},
+                'headers': {
+                    'x-static-large-object': True,
+                    'last_modified': create_timestamp(1.4e9)
+                }
+            }
+        }
+
+        self.swift_client.iter_objects.return_value = iter([
+            {'name': 'dlo',
+             'last_modified': create_list_timestamp(1.5e9),
+             'hash': 'other'},
+            {'name': 'slo',
+             'last_modified': create_list_timestamp(1.4e9),
+             'hash': 'other-still'}
+        ])
+
+        def _head_object(key):
+            resp = mock.Mock()
+            resp.headers = objects[key]['headers']
+            return resp
+
+        def _get_object_metadata(_account, _container, key):
+            return objects[key]['headers']
+
+        def _get_object(_account, _container, key, _headers):
+            return 200, {}, '{}'
+
+        self.swift_client.container_exists.return_value = True
+        self.swift_client.get_object_metadata.side_effect =\
+            _get_object_metadata
+        self.swift_client.get_object.side_effect = _get_object
+        provider.list_objects.return_value = (200, [
+            dict([('name', k)] + objects[k]['list_entry'].items())
+            for k in sorted(objects.keys())])
+        provider.head_object.side_effect = _head_object
+        provider.get_manifest.return_value = {}
+
+        self.migrator.next_pass()
+        self.assertEqual('', self.stream.getvalue())
+
 
 class TestStatus(unittest.TestCase):
 
