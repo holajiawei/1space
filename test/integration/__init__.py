@@ -79,7 +79,7 @@ def swift_content_location(mapping):
 
 def get_container_ports(image_name):
     if 'DOCKER' in os.environ:
-        return dict(swift=8080, s3=10080)
+        return dict(swift=8080, s3=10080, proxymc=8081)
     if 'TEST_CONTAINER' in os.environ:
         container = os.environ['TEST_CONTAINER']
     else:
@@ -104,6 +104,8 @@ def get_container_ports(image_name):
                 ports['swift'] = host_port
             elif docker_port == 10080:
                 ports['s3'] = host_port
+            elif docker_port == 8081:
+                ports['proxymc'] = host_port
     except subprocess.CalledProcessError as e:
         print e.output
         print e.retcode
@@ -145,6 +147,13 @@ class TestCloudSyncBase(unittest.TestCase):
             self.SWIFT_CREDS['authurl'],
             self.SWIFT_CREDS['dst']['user'],
             self.SWIFT_CREDS['dst']['key'])
+        self.proxymc_client = swiftclient.client.Connection(
+            self.SWIFT_CREDS['authurl'],
+            self.SWIFT_CREDS['src']['user'],
+            self.SWIFT_CREDS['src']['key'],
+            preauthurl='http://localhost:%d/v1/AUTH_test' % (
+                self.PORTS['proxymc'],),
+        )
         s3 = [container for container in self.test_conf['containers']
               if container.get('protocol', 's3') == 's3'][0]
         self.S3_CREDS.update({
@@ -218,6 +227,9 @@ class TestCloudSyncBase(unittest.TestCase):
 
     def local_swift(self, method, *args, **kwargs):
         return getattr(self.swift_src, method)(*args, **kwargs)
+
+    def proxymc(self, method, *args, **kwargs):
+        return getattr(self.proxymc_client, method)(*args, **kwargs)
 
     def remote_swift(self, method, *args, **kwargs):
         return getattr(self.swift_dst, method)(*args, **kwargs)

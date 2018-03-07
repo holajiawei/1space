@@ -14,6 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 """
 
+import botocore
 import hashlib
 import json
 import StringIO
@@ -94,6 +95,102 @@ class TestCloudSync(TestCloudSyncBase):
             [expected_location],
             entry['content_location'])
         self.assertEqual(etag, get_etag(key))
+
+    def test_proxymc_get_missing_sync_mapping(self):
+        s3_mapping = self.s3_sync_mapping()
+        test_args = [
+            (u'test_proxymc_getsync', u'testing proxymc put'),
+            (u'proxymc_getsync_unicod\u00e9',
+             u'proxymc_unicod\u00e9 blob')]
+        for key, content in test_args:
+            exp_etag = hashlib.md5(content.encode('utf-8')).hexdigest()
+            etag = self.local_swift(
+                'put_object', s3_mapping['container'], key,
+                content.encode('utf-8'))
+            self.assertEqual(exp_etag, etag)
+
+            # white-box check for the obj NOT in S3
+            s3_key = s3_key_name(s3_mapping, key)
+            self.assertRaises(botocore.exceptions.ClientError,
+                              self.s3, 'head_object',
+                              Bucket=s3_mapping['aws_bucket'], Key=s3_key)
+
+            # We can read it back out of proxymc
+            resp_headers, resp_body = self.proxymc(
+                'get_object', s3_mapping['container'], key)
+            self.assertEqual(exp_etag, resp_headers['etag'],
+                             repr(resp_headers))
+            self.assertEqual(content.encode('utf-8'), resp_body)
+
+    def test_proxymc_basic_roundrip_sync_mapping(self):
+        s3_mapping = self.s3_sync_mapping()
+        test_args = [
+            (u'test_proxymc_putsync', u'testing proxymc put'),
+            (u'proxymc_putsync_unicod\u00e9',
+             u'proxymc_unicod\u00e9 blob')]
+        for key, content in test_args:
+            exp_etag = hashlib.md5(content.encode('utf-8')).hexdigest()
+            etag = self.proxymc(
+                'put_object', s3_mapping['container'], key,
+                content.encode('utf-8'))
+            self.assertEqual(exp_etag, etag)
+
+            # white-box check for the obj in S3
+            s3_key = s3_key_name(s3_mapping, key)
+            head_resp = self.s3('head_object',
+                                Bucket=s3_mapping['aws_bucket'], Key=s3_key)
+            self.assertEqual('"%s"' % exp_etag, head_resp['ETag'])
+
+            # We can read it back out of proxymc
+            resp_headers, resp_body = self.proxymc(
+                'get_object', s3_mapping['container'], key)
+            self.assertEqual(exp_etag, resp_headers['etag'],
+                             repr(resp_headers))
+            self.assertEqual(content.encode('utf-8'), resp_body)
+
+            # We can even read it from the local swift, despite the object not
+            # actually being there (shunt mw)
+            # TODO(darrell): shunt doesn't currently handle objects only in S3
+            # atm.
+#            resp_headers, resp_body = self.local_swift(
+#                'get_object', s3_mapping['container'], key)
+#            self.assertEqual(exp_etag, resp_headers['etag'],
+#                             repr(resp_headers))
+#            self.assertEqual(content.encode('utf-8'), resp_body)
+
+    def test_proxymc_basic_roundrip_archive_mapping(self):
+        s3_mapping = self.s3_archive_mapping()
+        test_args = [
+            (u'test_proxymc_putarch', u'testing proxymc put'),
+            (u'proxymc_putarch_unicod\u00e9',
+             u'proxymc_unicod\u00e9 blob')]
+        for key, content in test_args:
+            exp_etag = hashlib.md5(content.encode('utf-8')).hexdigest()
+            etag = self.proxymc(
+                'put_object', s3_mapping['container'], key,
+                content.encode('utf-8'))
+            self.assertEqual(exp_etag, etag)
+
+            # white-box check for the obj in S3
+            s3_key = s3_key_name(s3_mapping, key)
+            head_resp = self.s3('head_object',
+                                Bucket=s3_mapping['aws_bucket'], Key=s3_key)
+            self.assertEqual('"%s"' % exp_etag, head_resp['ETag'])
+
+            # We can read it back out of proxymc
+            resp_headers, resp_body = self.proxymc(
+                'get_object', s3_mapping['container'], key)
+            self.assertEqual(exp_etag, resp_headers['etag'],
+                             repr(resp_headers))
+            self.assertEqual(content.encode('utf-8'), resp_body)
+
+            # We can even read it from the local swift, despite the object not
+            # actually being there (shunt mw)
+            resp_headers, resp_body = self.local_swift(
+                'get_object', s3_mapping['container'], key)
+            self.assertEqual(exp_etag, resp_headers['etag'],
+                             repr(resp_headers))
+            self.assertEqual(content.encode('utf-8'), resp_body)
 
     def test_s3_sync(self):
         s3_mapping = self.s3_sync_mapping()
