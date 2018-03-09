@@ -331,7 +331,8 @@ class SyncS3(BaseSync):
                     keys + prefixes,
                     key=lambda x: x['name'] if 'name' in x else x['subdir']))
         except botocore.exceptions.ClientError as e:
-            return (e.response['Error']['Code'], e.message)
+            return (e.response['ResponseMetadata']['HTTPStatusCode'],
+                    e.message)
 
     def upload_slo(self, swift_key, storage_policy_index, s3_meta,
                    internal_client):

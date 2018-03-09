@@ -1357,7 +1357,8 @@ class TestSyncS3(unittest.TestCase):
 
     def test_list_objects_error(self):
         self.mock_boto3_client.list_objects.side_effect = ClientError(
-            dict(Error=dict(Code=500)), 'failed to list!')
+            dict(Error=dict(Code='ServerError'),
+                 ResponseMetadata=dict(HTTPStatusCode=500)), 'failed to list!')
         prefix = '%s/%s/%s/' % (self.sync_s3.get_prefix(),
                                 self.sync_s3.account, self.sync_s3.container)
 
