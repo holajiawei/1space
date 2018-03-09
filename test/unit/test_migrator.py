@@ -538,6 +538,27 @@ class TestMigratorUtils(unittest.TestCase):
         status.load_status_list()
         self.assertEqual(status_list, status.status_list)
 
+    def test_cmp_meta(self):
+        test_cases = [
+            ({'last-modified': create_timestamp(1.5e9),
+              'etag': 'foo'},
+             {'last-modified': create_timestamp(1.5e9),
+              'etag': 'bar'},
+             s3_sync.migrator.EQUAL),
+            ({'last-modified': create_timestamp(1.5e9),
+              'etag': 'foo'},
+             {'last-modified': create_timestamp(1.4e9),
+              'etag': 'bar'},
+             s3_sync.migrator.ETAG_DIFF),
+            ({'last-modified': create_timestamp(1.5e9),
+              'etag': 'foo'},
+             {'last-modified': create_timestamp(1.4e9),
+              'etag': 'foo'},
+             s3_sync.migrator.TIME_DIFF)
+        ]
+        for left, right, expected in test_cases:
+            self.assertEqual(expected, s3_sync.migrator.cmp_meta(left, right))
+
 
 class TestMigrator(unittest.TestCase):
     def setUp(self):
