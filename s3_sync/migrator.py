@@ -231,9 +231,11 @@ class Migrator(object):
             self.config, self.max_conns, False)
         resp = self.provider.list_buckets()
         if not resp.success:
-            raise MigrationError(
-                'Failed to list source buckets/containers: %s' %
+            self.logger.error(
+                'Failed to list source buckets/containers: "%s"' %
                 ''.join(resp.body))
+            return
+
         for index, container in enumerate(resp.body):
             if index % self.nodes == self.node_id:
                 # NOTE: we cannot remap container names when migrating all
@@ -241,12 +243,7 @@ class Migrator(object):
                 self.config['aws_bucket'] = container['name']
                 self.config['container'] = container['name']
                 self.provider.aws_bucket = container['name']
-                try:
-                    self._next_pass()
-                except Exception as e:
-                    self.logger.error('Failed to migrate %s: %s' % (
-                        container['name'], e))
-                    self.logger.error(''.join(traceback.format_exc()))
+                self._next_pass()
 
     def _next_pass(self):
         worker_pool = eventlet.GreenPool(self.workers)
@@ -254,10 +251,16 @@ class Migrator(object):
             worker_pool.spawn_n(self._upload_worker)
         is_reset = False
         self._manifests = set()
-        marker, scanned, copied = self._find_missing_objects()
-        if scanned == 0 and marker:
-            is_reset = True
-            marker, scanned, copied = self._find_missing_objects(marker='')
+        try:
+            marker, scanned, copied = self._find_missing_objects()
+            if scanned == 0 and marker:
+                is_reset = True
+                marker, scanned, copied = self._find_missing_objects(marker='')
+        except Exception:
+            scanned = 0
+            self.logger.error('Failed to migrate "%s"' %
+                              self.config['aws_bucket'])
+            self.logger.error(''.join(traceback.format_exc()))
 
         self.object_queue.join()
         self._stop_workers(self.object_queue)
@@ -275,10 +278,10 @@ class Migrator(object):
         while not self.errors.empty():
             container, key, err = self.errors.get()
             if type(err) == str:
-                self.logger.error('Failed to migrate %s/%s: %s' % (
+                self.logger.error('Failed to migrate "%s/%s": %s' % (
                     container, key, err))
             else:
-                self.logger.error('Failed to migrate %s/%s: %s' % (
+                self.logger.error('Failed to migrate "%s"/"%s": %s' % (
                     container, key, err[1]))
                 self.logger.error(''.join(traceback.format_exception(*err)))
 
@@ -291,7 +294,7 @@ class Migrator(object):
         if self.config.get('protocol') == 'swift':
             resp = self.provider.head_bucket(container)
             if resp.status != 200:
-                raise MigrationError('Failed to HEAD bucket/container %s' %
+                raise MigrationError('Failed to HEAD bucket/container "%s"' %
                                      container)
             headers = {}
             acl_hdrs = ['x-container-read', 'x-container-write']
@@ -309,7 +312,7 @@ class Migrator(object):
 
         resp = req.get_response(internal_client.app)
         if resp.status_int // 100 != 2:
-            raise UnexpectedResponse('Failed to create container %s: %d' % (
+            raise UnexpectedResponse('Failed to create container "%s": %d' % (
                 container, resp.status_int), resp)
 
         start = time.time()
@@ -318,9 +321,10 @@ class Migrator(object):
                     self.config['account'], container):
                 time.sleep(0.1)
             else:
-                self.logger.debug('Created container %s' % container)
+                self.logger.debug('Created container "%s"' % container)
                 return
-        raise MigrationError('Timeout while creating container %s' % container)
+        raise MigrationError('Timeout while creating container "%s"' %
+                             container)
 
     def _iter_source_container(
             self, container, marker, prefix, list_all):
@@ -450,14 +454,14 @@ class Migrator(object):
         resp = self.provider.get_object(key, **args)
         if resp.status != 200:
             resp.body.close()
-            raise MigrationError('Failed to GET %s/%s: %s' % (
+            raise MigrationError('Failed to GET "%s/%s": %s' % (
                 container, key, resp.body))
         put_headers = convert_to_local_headers(
             resp.headers.items(), remove_timestamp=False)
         if 'x-object-manifest' in resp.headers and\
                 (container, key) not in self._manifests:
             self.logger.warning(
-                'Migrating Dynamic Large Object %s/%s -- results may not be '
+                'Migrating Dynamic Large Object "%s/%s" -- results may not be '
                 'consistent' % (container, key))
             resp.body.close()
             self._migrate_dlo(container, key, put_headers)
@@ -483,7 +487,7 @@ class Migrator(object):
     def _migrate_slo(self, slo_container, key, headers):
         manifest = self.provider.get_manifest(key, slo_container)
         if not manifest:
-            raise MigrationError('Failed to fetch the manifest for %s/%s' % (
+            raise MigrationError('Failed to fetch the manifest for "%s/%s"' % (
                                  slo_container, key))
         for entry in manifest:
             container, segment_key = entry['name'][1:].split('/', 1)
@@ -501,7 +505,7 @@ class Migrator(object):
                 resp = self.provider.head_object(
                     segment_key, container)
                 if resp.status != 200:
-                    raise MigrationError('Failed to HEAD %s/%s' % (
+                    raise MigrationError('Failed to HEAD "%s/%s"' % (
                         container, segment_key))
                 src_meta = resp.headers
                 if self.config.get('protocol', 's3') != 'swift':
@@ -511,8 +515,8 @@ class Migrator(object):
                     continue
                 if ret == TIME_DIFF:
                     # TODO: update metadata
-                    self.logger.warning('Object metadata changed for %s/%s' % (
-                        container, segment_key))
+                    self.logger.warning('Object metadata changed for "%s/%s"' %
+                                        (container, segment_key))
                     continue
             self.object_queue.put((container, segment_key))
         manifest_blob = json.dumps(manifest)
@@ -535,7 +539,7 @@ class Migrator(object):
                 ic.upload_object(
                     content, self.config['account'], container, key,
                     headers)
-                self.logger.debug('Copied %s/%s' % (container, key))
+                self.logger.debug('Copied "%s/%s"' % (container, key))
             except UnexpectedResponse as e:
                 if e.resp.status_int != 404:
                     raise
@@ -543,7 +547,7 @@ class Migrator(object):
                 ic.upload_object(
                     content, self.config['account'], container, key,
                     headers)
-                self.logger.debug('Copied %s/%s' % (container, key))
+                self.logger.debug('Copied "%s/%s"' % (container, key))
 
     def _upload_worker(self):
         while True:
@@ -572,23 +576,19 @@ def process_migrations(migrations, migration_status, internal_pool, logger,
                        items_chunk, node_id, nodes):
     for index, migration in enumerate(migrations):
         if migration['aws_bucket'] == '/*' or index % nodes == node_id:
-            try:
-                if migration.get('remote_account'):
-                    src_account = migration.get('remote_account')
-                else:
-                    src_account = migration['aws_identity']
-                logger.debug('Processing %s' % (
-                    ':'.join([migration.get('aws_endpoint', ''),
-                              src_account, migration['aws_bucket']])))
-                migrator = Migrator(migration, migration_status,
-                                    items_chunk,
-                                    internal_pool, logger,
-                                    node_id, nodes)
-                migrator.next_pass()
-                migrator.close()
-            except Exception as e:
-                logger.error('Migration error: %r\n%s' % (
-                    e, traceback.format_exc(e)))
+            if migration.get('remote_account'):
+                src_account = migration.get('remote_account')
+            else:
+                src_account = migration['aws_identity']
+            logger.debug('Processing "%s"' % (
+                ':'.join([migration.get('aws_endpoint', ''),
+                          src_account, migration['aws_bucket']])))
+            migrator = Migrator(migration, migration_status,
+                                items_chunk,
+                                internal_pool, logger,
+                                node_id, nodes)
+            migrator.next_pass()
+            migrator.close()
 
 
 def run(migrations, migration_status, internal_pool, logger, items_chunk,
