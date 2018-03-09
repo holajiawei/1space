@@ -18,6 +18,8 @@ limitations under the License.
 
 import mock
 from s3_sync import utils
+from s3_sync import base_sync
+import StringIO
 import unittest
 from utils import FakeStream
 
@@ -178,3 +180,70 @@ class TestSLOFileWrapper(unittest.TestCase):
             mock.call('account', 'foo', 'part2', {}))
         self.assertEqual(True, part1_content.closed)
         self.assertEqual(True, part2_content.closed)
+
+
+class TestClosingResourceIterable(unittest.TestCase):
+    def test_resource_close_afted_read(self):
+        pool = mock.Mock()
+        resource = base_sync.BaseSync.HttpClientPoolEntry(None, pool)
+        self.assertTrue(resource.acquire())
+        self.assertEqual(0, resource.semaphore.balance)
+        data_src = StringIO.StringIO('test data')
+        closing_iter = utils.ClosingResourceIterable(
+            resource, data_src)
+        data = next(closing_iter)
+        with self.assertRaises(StopIteration):
+            next(closing_iter)
+        self.assertEqual('test data', data)
+        self.assertEqual(1, resource.semaphore.balance)
+        self.assertTrue(closing_iter.closed)
+
+    def test_resource_close(self):
+        pool = mock.Mock()
+        resource = base_sync.BaseSync.HttpClientPoolEntry(None, pool)
+        self.assertTrue(resource.acquire())
+        self.assertEqual(0, resource.semaphore.balance)
+        data_src = StringIO.StringIO('test data')
+        closing_iter = utils.ClosingResourceIterable(
+            resource, data_src)
+        closing_iter.close()
+        self.assertEqual(1, resource.semaphore.balance)
+        self.assertTrue(closing_iter.closed)
+
+    def test_resource_close_destructor(self):
+        pool = mock.Mock()
+        resource = base_sync.BaseSync.HttpClientPoolEntry(None, pool)
+        self.assertTrue(resource.acquire())
+        self.assertEqual(0, resource.semaphore.balance)
+        data_src = StringIO.StringIO('test data')
+        closing_iter = utils.ClosingResourceIterable(
+            resource, data_src)
+        del closing_iter
+        self.assertEqual(1, resource.semaphore.balance)
+
+    def test_closed_resource_destructor(self):
+        pool = mock.Mock()
+        resource = base_sync.BaseSync.HttpClientPoolEntry(None, pool)
+        self.assertTrue(resource.acquire())
+        self.assertEqual(0, resource.semaphore.balance)
+        data_src = StringIO.StringIO('test data')
+        closing_iter = utils.ClosingResourceIterable(
+            resource, data_src)
+        closing_iter.close()
+        self.assertEqual(1, resource.semaphore.balance)
+        self.assertTrue(closing_iter.closed)
+        del closing_iter
+        self.assertEqual(1, resource.semaphore.balance)
+
+    def test_double_close(self):
+        pool = mock.Mock()
+        resource = base_sync.BaseSync.HttpClientPoolEntry(None, pool)
+        self.assertTrue(resource.acquire())
+        self.assertEqual(0, resource.semaphore.balance)
+        data_src = StringIO.StringIO('test data')
+        closing_iter = utils.ClosingResourceIterable(
+            resource, data_src)
+        ''.join(closing_iter)
+        self.assertEqual(1, resource.semaphore.balance)
+        closing_iter.close()
+        self.assertEqual(1, resource.semaphore.balance)

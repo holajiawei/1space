@@ -37,3 +37,20 @@ class TestBaseSync(unittest.TestCase):
             self.assertEqual(
                 0, base.client_pool.client_pool[0].semaphore.balance)
         self.assertEqual(1, base.client_pool.get_semaphore.balance)
+
+    @mock.patch('s3_sync.base_sync.BaseSync._get_client_factory')
+    def test_double_release(self, factory_mock):
+        factory_mock.return_value = mock.Mock()
+
+        base = BaseSync(self.settings, max_conns=1)
+        client = base.client_pool.get_client()
+        self.assertEqual(0, base.client_pool.get_semaphore.balance)
+        self.assertEqual(
+            0, base.client_pool.client_pool[0].semaphore.balance)
+        client.close()
+        self.assertEqual(1, base.client_pool.get_semaphore.balance)
+        self.assertEqual(1, client.semaphore.balance)
+
+        with self.assertRaises(RuntimeError):
+            client.close()
+        self.assertEqual(1, client.semaphore.balance)
