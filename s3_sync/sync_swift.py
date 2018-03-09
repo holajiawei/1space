@@ -286,14 +286,15 @@ class SyncSwift(BaseSync):
                 hdrs, results = swift_client.get_container(
                     bucket, marker=marker, limit=limit,
                     prefix=prefix, delimiter=delimiter)
-                for entry in results:
-                    entry['content_location'] = '%s;%s;%s' % (
-                        self.endpoint,
-                        self.settings['aws_identity'],
-                        bucket)
-                return (200, results)
         except swiftclient.exceptions.ClientException as e:
             return (e.http_status, e.message)
+
+        for entry in results:
+            entry['content_location'] = '%s;%s;%s' % (
+                self.endpoint,
+                self.settings['aws_identity'],
+                bucket)
+        return (200, results)
 
     def update_metadata(self, name, metadata):
         with self.client_pool.get_client() as swift_client:
