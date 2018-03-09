@@ -173,6 +173,12 @@ class BaseSync(object):
     def list_buckets(self):
         raise NotImplementedError()
 
+    def close(self):
+        for client in self.client_pool.client_pool:
+            client.acquire()
+            self._close_conn(client.client)
+            client.close()
+
     def _get_client_factory(self):
         raise NotImplementedError()
 

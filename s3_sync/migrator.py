@@ -216,6 +216,7 @@ class Migrator(object):
         self.logger = logger
         self.node_id = node_id
         self.nodes = nodes
+        self.provider = None
 
     def next_pass(self):
         if self.config['aws_bucket'] != '/*':
@@ -484,6 +485,12 @@ class Migrator(object):
             finally:
                 self.object_queue.task_done()
 
+    def close(self):
+        if not self.provider:
+            return
+        self.provider.close()
+        self.provider = None
+
 
 def process_migrations(migrations, migration_status, internal_pool, logger,
                        items_chunk, node_id, nodes):
@@ -502,6 +509,7 @@ def process_migrations(migrations, migration_status, internal_pool, logger,
                                     internal_pool, logger,
                                     node_id, nodes)
                 migrator.next_pass()
+                migrator.close()
             except Exception as e:
                 logger.error('Migration error: %r\n%s' % (
                     e, traceback.format_exc(e)))
