@@ -3,3 +3,4 @@
 docker-compose.custom.yml
 .env
 /venv
+/build
