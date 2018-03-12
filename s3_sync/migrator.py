@@ -78,7 +78,7 @@ def cmp_object_entries(left, right):
 def cmp_meta(dest, source):
     if source['last-modified'] == dest['last-modified']:
         return EQUAL
-    if source['etag'] == dest['etag']:
+    if source['etag'] != dest['etag']:
         return ETAG_DIFF
     return TIME_DIFF
 
