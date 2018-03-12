@@ -447,6 +447,7 @@ class ClosingResourceIterable(object):
         if not self.exhausted:
             self.close_data()
         if not self.closed:
+            self.closed = True
             self.resource.close()
 
     def __next__(self):

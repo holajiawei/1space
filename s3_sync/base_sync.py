@@ -54,6 +54,10 @@ class BaseSync(object):
             return self.semaphore.acquire(blocking=False)
 
         def close(self):
+            if self.semaphore.balance > BaseSync.HTTP_CONN_POOL_SIZE - 1:
+                logging.getLogger('s3-sync').error(
+                    'Detected double release of the semaphore')
+                raise RuntimeError('Detected double release of the semaphore!')
             self.semaphore.release()
             self.pool.release()
 

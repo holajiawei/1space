@@ -385,6 +385,7 @@ class Migrator(object):
             args['resp_chunk_size'] = 65536
         resp = self.provider.get_object(key, **args)
         if resp.status != 200:
+            resp.body.close()
             raise MigrationError('Failed to GET %s/%s: %s' % (
                 container, key, resp.body))
         put_headers = convert_to_local_headers(
