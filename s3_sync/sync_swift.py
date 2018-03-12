@@ -65,6 +65,11 @@ class SyncSwift(BaseSync):
                 os_options=os_options)
         return swift_client_factory
 
+    @staticmethod
+    def _close_conn(conn):
+        if conn.http_conn:
+            conn.http_conn[1].request_session.close()
+
     def upload_object(self, name, policy, internal_client):
         if self._per_account and not self.verified_container:
             with self.client_pool.get_client() as swift_client:

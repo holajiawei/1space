@@ -91,6 +91,11 @@ class SyncS3(BaseSync):
             return s3_client
         return boto_client_factory
 
+    @staticmethod
+    def _close_conn(conn):
+        if conn._endpoint and conn._endpoint.http_session:
+            conn._endpoint.http_session.close()
+
     def upload_object(self, swift_key, storage_policy_index, internal_client):
         s3_key = self.get_s3_name(swift_key)
         try:
