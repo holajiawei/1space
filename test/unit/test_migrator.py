@@ -576,6 +576,10 @@ class TestMigrator(unittest.TestCase):
             config, None, 1000, pool, self.logger, 0, 1)
         self.migrator.status = mock.Mock()
 
+    def get_log_lines(self):
+        lines = ''.join(self.stream.getvalue()).split('\n')
+        return filter(lambda line: line != '', lines)
+
     @mock.patch('s3_sync.migrator.create_provider')
     def test_single_container(self, create_provider_mock):
         self.migrator._next_pass = mock.Mock()
@@ -589,11 +593,12 @@ class TestMigrator(unittest.TestCase):
     @mock.patch('s3_sync.migrator.create_provider')
     def test_all_buckets_next_pass_fails(self, create_provider_mock):
         self.migrator.config['aws_bucket'] = '/*'
-        self.migrator._next_pass = mock.Mock(side_effect=Exception('kaboom'))
+        self.migrator._find_missing_objects = mock.Mock(
+            side_effect=Exception('kaboom'))
         create_provider_mock.return_value.list_buckets.return_value = \
             ProviderResponse(True, 200, [], [{'name': 'bucket'}])
         self.migrator.next_pass()
-        self.assertEqual('Failed to migrate bucket: kaboom',
+        self.assertEqual('Failed to migrate "bucket"',
                          self.stream.getvalue().splitlines()[0])
 
     @mock.patch('s3_sync.migrator.create_provider')
@@ -627,13 +632,15 @@ class TestMigrator(unittest.TestCase):
         create_provider_mock.return_value.list_buckets.return_value = \
             ProviderResponse(False, 404, [], 'Not Found')
         self.migrator.config = {'aws_bucket': '/*'}
-        with self.assertRaises(s3_sync.migrator.MigrationError):
-            self.migrator.next_pass()
+        self.migrator.next_pass()
         expected_conf = {'aws_bucket': '/*', 'container': '.',
                          'all_buckets': True}
         self.assertEqual(expected_conf, self.migrator.config)
         create_provider_mock.assert_called_once_with(
             expected_conf, self.migrator.ic_pool.max_size, False)
+        self.assertEqual(
+            'Failed to list source buckets/containers: "Not Found"',
+            self.stream.getvalue().splitlines()[0])
 
     @mock.patch('s3_sync.migrator.create_provider')
     def test_migrate_objects(self, create_provider_mock):
@@ -834,8 +841,9 @@ class TestMigrator(unittest.TestCase):
         self.migrator.status = s3_sync.migrator.Status(status_file)
         with mock.patch('time.time', return_value=100.0):
             self.migrator.next_pass()
-        self.assertEqual('Copied bucket1/obj\nCopied bucket2/obj\n',
-                         self.stream.getvalue())
+        self.assertEqual(['Copied "bucket1/obj"',
+                          'Copied "bucket2/obj"'],
+                         self.stream.getvalue().splitlines())
         with open(status_file) as f:
             status = json.load(f)
         self.assertEqual(status, [{
@@ -998,8 +1006,9 @@ class TestMigrator(unittest.TestCase):
 
         self.migrator.status.get_migration.return_value = {}
 
-        with self.assertRaises(s3_sync.migrator.MigrationError):
-            self.migrator.next_pass()
+        self.migrator.next_pass()
+        self.assertEqual('MigrationError: Failed to HEAD bucket/container '
+                         '"bucket"', self.get_log_lines()[-1])
         provider.head_bucket.assert_called_once_with(
             self.migrator.config['container'])
 
@@ -1027,9 +1036,10 @@ class TestMigrator(unittest.TestCase):
         time_mock.time.side_effect = (0, 0, 1)
         self.migrator.status.get_migration.return_value = {}
 
-        with self.assertRaises(s3_sync.migrator.MigrationError) as e:
-            self.migrator.next_pass()
-            self.assertEqual('Timeout', e.msg.split()[0])
+        self.migrator.next_pass()
+        self.assertEqual(
+            'MigrationError: Timeout while creating container "bucket"',
+            self.get_log_lines()[-1])
         self.swift_client.make_path.assert_called_once_with(
             self.migrator.config['account'], self.migrator.config['container'])
         self.swift_client.container_exists.assert_has_calls(
