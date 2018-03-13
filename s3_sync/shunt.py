@@ -242,7 +242,8 @@ class S3SyncShunt(object):
 
         provider = create_provider(sync_profile, max_conns=1,
                                    per_account=per_account)
-        if req.method == 'GET' and sync_profile.get('restore_object', False):
+        if req.method == 'GET' and sync_profile.get('restore_object', False) \
+                and 'range' not in req.headers:
             # We incur an extra request hit by checking for a possible SLO.
             manifest = provider.get_manifest(obj)
             self.logger.debug("Manifest: %s" % manifest)
