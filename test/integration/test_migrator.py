@@ -14,6 +14,8 @@ See the License for the specific language governing permissions and
 limitations under the License.
 """
 
+
+import json
 import StringIO
 import swiftclient
 import urllib
@@ -108,6 +110,94 @@ class TestMigrator(TestCloudSyncBase):
 
         clear_swift_container(self.swift_dst, migration['aws_bucket'])
         clear_swift_container(self.swift_src, migration['container'])
+
+    def test_swift_large_objects(self):
+        migration = self.swift_migration()
+
+        segments_container = migration['aws_bucket'] + '_segments'
+        content = ''.join([chr(97 + i) * 2**20 for i in range(10)])
+
+        self.remote_swift(
+            'put_container', segments_container)
+        for i in range(10):
+            self.remote_swift('put_object', segments_container,
+                              'slo-part-%d' % i, chr(97 + i) * 2**20,
+                              headers={'x-object-meta-part': i})
+            self.remote_swift('put_object', segments_container,
+                              'dlo-part-%d' % i, chr(97 + i) * 2**20,
+                              headers={'x-object-meta-part': i})
+        # Upload the manifests
+        self.remote_swift(
+            'put_object', migration['aws_bucket'], 'dlo', '',
+            headers={'x-object-manifest': segments_container + '/dlo-part',
+                     'x-object-meta-dlo': 'dlo-meta'})
+
+        slo_manifest = [
+            {'path': '/%s/slo-part-%d' % (segments_container, i)}
+            for i in range(10)]
+        self.remote_swift(
+            'put_object', migration['aws_bucket'], 'slo',
+            json.dumps(slo_manifest),
+            headers={'x-object-meta-slo': 'slo-meta'},
+            query_string='multipart-manifest=put')
+
+        # Verify migration
+        def _check_objects_copied():
+            try:
+                self.local_swift('get_container', migration['container'])
+                self.local_swift('get_container', segments_container)
+            except swiftclient.exceptions.ClientException as e:
+                if e.http_status == 404:
+                    return False
+                else:
+                    raise
+
+            _, listing = self.local_swift(
+                'get_container', migration['container'])
+            swift_names = [obj['name'] for obj in listing]
+            if set(['dlo', 'slo']) != set(swift_names):
+                return False
+            _, listing = self.local_swift(
+                'get_container', segments_container)
+            segments = [obj['name'] for obj in listing]
+            expected = set(
+                ['slo-part-%d' % i for i in range(10)] +
+                ['dlo-part-%d' % i for i in range(10)])
+            return expected == set(segments)
+
+        wait_for_condition(5, _check_objects_copied)
+
+        mismatched = []
+
+        def _check_segments(prefix):
+            for i in range(10):
+                part_name = prefix + '%d' % i
+                hdrs = self.local_swift(
+                    'head_object', segments_container, part_name)
+                if hdrs.get('x-object-meta-part') != str(i):
+                    mismatched.append('mismatched segment: %s != %s' % (
+                        hdrs.get('x-object-meta-part'), i))
+
+        slo_part_prefix = 'slo-part-'
+        dlo_part_prefix = 'dlo-part-'
+        _check_segments(slo_part_prefix)
+        _check_segments(dlo_part_prefix)
+        if mismatched:
+            self.fail('Found segment mismatches: %s' % '; '.join(mismatched))
+        slo_hdrs, slo_body = self.local_swift(
+            'get_object', migration['container'], 'slo')
+        self.assertEqual('slo-meta', slo_hdrs.get('x-object-meta-slo'))
+        self.assertTrue(content == slo_body)
+
+        dlo_hdrs, dlo_body = self.local_swift(
+            'get_object', migration['container'], 'dlo')
+        self.assertEqual('dlo-meta', dlo_hdrs.get('x-object-meta-dlo'))
+        self.assertTrue(content == dlo_body)
+
+        clear_swift_container(self.swift_dst, migration['aws_bucket'])
+        clear_swift_container(self.swift_dst, segments_container)
+        clear_swift_container(self.swift_src, migration['container'])
+        clear_swift_container(self.swift_src, segments_container)
 
     def test_container_meta(self):
         migration = self._find_migration(

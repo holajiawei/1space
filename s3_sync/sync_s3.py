@@ -276,10 +276,13 @@ class SyncS3(BaseSync):
             with self.client_pool.get_client() as s3_client:
                 return _perform_op(s3_client)
 
-    def list_objects(self, marker, limit, prefix, delimiter=None):
+    def list_objects(self, marker, limit, prefix, delimiter=None,
+                     bucket=None):
         if limit > 1000:
             limit = 1000
-        args = dict(Bucket=self.aws_bucket)
+        if bucket is None:
+            bucket = self.aws_bucket
+        args = dict(Bucket=bucket)
         args['MaxKeys'] = limit
         if prefix is None:
             prefix = ''
