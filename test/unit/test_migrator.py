@@ -1007,8 +1007,8 @@ class TestMigrator(unittest.TestCase):
         self.migrator.status.get_migration.return_value = {}
 
         self.migrator.next_pass()
-        self.assertEqual('MigrationError: Failed to HEAD bucket/container '
-                         '"bucket"', self.get_log_lines()[-1])
+        self.assertEqual('Bucket/container "bucket" does not exist',
+                         self.get_log_lines()[0])
         provider.head_bucket.assert_called_once_with(
             self.migrator.config['container'])
 

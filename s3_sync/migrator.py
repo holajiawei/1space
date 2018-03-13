@@ -46,6 +46,19 @@ EPOCH = datetime.datetime.utcfromtimestamp(0)
 IGNORE_KEYS = set(('status', 'aws_secret', 'all_buckets'))
 
 
+class MigrationError(Exception):
+    pass
+
+
+class ContainerNotFound(Exception):
+    def __init__(self, container, *args, **kwargs):
+        self.container = container
+        super(ContainerNotFound, self).__init__(*args, **kwargs)
+
+    def __unicode__(self):
+        return u'Bucket/container "%s" does not exist' % self.container
+
+
 def equal_migration(left, right):
     for k in set(left.keys()) | set(right.keys()):
         if k in IGNORE_KEYS:
@@ -190,10 +203,6 @@ class Status(object):
         self.save_status_list()
 
 
-class MigrationError(Exception):
-    pass
-
-
 class Migrator(object):
     '''List and move objects from a remote store into the Swift cluster'''
     def __init__(self, config, status, work_chunk, swift_pool, logger,
@@ -256,6 +265,9 @@ class Migrator(object):
             if scanned == 0 and marker:
                 is_reset = True
                 marker, scanned, copied = self._find_missing_objects(marker='')
+        except ContainerNotFound as e:
+            scanned = 0
+            self.logger.error(unicode(e))
         except Exception:
             scanned = 0
             self.logger.error('Failed to migrate "%s"' %
@@ -293,6 +305,8 @@ class Migrator(object):
     def _create_container(self, container, internal_client, timeout=1):
         if self.config.get('protocol') == 'swift':
             resp = self.provider.head_bucket(container)
+            if resp.status == 404:
+                raise ContainerNotFound(container)
             if resp.status != 200:
                 raise MigrationError('Failed to HEAD bucket/container "%s"' %
                                      container)
@@ -333,6 +347,8 @@ class Migrator(object):
         while True:
             status, keys = self.provider.list_objects(
                 next_marker, self.work_chunk, prefix, bucket=container)
+            if status == 404:
+                raise ContainerNotFound(container)
             if status != 200:
                 raise MigrationError(
                     'Failed to list source bucket/container "%s"' %
