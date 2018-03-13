@@ -282,6 +282,62 @@ to keep state).
 If you would like to examine the logs from each of the services, all logs are in
 /var/log (e.g. /var/log/swift-s3-sync.log).
 
+### Deploying proxymc
+
+Build docker images are tagged like so:
+
+```
+REPOSITORY                TAG                 IMAGE ID            CREATED             SIZE
+swiftstack/proxymc        0.1.26-5-gfa7e35e   d11331475b2b        2 hours ago         692MB
+```
+
+The tag portion is derived from git revparse of the swift-s3-sync repo whose
+code was put into the image.
+
+You would reference the above image as `swiftstack/proxymc:0.1.26-5-gfa7e35e`
+
+Building docker images requires the current user to have at least read access
+to our Swift and swift-s3-sync Github repos (i.e. if you ran `git clone ...`
+on them, it would succeed).
+
+## For testing
+
+You can build a proxymc container image using the code in your development
+tree like so (you can specify a different `ss-swift` tag to use with another,
+optional command-line arg):
+
+```
+cd proxymc_docker
+./build_docker_image.py --swift-s3-sync-tag DEV --s3proxy
+```
+
+Then run it like this (this is interactive, so it'll steal your terminal and
+you will just see supervisord console output):
+```
+docker run -it -e AWS_ACCESS_KEY_ID=s3-sync-test -e AWS_SECRET_ACCESS_KEY=s3-sync-test -e CONF_ENDPOINT=http://localhost:10080 swiftstack/proxymc:0.1.26-5-gfa7e35e
+```
+
+The bucket name used will be `dockertest` and this dev repo's config files will
+be placed in the S3Proxy storage in that bucket during image building.
+
+## For real (Amazon ECS)
+
+Pick an S3 bucket name to use.  Build the container image like so:
+```
+cd proxymc_docker
+./build_docker_image.py --ss-swift-tag ss-release-2.16.0.2 \
+  --swift-s3-sync-tag 0.1.26 --config-bucket YOUR-S3-BUCKET-NAME
+```
+
+Set up your Amazon ECS stuff.  Set up some IAM role stuff.
+When you configure your Task thing, add this ENV var and give the task the IAM role thing.
+The container itself and proxymc will get actual S3 creds via a magical env var set by
+ECS and a wacky URL the proxymc daemon will load.
+
+```
+CONF_BUCKET=your_bucket_name
+```
+
 ### Working with Docker directly
 
 ## Build

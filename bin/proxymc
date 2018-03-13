@@ -15,12 +15,45 @@ See the License for the specific language governing permissions and
 limitations under the License.
 """
 
+import os
 import sys
-from swift.common.utils import parse_options
-from swift.common.wsgi import run_wsgi
+
+from s3_sync.proxymc_app import get_env_options, get_and_write_conf_file
+
+from swift.common import utils as swift_utils
+from swift.common import wsgi
+
+
+def _new_validate_configuration():
+    try:
+        swift_utils.validate_hash_conf()
+    except swift_utils.InvalidHashPathConfigError:
+        pass
+
+
+def monkeypatch_swift_conf_hash_stuff():
+    swift_utils.validate_configuration = _new_validate_configuration
+    wsgi.validate_configuration = _new_validate_configuration
+
 
 if __name__ == '__main__':
-    conf_file, options = parse_options()
+    monkeypatch_swift_conf_hash_stuff()
+
+    # In addition to the (potentially baked-into-the-image) CONF_BUCKET and
+    # optional CONF_ENDPOINT environment variables, we also require either
+    # AWS_CONTAINER_CREDENTIALS_RELATIVE_URI via Amazon ECS (and task IAMs), or
+    # these two env vars (named based on boto3.session.Session kwargs):
+    #   AWS_ACCESS_KEY_ID
+    #   AWS_SECRET_ACCESS_KEY
+    #
+    env_options = get_env_options()
+
+    proxymc_conf_path = os.path.sep + os.path.join('tmp', 'proxymc.conf')
+    get_and_write_conf_file(env_options['CONF_NAME'], proxymc_conf_path,
+                            env_options)
+    sys.argv.insert(1, proxymc_conf_path)
+
+    conf_file, options = swift_utils.parse_options()
     # Calling this "proxy-server" in the pipeline is a little white lie to keep
     # the swift3 pipeline check from blowing up.
-    sys.exit(run_wsgi(conf_file, 'proxy-server', **options))
+    sys.exit(wsgi.run_wsgi(conf_file, 'proxy-server', **options))
