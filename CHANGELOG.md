@@ -1,3 +1,27 @@
+## 0.1.27 (2018-03-14)
+
+Features:
+
+    - Implement support for migrating Dynamic Large Objects. This is done as a
+      best-effort migration, where we list and copy all segments.
+
+Bug fixes:
+
+    - Fixed a bug in the migrator, where a connection could be reused before all
+      of the bytes have been read from the prior response, resulting in
+      corruption.
+    - Ensure to close all connections to the remote providers after each
+      migrator pass. When there are no objects to migrate, not closing
+      connections may lead to exhausting the listening socket's queue.
+    - Static large objects are no longer considered different after the
+      migrations if the manifests have the keys in a different order.
+
+Improvement
+
+    - Improved error reporting for missing containers in the migrator. A missing
+      container no longer results in a traceback and prints a more informative
+      message.
+
 ## 0.1.26 (2018-02-23)
 
 Features:
