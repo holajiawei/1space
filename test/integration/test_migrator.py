@@ -18,6 +18,7 @@ limitations under the License.
 import json
 import StringIO
 import swiftclient
+import time
 import urllib
 from . import (TestCloudSyncBase, clear_swift_container, clear_s3_bucket,
                wait_for_condition)
@@ -43,10 +44,14 @@ class TestMigrator(TestCloudSyncBase):
         migration = self.s3_migration()
 
         test_objects = [
-            ('s3-blob', 's3 content', {}),
-            ('s3-unicod\u00e9', '\xde\xad\xbe\xef', {}),
-            ('s3-with-headers', 'header-blob', {'custom-header': 'value',
-                                                'unicod\u00e9': '\u262f'})]
+            ('s3-blob', 's3 content', {}, {}),
+            ('s3-unicod\u00e9', '\xde\xad\xbe\xef', {}, {}),
+            ('s3-with-headers', 'header-blob',
+             {'custom-header': 'value',
+              'unicod\u00e9': '\u262f'},
+             {'content-type': 'migrator/test',
+              'content-disposition': "attachment; filename='test-blob.jpg'",
+              'content-encoding': 'identity'})]
 
         def _check_objects_copied():
             hdrs, listing = self.local_swift(
@@ -54,25 +59,34 @@ class TestMigrator(TestCloudSyncBase):
             swift_names = [obj['name'] for obj in listing]
             return set([obj[0] for obj in test_objects]) == set(swift_names)
 
-        for name, body, headers in test_objects:
+        for name, body, headers, req_headers in test_objects:
+            kwargs = dict([('Content' + key.split('-')[1].capitalize(), value)
+                           for key, value in req_headers.items()])
             self.s3('put_object', Bucket=migration['aws_bucket'], Key=name,
-                    Body=StringIO.StringIO(body), Metadata=headers)
+                    Body=StringIO.StringIO(body), Metadata=headers,
+                    **kwargs)
 
         wait_for_condition(5, _check_objects_copied)
 
-        for name, expected_body, user_meta in test_objects:
+        for name, expected_body, user_meta, req_headers in test_objects:
             hdrs, body = self.local_swift(
                 'get_object', migration['container'], name)
             self.assertEqual(body, body)
             for k, v in user_meta.items():
                 self.assertIn('x-object-meta-' + k, hdrs)
                 self.assertEqual(v, hdrs['x-object-meta-' + k])
+            for k, v in req_headers.items():
+                self.assertIn(k, hdrs)
+                self.assertEqual(v, hdrs[k])
 
-        for name, expected_body, user_meta in test_objects:
+        for name, expected_body, user_meta, req_headers in test_objects:
             resp = self.s3('get_object', Bucket=migration['aws_bucket'],
                            Key=name)
             self.assertEqual(user_meta, resp['Metadata'])
             self.assertEqual(expected_body, resp['Body'].read())
+            for k, v in req_headers.items():
+                self.assertIn(k, resp['ResponseMetadata']['HTTPHeaders'])
+                self.assertEqual(v, resp['ResponseMetadata']['HTTPHeaders'][k])
 
         clear_s3_bucket(self.s3_client, migration['aws_bucket'])
         clear_swift_container(self.swift_src, migration['container'])
@@ -86,7 +100,11 @@ class TestMigrator(TestCloudSyncBase):
             ('swift-with-headers',
              'header-blob',
              {'x-object-meta-custom-header': 'value',
-              'x-object-meta-unicod\u00e9': '\u262f'})]
+              'x-object-meta-unicod\u00e9': '\u262f',
+              'content-type': 'migrator/test',
+              'content-disposition': "attachment; filename='test-blob.jpg'",
+              'content-encoding': 'identity',
+              'x-delete-at': str(int(time.time() + 7200))})]
 
         def _check_objects_copied():
             hdrs, listing = self.local_swift(
