@@ -30,6 +30,18 @@ MANIFEST_HEADER = 'x-object-manifest'
 SLO_HEADER = 'x-static-large-object'
 SLO_ETAG_FIELD = 'swift-slo-etag'
 SWIFT_TIME_FMT = '%Y-%m-%dT%H:%M:%S.%f'
+# Blacklist of known hop-by-hop headers taken from
+# https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers
+HOP_BY_HOP_HEADERS = set([
+    'connection',
+    'keep-alive',
+    'proxy-authenticate',
+    'proxy-authorization',
+    'te',
+    'trailer',
+    'transfer-encoding',
+    'upgrade',
+])
 
 
 class FileWrapper(object):
@@ -463,6 +475,13 @@ class ClosingResourceIterable(object):
             destructor.
         """
         self.close()
+
+
+def filter_hop_by_hop_headers(headers):
+    # Take an iterable of (key, value) tuples and return a list of (key, value)
+    # tuples with any hop-by-hop headers removed.
+    return [(k, v) for (k, v) in headers
+            if k.lower() not in HOP_BY_HOP_HEADERS]
 
 
 def convert_to_s3_headers(swift_headers):

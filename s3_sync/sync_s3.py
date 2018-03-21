@@ -58,9 +58,14 @@ class SyncS3(BaseSync):
         aws_secret = self.settings['aws_secret']
         self.encryption = self.settings.get('encryption', True)
 
-        boto_session = boto3.session.Session(
-            aws_access_key_id=aws_identity,
-            aws_secret_access_key=aws_secret)
+        session_kwargs = {
+            'aws_access_key_id': aws_identity,
+            'aws_secret_access_key': aws_secret,
+        }
+        if self.settings.get('aws_session_token', None):
+            session_kwargs['aws_session_token'] = \
+                self.settings['aws_session_token']
+        boto_session = boto3.session.Session(**session_kwargs)
         if not self.endpoint or self.endpoint.endswith('amazonaws.com'):
             # We always use v4 signer with Amazon, as it will support all
             # regions.
@@ -169,7 +174,7 @@ class SyncS3(BaseSync):
                 else:
                     raise
 
-    def delete_object(self, swift_key, internal_client=None):
+    def delete_object(self, swift_key):
         s3_key = self.get_s3_name(swift_key)
         self.logger.debug('Deleting object %s' % s3_key)
         self._delete_not_found(s3_key)
@@ -208,9 +213,9 @@ class SyncS3(BaseSync):
 
         return response.to_wsgi()
 
-    def head_object(self, key, bucket=None, **options):
-        if not self.settings.get('native'):
-            key = self.get_s3_name(key)
+    def head_object(self, swift_key, bucket=None, **options):
+        key = swift_key if self.settings.get('native') \
+            else self.get_s3_name(swift_key)
         if bucket is None:
             bucket = self.aws_bucket
         response = self._call_boto(
@@ -218,9 +223,9 @@ class SyncS3(BaseSync):
         response.body = ['']
         return response
 
-    def get_object(self, key, bucket=None, **options):
-        if not self.settings.get('native'):
-            key = self.get_s3_name(key)
+    def get_object(self, swift_key, bucket=None, **options):
+        key = swift_key if self.settings.get('native') \
+            else self.get_s3_name(swift_key)
         if bucket is None:
             bucket = self.aws_bucket
         return self._call_boto(
