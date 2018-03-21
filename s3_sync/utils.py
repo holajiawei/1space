@@ -314,7 +314,8 @@ class SwiftSloPutWrapper(SwiftPutWrapper):
         self._ensure_segments_container()
         env = {'REQUEST_METHOD': 'PUT',
                'wsgi.input': self.put_wrapper,
-               'CONTENT_LENGTH': self.manifest[self.segment_index]['bytes']}
+               'CONTENT_LENGTH': self.manifest[self.segment_index]['bytes'],
+               'ETAG': self.manifest[self.segment_index]['hash']}
         return Request.blank(
             self._create_request_path(
                 self.manifest[self.segment_index]['name'][1:]),
@@ -349,6 +350,10 @@ class SwiftSloPutWrapper(SwiftPutWrapper):
         if SLO_HEADER in self.headers:
             del self.headers[SLO_HEADER]
         del self.headers['Content-Length']
+        etag = hashlib.md5()
+        for entry in self.manifest:
+            etag.update(entry['hash'])
+        self.headers['ETag'] = etag.hexdigest()
         req = Request.blank(self.path, environ=env, headers=self.headers)
         resp = req.get_response(self.app)
         if self.logger:
@@ -522,9 +527,6 @@ def convert_to_swift_headers(s3_headers):
 def convert_to_local_headers(headers, remove_timestamp=True):
     put_headers = dict([(k, v) for k, v in headers
                         if not k.startswith('Remote-')])
-    if 'etag' in put_headers:
-        put_headers['Content-MD5'] = put_headers['etag']
-        del put_headers['etag']
     # We must remove the X-Timestamp header, as otherwise objects may
     # never be restored if a tombstone is present (as the remote
     # timestamp may be older than then tombstone). Only happens if
