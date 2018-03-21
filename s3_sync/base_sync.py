@@ -146,28 +146,28 @@ class BaseSync(object):
             self.aws_bucket,
         )
 
-    def upload_object(self, name, storage_policy_index):
+    def upload_object(self, swift_key, storage_policy_index, internal_client):
         raise NotImplementedError()
 
     def update_metadata(self, swift_key, swift_meta):
         raise NotImplementedError()
 
-    def delete_object(self, name):
+    def delete_object(self, swift_key):
         raise NotImplementedError()
 
-    def shunt_object(self, request, name):
+    def shunt_object(self, request, swift_key):
         raise NotImplementedError()
 
-    def get_object(self, key, bucket=None, **options):
+    def head_object(self, swift_key, bucket=None, **options):
         raise NotImplementedError()
 
-    def head_object(self, key, bucket=None, **options):
+    def get_object(self, swift_key, bucket=None, **options):
         raise NotImplementedError()
 
     def head_bucket(self, bucket, **options):
         raise NotImplementedError()
 
-    def list_objects(self, marker, limit, prefix, delimiter=None):
+    def list_objects(self, marker, limit, prefix, delimiter=None, bucket=None):
         raise NotImplementedError()
 
     def list_buckets(self):

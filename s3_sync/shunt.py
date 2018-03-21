@@ -28,7 +28,8 @@ from swift.proxy.controllers.base import get_account_info
 
 from .provider_factory import create_provider
 from .utils import (check_slo, SwiftPutWrapper, SwiftSloPutWrapper,
-                    convert_to_local_headers, response_is_complete)
+                    convert_to_local_headers, response_is_complete,
+                    filter_hop_by_hop_headers)
 
 
 class S3SyncProxyFSSwitch(object):
@@ -264,23 +265,7 @@ class S3SyncShunt(object):
         status = '%s %s' % (status_code, swob.RESPONSE_REASONS[status_code][0])
         self.logger.debug('Remote resp: %s' % status)
 
-        # Blacklist of known hop-by-hop headers taken from
-        # https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers
-        headers_to_remove = set([
-            'connection',
-            'keep-alive',
-            'proxy-authenticate',
-            'proxy-authorization',
-            'te',
-            'trailer',
-            'transfer-encoding',
-            'upgrade',
-        ])
-        indexes_to_remove = [
-            i for i, (header, key) in enumerate(headers)
-            if header.lower() in headers_to_remove]
-        headers = [item for i, item in enumerate(headers)
-                   if i not in indexes_to_remove]
+        headers = filter_hop_by_hop_headers(headers)
         headers.extend(trans_id_headers)
 
         start_response(status, headers)

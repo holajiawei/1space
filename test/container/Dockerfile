@@ -1,7 +1,8 @@
 FROM bouncestorage/swift-aio:latest
 
 RUN apt-get update && \
-    apt-get install --no-install-recommends -y python-support openjdk-7-jdk wget && \
+    apt-get install --no-install-recommends -y python-support openjdk-7-jdk \
+        wget curl && \
     apt-get clean
 
 RUN pip install -e git://github.com/swiftstack/botocore.git@1.4.32.6#egg=botocore && \

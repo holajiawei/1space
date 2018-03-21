@@ -452,6 +452,19 @@ class TestSyncS3(unittest.TestCase):
                     'aws_endpoint': 'http://test.com'})
             conf_mock.assert_called_once_with(s3={'addressing_style': 'path'})
 
+    @mock.patch('s3_sync.sync_s3.boto3.session.Session')
+    def test_session_token_plumbing(self, session_mock):
+        SyncS3({'aws_bucket': 'a_bucket',
+                'aws_identity': 'an_identity',
+                'aws_secret': 'a_credential',
+                'aws_session_token': 'a_token',
+                'account': 'an_account',
+                'container': 'a_container'})
+        session_mock.assert_called_once_with(
+            aws_access_key_id='an_identity',
+            aws_secret_access_key='a_credential',
+            aws_session_token='a_token')
+
     def test_slo_upload(self):
         slo_key = 'slo-object'
         storage_policy = 42

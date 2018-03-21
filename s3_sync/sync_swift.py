@@ -70,7 +70,7 @@ class SyncSwift(BaseSync):
         if conn.http_conn:
             conn.http_conn[1].request_session.close()
 
-    def upload_object(self, name, policy, internal_client):
+    def upload_object(self, swift_key, policy, internal_client):
         if self._per_account and not self.verified_container:
             with self.client_pool.get_client() as swift_client:
                 try:
@@ -84,7 +84,7 @@ class SyncSwift(BaseSync):
         try:
             with self.client_pool.get_client() as swift_client:
                 remote_meta = swift_client.head_object(self.remote_container,
-                                                       name)
+                                                       swift_key)
         except swiftclient.exceptions.ClientException as e:
             if e.http_status == 404:
                 remote_meta = None
@@ -98,7 +98,8 @@ class SyncSwift(BaseSync):
 
         try:
             metadata = internal_client.get_object_metadata(
-                self.account, self.container, name, headers=swift_req_hdrs)
+                self.account, self.container, swift_key,
+                headers=swift_req_hdrs)
         except UnexpectedResponse as e:
             if '404 Not Found' in e.message:
                 return
@@ -113,42 +114,42 @@ class SyncSwift(BaseSync):
                     # client pipeline does not have SLO and also returns the
                     # md5 of the JSON, making our comparison valid.
                     headers, _ = swift_client.get_object(
-                        self.remote_container, name,
+                        self.remote_container, swift_key,
                         query_string='multipart-manifest=get',
                         headers={'Range': 'bytes=0-0'})
                 if headers['etag'] == metadata['etag']:
                     if not self._is_meta_synced(metadata, headers):
-                        self.update_metadata(name, metadata)
+                        self.update_metadata(swift_key, metadata)
                     return
             except swiftclient.exceptions.ClientException as e:
                 if e.http_status != 404:
                     raise
-            self._upload_slo(name, swift_req_hdrs, internal_client)
+            self._upload_slo(swift_key, swift_req_hdrs, internal_client)
             return
 
         if remote_meta and metadata['etag'] == remote_meta['etag']:
             if not self._is_meta_synced(metadata, remote_meta):
-                self.update_metadata(name, metadata)
+                self.update_metadata(swift_key, metadata)
             return
 
         with self.client_pool.get_client() as swift_client:
             wrapper_stream = FileWrapper(internal_client,
                                          self.account,
                                          self.container,
-                                         name,
+                                         swift_key,
                                          swift_req_hdrs)
             headers = self._get_user_headers(wrapper_stream.get_headers())
             self.logger.debug('Uploading %s with meta: %r' % (
-                name, headers))
+                swift_key, headers))
 
             swift_client.put_object(self.remote_container,
-                                    name,
+                                    swift_key,
                                     wrapper_stream,
                                     etag=wrapper_stream.get_headers()['etag'],
                                     headers=headers,
                                     content_length=len(wrapper_stream))
 
-    def delete_object(self, name, internal_client=None):
+    def delete_object(self, swift_key):
         """Delete an object from the remote cluster.
 
         This is slightly more complex than when we deal with S3/GCS, as the
@@ -157,7 +158,8 @@ class SyncSwift(BaseSync):
         """
         with self.client_pool.get_client() as swift_client:
             try:
-                headers = swift_client.head_object(self.remote_container, name)
+                headers = swift_client.head_object(self.remote_container,
+                                                   swift_key)
             except swiftclient.exceptions.ClientException as e:
                 if e.http_status == 404:
                     return
@@ -165,20 +167,21 @@ class SyncSwift(BaseSync):
 
             if not check_slo(headers):
                 try:
-                    swift_client.delete_object(self.remote_container, name)
+                    swift_client.delete_object(self.remote_container,
+                                               swift_key)
                 except swiftclient.exceptions.ClientException as e:
                     if e.http_status != 404:
                         raise
             else:
                 try:
                     swift_client.delete_object(
-                        self.remote_container, name,
+                        self.remote_container, swift_key,
                         query_string='multipart-manifest=delete')
                 except swiftclient.exceptions.ClientException as e:
                     if e.http_status != 404:
                         raise
 
-    def shunt_object(self, req, name):
+    def shunt_object(self, req, swift_key):
         """Fetch an object from the remote cluster to stream back to a client.
 
         :returns: (status, headers, body_iter) tuple
@@ -192,26 +195,27 @@ class SyncSwift(BaseSync):
 
         if req.method == 'GET':
             resp = self.get_object(
-                name, resp_chunk_size=65536, headers=headers)
+                swift_key, resp_chunk_size=65536, headers=headers)
         elif req.method == 'HEAD':
-            resp = self.head_object(name, headers=headers)
+            resp = self.head_object(swift_key, headers=headers)
         else:
             raise ValueError('Expected GET or HEAD, not %s' %
                              req.method)
         return resp.to_wsgi()
 
-    def head_object(self, key, bucket=None, **options):
+    def head_object(self, swift_key, bucket=None, **options):
         if bucket is None:
             bucket = self.remote_container
-        resp = self._call_swiftclient('head_object', bucket, key, **options)
+        resp = self._call_swiftclient('head_object', bucket, swift_key,
+                                      **options)
         resp.body = ['']
         return resp
 
-    def get_object(self, key, bucket=None, **options):
+    def get_object(self, swift_key, bucket=None, **options):
         if bucket is None:
             bucket = self.remote_container
         return self._call_swiftclient(
-            'get_object', bucket, key, **options)
+            'get_object', bucket, swift_key, **options)
 
     def head_bucket(self, bucket=None, **options):
         if bucket is None:
@@ -296,9 +300,9 @@ class SyncSwift(BaseSync):
                 bucket)
         return (200, results)
 
-    def update_metadata(self, name, metadata):
+    def update_metadata(self, swift_key, metadata):
         with self.client_pool.get_client() as swift_client:
-            swift_client.post_object(self.remote_container, name,
+            swift_client.post_object(self.remote_container, swift_key,
                                      self._get_user_headers(metadata))
 
     def _upload_slo(self, name, swift_headers, internal_client):
