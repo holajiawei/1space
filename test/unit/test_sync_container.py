@@ -425,5 +425,5 @@ class TestSyncContainer(unittest.TestCase):
         sync.handle(row, None)
 
         # Make sure that we do not make any additional calls
-        self.assertEqual([mock.call.delete_object(row['name'], None)],
+        self.assertEqual([mock.call.delete_object(row['name'])],
                          sync.provider.mock_calls)
