@@ -18,6 +18,7 @@ import eventlet
 import eventlet.pools
 eventlet.patcher.monkey_patch(all=True)
 
+from collections import namedtuple
 import datetime
 import errno
 import json
@@ -44,6 +45,10 @@ LAST_MODIFIED_FMT = '%a, %d %b %Y %H:%M:%S %Z'
 EPOCH = datetime.datetime.utcfromtimestamp(0)
 
 IGNORE_KEYS = set(('status', 'aws_secret', 'all_buckets'))
+
+MigrateObjectWork = namedtuple('MigrateObjectWork', 'aws_bucket container key')
+UploadObjectWork = namedtuple('UploadObjectWork', 'container key object '
+                              'headers')
 
 
 class MigrationError(Exception):
@@ -362,7 +367,7 @@ class Migrator(object):
             next_marker = keys[-1]['name']
         yield None
 
-    def _check_large_objects(self, container, key, client):
+    def _check_large_objects(self, aws_bucket, container, key, client):
         local_meta = client.get_object_metadata(
             self.config['account'], container, key)
         remote_resp = self.provider.head_object(key)
@@ -387,19 +392,23 @@ class Migrator(object):
             # that issue is fixed in Swift, we can compare ETags.
             status, headers, local_manifest = client.get_object(
                 self.config['account'], container, key, {})
-            remote_manifest = self.provider.get_manifest(key, bucket=container)
+            remote_manifest = self.provider.get_manifest(key,
+                                                         bucket=aws_bucket)
             if json.load(FileLikeIter(local_manifest)) != remote_manifest:
                 self.errors.put((
-                    container, key,
+                    aws_bucket, key,
                     'Matching date, but differing SLO manifests'))
             return
 
         self.errors.put((
-            container, key,
+            aws_bucket, key,
             'Mismatching ETag for regular objects with the same date'))
 
     def _find_missing_objects(
-            self, container=None, marker=None, prefix=None, list_all=False):
+            self, container=None, aws_bucket=None, marker=None, prefix=None,
+            list_all=False):
+        if aws_bucket is None:
+            aws_bucket = self.config['aws_bucket']
         if container is None:
             container = self.config['container']
         if marker is None:
@@ -410,7 +419,7 @@ class Migrator(object):
 
         try:
             source_iter = self._iter_source_container(
-                container, marker, prefix, list_all)
+                aws_bucket, marker, prefix, list_all)
         except StopIteration:
             source_iter = iter([])
 
@@ -436,7 +445,9 @@ class Migrator(object):
                 # the keys that were returned in the listing and restart on the
                 # following iteration.
                 if not local or local['name'] > remote['name']:
-                    self.object_queue.put((container, remote['name']))
+                    work = MigrateObjectWork(aws_bucket, container,
+                                             remote['name'])
+                    self.object_queue.put(work)
                     copied += 1
                     scanned += 1
                     remote = next(source_iter, None)
@@ -451,10 +462,12 @@ class Migrator(object):
                         # This should only happen if we are comparing large
                         # objects: there will be an ETag mismatch.
                         self._check_large_objects(
-                            container, remote['name'], ic)
+                            aws_bucket, container, remote['name'], ic)
                     else:
                         if cmp_ret < 0:
-                            self.object_queue.put((container, remote['name']))
+                            work = MigrateObjectWork(aws_bucket, container,
+                                                     remote['name'])
+                            self.object_queue.put(work)
                             copied += 1
                     remote = next(source_iter, None)
                     local = next(local_iter, None)
@@ -463,15 +476,15 @@ class Migrator(object):
                         marker = remote['name']
         return marker, scanned, copied
 
-    def _migrate_object(self, container, key):
-        args = {'bucket': container}
+    def _migrate_object(self, aws_bucket, container, key):
+        args = {'bucket': aws_bucket}
         if self.config.get('protocol', 's3') == 'swift':
             args['resp_chunk_size'] = 65536
         resp = self.provider.get_object(key, **args)
         if resp.status != 200:
             resp.body.close()
             raise MigrationError('Failed to GET "%s/%s": %s' % (
-                container, key, resp.body))
+                aws_bucket, key, resp.body))
         put_headers = convert_to_local_headers(
             resp.headers.items(), remove_timestamp=False)
         if 'x-object-manifest' in resp.headers and\
@@ -480,31 +493,32 @@ class Migrator(object):
                 'Migrating Dynamic Large Object "%s/%s" -- results may not be '
                 'consistent' % (container, key))
             resp.body.close()
-            self._migrate_dlo(container, key, put_headers)
+            self._migrate_dlo(aws_bucket, container, key, put_headers)
         elif 'x-static-large-object' in resp.headers:
             # We have to move the segments and then move the manifest file
             resp.body.close()
-            self._migrate_slo(container, key, put_headers)
+            self._migrate_slo(aws_bucket, container, key, put_headers)
         else:
             self._upload_object(
                 container, key, FileLikeIter(resp.body), put_headers)
 
-    def _migrate_dlo(self, container, key, headers):
+    def _migrate_dlo(self, aws_bucket, container, key, headers):
         dlo_container, prefix = headers['x-object-manifest'].split('/', 1)
         self._manifests.add((container, key))
         self._find_missing_objects(
-            dlo_container, '', prefix=prefix, list_all=True)
+            dlo_container, dlo_container, '', prefix=prefix, list_all=True)
         if dlo_container != container or not key.startswith(prefix):
             # The DLO prefix can include the manifest object, which doesn't
             # have to be 0-sized. We have to be careful not to end up recursing
             # infinitely in that case.
-            self.object_queue.put((container, key))
+            work = MigrateObjectWork(aws_bucket, container, key)
+            self.object_queue.put(work)
 
-    def _migrate_slo(self, slo_container, key, headers):
-        manifest = self.provider.get_manifest(key, slo_container)
+    def _migrate_slo(self, aws_bucket, slo_container, key, headers):
+        manifest = self.provider.get_manifest(key, aws_bucket)
         if not manifest:
             raise MigrationError('Failed to fetch the manifest for "%s/%s"' % (
-                                 slo_container, key))
+                                 aws_bucket, key))
         for entry in manifest:
             container, segment_key = entry['name'][1:].split('/', 1)
             meta = None
@@ -534,11 +548,13 @@ class Migrator(object):
                     self.logger.warning('Object metadata changed for "%s/%s"' %
                                         (container, segment_key))
                     continue
-            self.object_queue.put((container, segment_key))
+            work = MigrateObjectWork(container, container, segment_key)
+            self.object_queue.put(work)
         manifest_blob = json.dumps(manifest)
         headers['Content-Length'] = len(manifest_blob)
-        self.object_queue.put((
-            slo_container, key, FileLikeIter(manifest_blob), headers))
+        work = UploadObjectWork(slo_container, key,
+                                FileLikeIter(manifest_blob), headers)
+        self.object_queue.put(work)
 
     def _upload_object(self, container, key, content, headers):
         if 'x-timestamp' in headers:
@@ -571,9 +587,11 @@ class Migrator(object):
             try:
                 if not work:
                     break
-                if len(work) == 2:
-                    container, key = work
-                    self._migrate_object(container, key)
+                if isinstance(work, MigrateObjectWork):
+                    aws_bucket = work.aws_bucket
+                    container = work.container
+                    key = work.key
+                    self._migrate_object(aws_bucket, container, key)
                 else:
                     self._upload_object(*work)
             except Exception:
