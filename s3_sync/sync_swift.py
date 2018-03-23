@@ -203,6 +203,17 @@ class SyncSwift(BaseSync):
                              req.method)
         return resp.to_wsgi()
 
+    def shunt_post(self, req, swift_key):
+        """Propagate metadata to the remote store
+
+         :returns: (status, headers, body_iter) tuple
+        """
+        headers = dict([(k, req.headers[k]) for k in req.headers.keys()
+                        if req.headers[k]])
+        resp = self._call_swiftclient(
+            'post_object', self.remote_container, swift_key, headers=headers)
+        return resp.to_wsgi()
+
     def shunt_delete(self, req, swift_key):
         """Propagate metadata to the remote store
 

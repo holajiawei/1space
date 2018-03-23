@@ -158,6 +158,9 @@ class BaseSync(object):
     def shunt_object(self, request, swift_key):
         raise NotImplementedError()
 
+    def shunt_post(self, request, swift_key):
+        raise NotImplementedError()
+
     def shunt_delete(self, request, swift_key):
         raise NotImplementedError()
 

@@ -433,3 +433,29 @@ class TestCloudSync(TestCloudSyncBase):
         clear_swift_container(self.swift_dst, 'segments')
         clear_swift_container(self.swift_src, mapping['container'])
         clear_swift_container(self.swift_src, 'segments')
+
+    def test_swift_shunt_post(self):
+        content = 'shunt post'
+        key = 'test_swift_shunt_post'
+        mapping = self.swift_restore_mapping()
+        self.remote_swift('put_object', mapping['aws_bucket'], key, content)
+
+        def ensure_remote():
+            hdrs, listing = self.local_swift(
+                'get_container', mapping['container'])
+            self.assertEqual(0, int(hdrs['x-container-object-count']))
+            for entry in listing:
+                self.assertIn('content_location', entry)
+                self.assertEqual([swift_content_location(mapping)],
+                                 entry['content_location'])
+
+        ensure_remote()
+        self.local_swift(
+            'post_object', mapping['container'], key,
+            {'x-object-meta-test-header': 'foo'})
+        hdrs = self.local_swift('head_object', mapping['container'], key)
+        self.assertEqual('foo', hdrs.get('x-object-meta-test-header'))
+        ensure_remote()
+
+        clear_swift_container(self.swift_dst, mapping['aws_bucket'])
+        clear_swift_container(self.swift_src, mapping['container'])

@@ -301,6 +301,25 @@ class S3SyncShunt(object):
         start_response(status, headers)
         return app_iter
 
+    def handle_post(
+            self, req, start_response, sync_profile, obj, per_account):
+        status, headers, app_iter = req.call_application(self.app)
+
+        if not status.startswith('404'):
+            start_response(status, headers)
+            return app_iter
+
+        if sync_profile.get('protocol') != 'swift':
+            # TODO: Add S3 support
+            start_response(status, headers)
+            return app_iter
+
+        provider = create_provider(sync_profile, max_conns=1,
+                                   per_account=per_account)
+        status, headers, app_iter = provider.shunt_post(req, obj)
+        start_response(status, headers)
+        return app_iter
+
     @staticmethod
     def _format_listing_response(list_results, list_format, container):
         if list_format == 'application/json':
