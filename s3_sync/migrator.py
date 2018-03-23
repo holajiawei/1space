@@ -34,6 +34,8 @@ from .provider_factory import create_provider
 from .utils import (convert_to_local_headers, convert_to_swift_headers,
                     SWIFT_TIME_FMT)
 from swift.common.internal_client import UnexpectedResponse
+from swift.common.middleware.versioned_writes import (
+    SYSMETA_VERSIONS_LOC, SYSMETA_VERSIONS_MODE)
 from swift.common.swob import Request
 from swift.common.utils import FileLikeIter, Timestamp
 
@@ -317,9 +319,22 @@ class Migrator(object):
                 raise MigrationError('Failed to HEAD bucket/container "%s"' %
                                      container)
             headers = {}
-            acl_hdrs = ['x-container-read', 'x-container-write']
+            propagated_hdrs = ['x-container-read', 'x-container-write']
             for hdr in resp.headers:
-                if hdr.startswith('x-container-meta-') or hdr in acl_hdrs:
+                if hdr == 'x-history-location':
+                    headers[SYSMETA_VERSIONS_LOC] = \
+                        resp.headers[hdr].encode('utf8')
+                    headers[SYSMETA_VERSIONS_MODE] = 'history'
+                    continue
+
+                if hdr == 'x-versions-location':
+                    headers[SYSMETA_VERSIONS_LOC] = \
+                        resp.headers[hdr].encode('utf8')
+                    headers[SYSMETA_VERSIONS_MODE] = 'stack'
+                    continue
+
+                if hdr.startswith('x-container-meta-') or\
+                        hdr in propagated_hdrs:
                     # Dunno why, really, but the internal client app will 503
                     # with utf8-encoded header values IF the header key is a
                     # unicode instance (even if it's just low ascii chars in
@@ -423,6 +438,31 @@ class Migrator(object):
         if prefix is None:
             prefix = self.config.get('prefix', '')
 
+        # If a container has versioning enabled (either x-versions-location or
+        # x-history-location is configured), we should migrate the versions
+        # before migrating the container itself.
+        if self.config.get('protocol') == 'swift':
+            resp = self.provider.head_bucket(container)
+            if resp.status == 404:
+                raise ContainerNotFound(container)
+            if resp.status != 200:
+                raise MigrationError('Failed to HEAD bucket/container "%s"' %
+                                     container)
+            if 'x-versions-location' in resp.headers or\
+                    'x-history-location' in resp.headers:
+                versioned_container = resp.headers.get('x-versions-location')
+                if not versioned_container:
+                    versioned_container = resp.headers.get(
+                        'x-history-location')
+                if versioned_container:
+                    # This diverts from our usual strategy of splitting up the
+                    # work, but we cannot migrate the main container until the
+                    # versions container is migrated.
+                    self._find_missing_objects(
+                        container=versioned_container,
+                        aws_bucket=versioned_container, marker='',
+                        list_all=True)
+
         try:
             source_iter = self._iter_source_container(
                 aws_bucket, marker, prefix, list_all)
@@ -512,7 +552,8 @@ class Migrator(object):
         dlo_container, prefix = headers['x-object-manifest'].split('/', 1)
         self._manifests.add((container, key))
         self._find_missing_objects(
-            dlo_container, dlo_container, '', prefix=prefix, list_all=True)
+            container=dlo_container, aws_bucket=dlo_container, marker='',
+            prefix=prefix, list_all=True)
         if dlo_container != container or not key.startswith(prefix):
             # The DLO prefix can include the manifest object, which doesn't
             # have to be 0-sized. We have to be careful not to end up recursing

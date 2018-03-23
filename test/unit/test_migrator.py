@@ -805,6 +805,8 @@ class TestMigrator(unittest.TestCase):
                        'last_modified': objects[name]['list-time'],
                        'hash': objects[name]['hash']}
                       for name in objects.keys()])
+            provider.head_bucket.return_value = mock.Mock(
+                status=200, headers={})
             provider.get_object.side_effect = get_object
             self.swift_client.iter_objects.return_value = iter(local_objects)
 
@@ -973,8 +975,8 @@ class TestMigrator(unittest.TestCase):
             if test_config.get('protocol') == 'swift':
                 provider.list_objects.assert_called_once_with(
                     '', self.migrator.work_chunk, '', bucket='bucket')
-                provider.head_bucket.assert_called_once_with(
-                    self.migrator.config['container'])
+                provider.head_bucket.assert_has_calls(
+                    [mock.call(self.migrator.config['container'])] * 2)
             else:
                 provider.list_objects.assert_called_once_with(
                     '', self.migrator.work_chunk, '', bucket='bucket')
@@ -1412,6 +1414,7 @@ class TestMigrator(unittest.TestCase):
             dict([('name', k)] + objects[k]['list_entry'].items())
             for k in sorted(objects.keys())])
         provider.head_object.side_effect = _head_object
+        provider.head_bucket.return_value = mock.Mock(status=200, headers={})
         provider.get_manifest.return_value = {}
 
         self.migrator.next_pass()

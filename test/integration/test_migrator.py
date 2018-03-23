@@ -16,6 +16,7 @@ limitations under the License.
 
 
 import botocore
+import hashlib
 import json
 import StringIO
 import swiftclient
@@ -322,3 +323,133 @@ class TestMigrator(TestCloudSyncBase):
 
         clear_swift_container(self.swift_dst, migration['aws_bucket'])
         clear_swift_container(self.swift_src, migration['container'])
+
+    def test_swift_versions_location(self):
+        migration = self._find_migration(
+            lambda cont: cont['container'] == 'no-auto-versioning')
+
+        versions_container = migration['aws_bucket'] + '_versions'
+        self.remote_swift(
+            'put_container', versions_container)
+        self.remote_swift('put_container', migration['aws_bucket'],
+                          headers={'X-Versions-Location': versions_container})
+        self.remote_swift(
+            'put_object', migration['aws_bucket'], 'object',
+            'A' * 2**20)
+        self.remote_swift(
+            'put_object', migration['aws_bucket'], 'object',
+            'B' * 2**20)
+
+        hdrs, listing = self.remote_swift(
+            'get_container', migration['aws_bucket'])
+        self.assertEqual(versions_container, hdrs['x-versions-location'])
+        self.assertEqual(1, len(listing))
+        self.assertEqual('object', listing[0]['name'])
+        self.assertEqual(hashlib.md5('B' * 2**20).hexdigest(),
+                         listing[0]['hash'])
+
+        _, listing = self.remote_swift(
+            'get_container', versions_container)
+        self.assertEqual(1, len(listing))
+        self.assertEqual(hashlib.md5('A' * 2**20).hexdigest(),
+                         listing[0]['hash'])
+
+        def _check_objects_copied():
+            try:
+                hdrs, listing = self.local_swift(
+                    'get_container', migration['container'])
+                if hdrs.get('x-versions-location') != versions_container:
+                    return False
+                if len(listing) == 0:
+                    return False
+                if 'swift' not in listing[0].get('content_location', []):
+                    return False
+                return True
+            except swiftclient.exceptions.ClientException as e:
+                if e.http_status == 404:
+                    return False
+                raise
+
+        wait_for_condition(5, _check_objects_copied)
+
+        hdrs, listing = self.local_swift(
+            'get_container', migration['container'])
+        self.assertEqual(versions_container, hdrs['x-versions-location'])
+        self.assertEqual(1, len(listing))
+        self.assertEqual('object', listing[0]['name'])
+        self.assertEqual(hashlib.md5('B' * 2**20).hexdigest(),
+                         listing[0]['hash'])
+        hdrs, listing = self.local_swift(
+            'get_container', versions_container)
+        self.assertEqual(hashlib.md5('A' * 2**20).hexdigest(),
+                         listing[0]['hash'])
+
+        clear_swift_container(self.swift_dst, versions_container)
+        clear_swift_container(self.swift_dst, migration['container'])
+        clear_swift_container(self.swift_src, versions_container)
+        clear_swift_container(self.swift_src, migration['container'])
+
+    def test_swift_history_location(self):
+        migration = self._find_migration(
+            lambda cont: cont['container'] == 'no-auto-history')
+
+        history_container = migration['aws_bucket'] + '_history'
+        self.remote_swift(
+            'put_container', history_container)
+        self.remote_swift('put_container', migration['aws_bucket'],
+                          headers={'X-History-Location': history_container})
+        self.remote_swift(
+            'put_object', migration['aws_bucket'], 'object',
+            'A' * 2**20)
+        self.remote_swift(
+            'put_object', migration['aws_bucket'], 'object',
+            'B' * 2**20)
+
+        hdrs, listing = self.remote_swift(
+            'get_container', migration['aws_bucket'])
+        self.assertEqual(history_container, hdrs['x-history-location'])
+        self.assertEqual(1, len(listing))
+        self.assertEqual('object', listing[0]['name'])
+        self.assertEqual(hashlib.md5('B' * 2**20).hexdigest(),
+                         listing[0]['hash'])
+
+        _, listing = self.remote_swift(
+            'get_container', history_container)
+        self.assertEqual(1, len(listing))
+        self.assertEqual(hashlib.md5('A' * 2**20).hexdigest(),
+                         listing[0]['hash'])
+
+        def _check_objects_copied():
+            try:
+                hdrs, listing = self.local_swift(
+                    'get_container', migration['container'])
+                if hdrs.get('x-history-location') != history_container:
+                    return False
+                if len(listing) == 0:
+                    return False
+                if 'swift' not in listing[0].get('content_location', []):
+                    return False
+                return True
+            except swiftclient.exceptions.ClientException as e:
+                if e.http_status == 404:
+                    return False
+                raise
+
+        wait_for_condition(5, _check_objects_copied)
+
+        hdrs, listing = self.local_swift(
+            'get_container', migration['container'])
+        self.assertEqual(history_container, hdrs['x-history-location'])
+        self.assertEqual(1, len(listing))
+        self.assertEqual('object', listing[0]['name'])
+        self.assertEqual(hashlib.md5('B' * 2**20).hexdigest(),
+                         listing[0]['hash'])
+        hdrs, listing = self.local_swift(
+            'get_container', history_container)
+        self.assertEqual(hashlib.md5('A' * 2**20).hexdigest(),
+                         listing[0]['hash'])
+
+        clear_swift_container(self.swift_dst, migration['container'])
+        clear_swift_container(self.swift_dst, history_container)
+        clear_swift_container(self.swift_src, migration['container'])
+        clear_swift_container(self.swift_src, history_container)
