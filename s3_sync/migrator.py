@@ -319,7 +319,12 @@ class Migrator(object):
             acl_hdrs = ['x-container-read', 'x-container-write']
             for hdr in resp.headers:
                 if hdr.startswith('x-container-meta-') or hdr in acl_hdrs:
-                    headers[hdr] = resp.headers[hdr]
+                    # Dunno why, really, but the internal client app will 503
+                    # with utf8-encoded header values IF the header key is a
+                    # unicode instance (even if it's just low ascii chars in
+                    # that unicode instance).  Go figure...
+                    headers[hdr.encode('utf8')] = \
+                        resp.headers[hdr].encode('utf8')
         else:
             headers = {}
 

@@ -2,7 +2,7 @@ FROM bouncestorage/swift-aio:latest
 
 RUN apt-get update && \
     apt-get install --no-install-recommends -y python-support openjdk-7-jdk \
-        wget curl && \
+        wget curl patch && \
     apt-get clean
 
 RUN pip install -e git://github.com/swiftstack/botocore.git@1.4.32.6#egg=botocore && \
@@ -18,4 +18,15 @@ RUN mkdir /swift-s3-sync && mkdir /var/lib/swift-s3-sync
 EXPOSE 10080
 RUN locale-gen en_US.UTF-8
 ENV LANG='en_US.UTF-8' LANGUAGE='en_US:en' LC_ALL='en_US.UTF-8'
+
+# These two patches make tempauth and swiftclient both work properly with a
+# Swift Account name containing a Unicode character.
+COPY tempauth.patch /tmp/
+RUN bash -c "cd /usr/local/src/swift \
+    && patch -p1 < /tmp/tempauth.patch \
+    && rm -f /tmp/tempauth.patch"
+COPY swiftclient.patch /tmp/
+RUN bash -c "cd /usr/local/src \
+    && patch -p0 < /tmp/swiftclient.patch \
+    && rm -f /tmp/swiftclient.patch"
 CMD ["/bin/bash", "/swift-s3-sync/test/container/launch.sh"]

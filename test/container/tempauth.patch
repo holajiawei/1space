@@ -1,0 +1,13 @@
+diff --git a/swift/common/middleware/tempauth.py b/swift/common/middleware/tempauth.py
+index 3c64090e..05209447 100644
+--- a/swift/common/middleware/tempauth.py
++++ b/swift/common/middleware/tempauth.py
+@@ -432,6 +432,8 @@ class TempAuth(object):
+             expires, groups = cached_auth_data
+             if expires < time():
+                 groups = None
++            else:
++                groups = groups.encode('utf8')
+ 
+         s3_auth_details = env.get('swift3.auth_details')
+         if s3_auth_details:

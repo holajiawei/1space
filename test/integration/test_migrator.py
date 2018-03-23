@@ -20,46 +20,10 @@ import StringIO
 import swiftclient
 import time
 import urllib
-from . import (TestCloudSyncBase, clear_swift_container, clear_s3_bucket,
-               wait_for_condition)
+from . import TestCloudSyncBase, clear_swift_container, wait_for_condition
 
 
 class TestMigrator(TestCloudSyncBase):
-    @classmethod
-    def _find_migration(klass, matcher):
-        for migration in klass.test_conf['migrations']:
-            if matcher(migration):
-                return migration
-        raise RuntimeError('No matching migration')
-
-    @classmethod
-    def s3_migration(klass):
-        return klass._find_migration(lambda cont: cont['protocol'] == 's3')
-
-    @classmethod
-    def swift_migration(klass):
-        return klass._find_migration(lambda cont: cont['protocol'] == 'swift')
-
-    def __init__(self, *args, **kwargs):
-        super(TestMigrator, self).__init__(*args, **kwargs)
-        self.clear_containers_local = []
-        self.clear_containers_remote = []
-        self.clear_s3_buckets = []
-
-    def tearDown(self):
-        for container in self.clear_containers_local:
-            clear_swift_container(self.swift_dst, container)
-            print "Cleaned local %s" % container
-        self.clear_containers_local = []
-        for container in self.clear_containers_remote:
-            clear_swift_container(self.swift_src, container)
-            print "Cleaned remote %s" % container
-        self.clear_containers_remote = []
-        for bucket in self.clear_s3_buckets:
-            clear_s3_bucket(self.s3_client, bucket)
-            print "Cleaned s3 %s" % container
-        self.clear_s3_buckets = []
-
     def test_s3_migration(self):
         migration = self.s3_migration()
 
@@ -78,9 +42,6 @@ class TestMigrator(TestCloudSyncBase):
                 'get_container', migration['container'])
             swift_names = [obj['name'] for obj in listing]
             return set([obj[0] for obj in test_objects]) == set(swift_names)
-
-        self.clear_containers_local.append(migration['container'])
-        self.clear_s3_buckets.append(migration['aws_bucket'])
 
         for name, body, headers, req_headers in test_objects:
             kwargs = dict([('Content' + key.split('-')[1].capitalize(), value)
@@ -132,9 +93,6 @@ class TestMigrator(TestCloudSyncBase):
             swift_names = [obj['name'] for obj in listing]
             return set([obj[0] for obj in test_objects]) == set(swift_names)
 
-        self.clear_containers_remote.append(migration['aws_bucket'])
-        self.clear_containers_local.append(migration['container'])
-
         for name, body, headers in test_objects:
             self.remote_swift('put_object', migration['aws_bucket'], name,
                               StringIO.StringIO(body), headers=headers)
@@ -154,11 +112,6 @@ class TestMigrator(TestCloudSyncBase):
 
         segments_container = migration['aws_bucket'] + '_segments'
         content = ''.join([chr(97 + i) * 2**20 for i in range(10)])
-
-        self.clear_containers_remote.append(migration['aws_bucket'])
-        self.clear_containers_remote.append(segments_container)
-        self.clear_containers_local.append(migration['container'])
-        self.clear_containers_local.append(segments_container)
 
         self.remote_swift(
             'put_container', segments_container)
@@ -261,9 +214,6 @@ class TestMigrator(TestCloudSyncBase):
             swift_names = [obj['name'] for obj in listing]
             return set([obj[0] for obj in test_objects]) == set(swift_names)
 
-        self.clear_containers_remote.append(migration['aws_bucket'])
-        self.clear_containers_local.append(migration['container'])
-
         for name, body, headers in test_objects:
             self.remote_swift('put_object', migration['aws_bucket'], name,
                               StringIO.StringIO(body), headers=headers)
@@ -283,9 +233,10 @@ class TestMigrator(TestCloudSyncBase):
         migration = self._find_migration(
             lambda cont: cont['container'] == 'no-auto-acl')
 
+        acl = 'AUTH_' + migration['aws_identity'].split(':')[0]
         self.remote_swift('put_container', migration['aws_bucket'],
-                          headers={'x-container-read': 'AUTH_test2',
-                                   'x-container-write': 'AUTH_test2',
+                          headers={'x-container-read': acl,
+                                   'x-container-write': acl,
                                    'x-container-meta-test': 'test metadata'})
 
         def _check_container_created():
@@ -296,9 +247,6 @@ class TestMigrator(TestCloudSyncBase):
                 if e.http_status == 404:
                     return False
                 raise
-
-        self.clear_containers_remote.append(migration['aws_bucket'])
-        self.clear_containers_local.append(migration['container'])
 
         hdrs, listing = wait_for_condition(5, _check_container_created)
         self.assertIn('x-container-meta-test', hdrs)

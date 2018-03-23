@@ -23,47 +23,6 @@ from . import TestCloudSyncBase, clear_swift_container, wait_for_condition, \
 
 
 class TestCloudSync(TestCloudSyncBase):
-    @classmethod
-    def _find_mapping(klass, matcher):
-        for mapping in klass.test_conf['containers']:
-            if matcher(mapping):
-                return mapping
-        raise RuntimeError('No matching mapping')
-
-    @classmethod
-    def s3_sync_mapping(klass):
-        return klass._find_mapping(
-            lambda cont: cont['protocol'] == 's3' and cont['retain_local'])
-
-    @classmethod
-    def s3_archive_mapping(klass):
-        return klass._find_mapping(
-            lambda cont: cont['protocol'] == 's3' and not cont['retain_local'])
-
-    @classmethod
-    def s3_restore_mapping(klass):
-        return klass._find_mapping(
-            lambda cont:
-                cont['protocol'] == 's3' and cont.get('restore_object', False))
-
-    @classmethod
-    def swift_restore_mapping(klass):
-        return klass._find_mapping(
-            lambda cont:
-                cont['protocol'] == 'swift' and
-                cont.get('restore_object', False))
-
-    @classmethod
-    def swift_sync_mapping(klass):
-        return klass._find_mapping(
-            lambda cont: cont['protocol'] == 'swift' and cont['retain_local'])
-
-    @classmethod
-    def swift_archive_mapping(klass):
-        return klass._find_mapping(
-            lambda cont: cont['protocol'] == 'swift' and
-            not cont['retain_local'])
-
     def _test_archive(
             self, key, content, mapping, get_etag, expected_location):
         etag = self.local_swift(

@@ -79,7 +79,7 @@ def swift_content_location(mapping):
 
 def get_container_ports(image_name):
     if 'DOCKER' in os.environ:
-        return dict(swift=8080, s3=10080)
+        return dict(swift=8080, s3=10080, cloud_connector=8081)
     if 'TEST_CONTAINER' in os.environ:
         container = os.environ['TEST_CONTAINER']
     else:
@@ -104,6 +104,8 @@ def get_container_ports(image_name):
                 ports['swift'] = host_port
             elif docker_port == 10080:
                 ports['s3'] = host_port
+            elif docker_port == 8001:
+                ports['cloud_connector'] = host_port
     except subprocess.CalledProcessError as e:
         print e.output
         print e.retcode
@@ -124,8 +126,8 @@ class TestCloudSyncBase(unittest.TestCase):
             'key': 'testing',
         },
         'dst': {
-            'user': 'test2:tester2',
-            'key': 'testing2'
+            'user': u"\u062aacct2:\u062auser2".encode('utf8'),
+            'key': u"\u062apass2".encode('utf8'),
         },
         'admin': {
             'user': 'admin:admin',
@@ -145,6 +147,10 @@ class TestCloudSyncBase(unittest.TestCase):
             self.SWIFT_CREDS['authurl'],
             self.SWIFT_CREDS['dst']['user'],
             self.SWIFT_CREDS['dst']['key'])
+        self.cloud_connector_client = swiftclient.Connection(
+            'http://localhost:%d/auth/v1.0' % self.PORTS['cloud_connector'],
+            self.SWIFT_CREDS['src']['user'],
+            self.SWIFT_CREDS['src']['key'])
         s3 = [container for container in self.test_conf['containers']
               if container.get('protocol', 's3') == 's3'][0]
         self.S3_CREDS.update({
@@ -210,11 +216,17 @@ class TestCloudSyncBase(unittest.TestCase):
     @staticmethod
     def _remove_swift_container(client, container):
         clear_swift_container(client, container)
+        clear_swift_container(client, container + '_segments')
         try:
             client.delete_container(container)
         except swiftclient.exceptions.ClientException as e:
             if e.http_status == 404:
-                return
+                pass
+        try:
+            client.delete_container(container + '_segments')
+        except swiftclient.exceptions.ClientException as e:
+            if e.http_status == 404:
+                pass
 
     def local_swift(self, method, *args, **kwargs):
         return getattr(self.swift_src, method)(*args, **kwargs)
@@ -222,5 +234,64 @@ class TestCloudSyncBase(unittest.TestCase):
     def remote_swift(self, method, *args, **kwargs):
         return getattr(self.swift_dst, method)(*args, **kwargs)
 
+    def cloud_connector(self, method, *args, **kwargs):
+        return getattr(self.cloud_connector_client, method)(*args, **kwargs)
+
     def s3(self, method, *args, **kwargs):
         return getattr(self.s3_client, method)(*args, **kwargs)
+
+    @classmethod
+    def _find_mapping(klass, matcher):
+        for mapping in klass.test_conf['containers']:
+            if matcher(mapping):
+                return mapping
+        raise RuntimeError('No matching mapping')
+
+    @classmethod
+    def s3_sync_mapping(klass):
+        return klass._find_mapping(
+            lambda cont: cont['protocol'] == 's3' and cont['retain_local'])
+
+    @classmethod
+    def s3_archive_mapping(klass):
+        return klass._find_mapping(
+            lambda cont: cont['protocol'] == 's3' and not cont['retain_local'])
+
+    @classmethod
+    def s3_restore_mapping(klass):
+        return klass._find_mapping(
+            lambda cont:
+                cont['protocol'] == 's3' and cont.get('restore_object', False))
+
+    @classmethod
+    def swift_restore_mapping(klass):
+        return klass._find_mapping(
+            lambda cont:
+                cont['protocol'] == 'swift' and
+                cont.get('restore_object', False))
+
+    @classmethod
+    def swift_sync_mapping(klass):
+        return klass._find_mapping(
+            lambda cont: cont['protocol'] == 'swift' and cont['retain_local'])
+
+    @classmethod
+    def swift_archive_mapping(klass):
+        return klass._find_mapping(
+            lambda cont: cont['protocol'] == 'swift' and
+            not cont['retain_local'])
+
+    @classmethod
+    def _find_migration(klass, matcher):
+        for migration in klass.test_conf['migrations']:
+            if matcher(migration):
+                return migration
+        raise RuntimeError('No matching migration')
+
+    @classmethod
+    def s3_migration(klass):
+        return klass._find_migration(lambda cont: cont['protocol'] == 's3')
+
+    @classmethod
+    def swift_migration(klass):
+        return klass._find_migration(lambda cont: cont['protocol'] == 'swift')

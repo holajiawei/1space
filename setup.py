@@ -18,9 +18,15 @@ setup(name='swift-s3-sync',
           'console_scripts': [
               'swift-s3-sync = s3_sync.__main__:main',
               'swift-s3-verify = s3_sync.verify:main',
-              'swift-s3-migrator = s3_sync.migrator:main'
+              'swift-s3-migrator = s3_sync.migrator:main',
+              'cloud-connector = s3_sync.cloud_connector.app:main',
           ],
           'paste.filter_factory': [
               'cloud-shunt = s3_sync.shunt:filter_factory',
+              'cloud-connector-auth = '
+              's3_sync.cloud_connector.auth:filter_factory',
+          ],
+          'paste.app_factory': [
+              'cloud-connector = s3_sync.cloud_connector.app:app_factory',
           ],
       })
