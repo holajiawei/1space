@@ -89,6 +89,7 @@ class S3SyncShunt(object):
             # Migrations should have some sane defaults if they aren't present
             profile.setdefault('restore_object', True)
             profile.setdefault('container', profile['aws_bucket'])
+            profile.setdefault('migration', True)
             if profile.get('protocol') != 'swift':
                 profile.setdefault('native', True)
             key = (profile['account'].encode('utf-8'),
@@ -120,6 +121,11 @@ class S3SyncShunt(object):
         else:
             per_account = False
 
+        if obj and req.method == 'DELETE' and\
+                sync_profile.get('migration'):
+            return self.handle_delete(
+                req, start_response, sync_profile, obj, per_account)
+
         if not obj and req.method == 'GET':
             return self.handle_listing(req, start_response, sync_profile, cont,
                                        per_account)
@@ -127,6 +133,10 @@ class S3SyncShunt(object):
             # TODO: think about what to do for POST, COPY
             return self.handle_object(req, start_response, sync_profile, obj,
                                       per_account)
+        elif obj and req.method == 'POST':
+            return self.handle_post(req, start_response, sync_profile, obj,
+                                    per_account)
+
         return self.app(env, start_response)
 
     def iter_remote(self, sync_profile, per_account, marker, limit, prefix,
@@ -267,6 +277,26 @@ class S3SyncShunt(object):
 
         headers = filter_hop_by_hop_headers(headers)
         headers.extend(trans_id_headers)
+
+        start_response(status, headers)
+        return app_iter
+
+    def handle_delete(
+            self, req, start_response, sync_profile, obj, per_account):
+        status, headers, app_iter = req.call_application(self.app)
+
+        if sync_profile.get('protocol') != 'swift':
+            start_response(status, headers)
+            return app_iter
+
+        if sync_profile.get('migration'):
+            provider = create_provider(sync_profile, max_conns=1,
+                                       per_account=per_account)
+            remote_resp = provider.shunt_delete(req, obj)
+
+        if status.startswith('404'):
+            start_response(remote_resp[0], remote_resp[1])
+            return remote_resp[2]
 
         start_response(status, headers)
         return app_iter
