@@ -40,6 +40,26 @@ class TestMigrator(TestCloudSyncBase):
     def swift_migration(klass):
         return klass._find_migration(lambda cont: cont['protocol'] == 'swift')
 
+    def __init__(self, *args, **kwargs):
+        super(TestMigrator, self).__init__(*args, **kwargs)
+        self.clear_containers_local = []
+        self.clear_containers_remote = []
+        self.clear_s3_buckets = []
+
+    def tearDown(self):
+        for container in self.clear_containers_local:
+            clear_swift_container(self.swift_dst, container)
+            print "Cleaned local %s" % container
+        self.clear_containers_local = []
+        for container in self.clear_containers_remote:
+            clear_swift_container(self.swift_src, container)
+            print "Cleaned remote %s" % container
+        self.clear_containers_remote = []
+        for bucket in self.clear_s3_buckets:
+            clear_s3_bucket(self.s3_client, bucket)
+            print "Cleaned s3 %s" % container
+        self.clear_s3_buckets = []
+
     def test_s3_migration(self):
         migration = self.s3_migration()
 
@@ -59,6 +79,9 @@ class TestMigrator(TestCloudSyncBase):
             swift_names = [obj['name'] for obj in listing]
             return set([obj[0] for obj in test_objects]) == set(swift_names)
 
+        self.clear_containers_local.append(migration['container'])
+        self.clear_s3_buckets.append(migration['aws_bucket'])
+
         for name, body, headers, req_headers in test_objects:
             kwargs = dict([('Content' + key.split('-')[1].capitalize(), value)
                            for key, value in req_headers.items()])
@@ -71,7 +94,7 @@ class TestMigrator(TestCloudSyncBase):
         for name, expected_body, user_meta, req_headers in test_objects:
             hdrs, body = self.local_swift(
                 'get_object', migration['container'], name)
-            self.assertEqual(body, body)
+            self.assertEqual(expected_body, body)
             for k, v in user_meta.items():
                 self.assertIn('x-object-meta-' + k, hdrs)
                 self.assertEqual(v, hdrs['x-object-meta-' + k])
@@ -87,9 +110,6 @@ class TestMigrator(TestCloudSyncBase):
             for k, v in req_headers.items():
                 self.assertIn(k, resp['ResponseMetadata']['HTTPHeaders'])
                 self.assertEqual(v, resp['ResponseMetadata']['HTTPHeaders'][k])
-
-        clear_s3_bucket(self.s3_client, migration['aws_bucket'])
-        clear_swift_container(self.swift_src, migration['container'])
 
     def test_swift_migration(self):
         migration = self.swift_migration()
@@ -112,6 +132,9 @@ class TestMigrator(TestCloudSyncBase):
             swift_names = [obj['name'] for obj in listing]
             return set([obj[0] for obj in test_objects]) == set(swift_names)
 
+        self.clear_containers_remote.append(migration['aws_bucket'])
+        self.clear_containers_local.append(migration['container'])
+
         for name, body, headers in test_objects:
             self.remote_swift('put_object', migration['aws_bucket'], name,
                               StringIO.StringIO(body), headers=headers)
@@ -121,19 +144,21 @@ class TestMigrator(TestCloudSyncBase):
         for name, expected_body, user_meta in test_objects:
             for swift in [self.local_swift, self.remote_swift]:
                 hdrs, body = swift('get_object', migration['container'], name)
-                self.assertEqual(body, body)
+                self.assertEqual(expected_body, body)
                 for k, v in user_meta.items():
                     self.assertIn(k, hdrs)
                     self.assertEqual(v, hdrs[k])
-
-        clear_swift_container(self.swift_dst, migration['aws_bucket'])
-        clear_swift_container(self.swift_src, migration['container'])
 
     def test_swift_large_objects(self):
         migration = self.swift_migration()
 
         segments_container = migration['aws_bucket'] + '_segments'
         content = ''.join([chr(97 + i) * 2**20 for i in range(10)])
+
+        self.clear_containers_remote.append(migration['aws_bucket'])
+        self.clear_containers_remote.append(segments_container)
+        self.clear_containers_local.append(migration['container'])
+        self.clear_containers_local.append(segments_container)
 
         self.remote_swift(
             'put_container', segments_container)
@@ -174,6 +199,8 @@ class TestMigrator(TestCloudSyncBase):
                 'get_container', migration['container'])
             swift_names = [obj['name'] for obj in listing]
             if set(['dlo', 'slo']) != set(swift_names):
+                print "Swift names in %s: %s" % (migration['container'],
+                                                 swift_names)
                 return False
             _, listing = self.local_swift(
                 'get_container', segments_container)
@@ -212,10 +239,45 @@ class TestMigrator(TestCloudSyncBase):
         self.assertEqual('dlo-meta', dlo_hdrs.get('x-object-meta-dlo'))
         self.assertTrue(content == dlo_body)
 
-        clear_swift_container(self.swift_dst, migration['aws_bucket'])
-        clear_swift_container(self.swift_dst, segments_container)
-        clear_swift_container(self.swift_src, migration['container'])
-        clear_swift_container(self.swift_src, segments_container)
+    def test_migrate_new_container_location(self):
+        migration = self._find_migration(
+            lambda cont: cont['container'] == 'migration-swift-reloc')
+
+        test_objects = [
+            ('swift-blobBBBB', 'blob content', {}),
+            ('swift-unicod\u00e9', '\xde\xad\xbe\xef', {}),
+            ('swift-with-headers',
+             'header-blob',
+             {'x-object-meta-custom-header': 'value',
+              'x-object-meta-unicod\u00e9': '\u262f',
+              'content-type': 'migrator/test',
+              'content-disposition': "attachment; filename='test-blob.jpg'",
+              'content-encoding': 'identity',
+              'x-delete-at': str(int(time.time() + 7200))})]
+
+        def _check_objects_copied():
+            hdrs, listing = self.local_swift(
+                'get_container', migration['container'])
+            swift_names = [obj['name'] for obj in listing]
+            return set([obj[0] for obj in test_objects]) == set(swift_names)
+
+        self.clear_containers_remote.append(migration['aws_bucket'])
+        self.clear_containers_local.append(migration['container'])
+
+        for name, body, headers in test_objects:
+            self.remote_swift('put_object', migration['aws_bucket'], name,
+                              StringIO.StringIO(body), headers=headers)
+
+        wait_for_condition(5, _check_objects_copied)
+
+        for name, expected_body, user_meta in test_objects:
+            for swift, bkey in [(self.local_swift, 'container'),
+                                (self.remote_swift, 'aws_bucket')]:
+                hdrs, body = swift('get_object', migration[bkey], name)
+                self.assertEqual(expected_body, body)
+                for k, v in user_meta.items():
+                    self.assertIn(k, hdrs)
+                    self.assertEqual(v, hdrs[k])
 
     def test_container_meta(self):
         migration = self._find_migration(
@@ -234,6 +296,9 @@ class TestMigrator(TestCloudSyncBase):
                 if e.http_status == 404:
                     return False
                 raise
+
+        self.clear_containers_remote.append(migration['aws_bucket'])
+        self.clear_containers_local.append(migration['container'])
 
         hdrs, listing = wait_for_condition(5, _check_container_created)
         self.assertIn('x-container-meta-test', hdrs)
