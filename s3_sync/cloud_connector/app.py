@@ -47,7 +47,8 @@ class CloudConnectorController(Controller):
         self.container_name = container_name  # UTF8-encoded string
         self.object_name = object_name  # UTF8-encoded string
         self.sync_profile, per_account = \
-            maybe_munge_profile_for_all_containers(sync_profile)
+            maybe_munge_profile_for_all_containers(sync_profile,
+                                                   container_name)
         self.provider = create_provider(self.sync_profile, max_conns=5,
                                         per_account=per_account)
 

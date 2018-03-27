@@ -15,15 +15,39 @@ limitations under the License.
 """
 
 
+import botocore
 import json
 import StringIO
 import swiftclient
 import time
 import urllib
-from . import TestCloudSyncBase, clear_swift_container, wait_for_condition
+from . import (
+    TestCloudSyncBase, clear_swift_container, wait_for_condition,
+    clear_s3_bucket)
 
 
 class TestMigrator(TestCloudSyncBase):
+    def tearDown(self):
+        # Make sure all migration-related containers are cleared
+        for container in self.test_conf['migrations']:
+            if container['protocol'] == 'swift':
+                clear_swift_container(self.swift_dst,
+                                      container['aws_bucket'])
+                clear_swift_container(self.swift_dst,
+                                      container['aws_bucket'] + '_segments')
+            else:
+                try:
+                    clear_s3_bucket(self.s3_client, container['aws_bucket'])
+                except botocore.exceptions.ClientError as e:
+                    if e.response['Error']['Code'] == 'NoSuchBucket':
+                        continue
+
+        for container in self.test_conf['migrations']:
+            with self.admin_conn_for(container['account']) as conn:
+                clear_swift_container(conn, container['container'])
+                clear_swift_container(conn,
+                                      container['container'] + '_segments')
+
     def test_s3_migration(self):
         migration = self.s3_migration()
 

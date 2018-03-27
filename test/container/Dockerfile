@@ -22,8 +22,8 @@ ENV LANG='en_US.UTF-8' LANGUAGE='en_US:en' LC_ALL='en_US.UTF-8'
 # These two patches make tempauth and swiftclient both work properly with a
 # Swift Account name containing a Unicode character.
 COPY tempauth.patch /tmp/
-RUN bash -c "cd /usr/local/src/swift \
-    && patch -p1 < /tmp/tempauth.patch \
+RUN bash -c "cd /usr/local/src \
+    && patch -p0 < /tmp/tempauth.patch \
     && rm -f /tmp/tempauth.patch"
 COPY swiftclient.patch /tmp/
 RUN bash -c "cd /usr/local/src \

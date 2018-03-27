@@ -30,6 +30,9 @@ from swift.common.utils import cache_from_env, get_logger, split_path
 from s3_sync.cloud_connector.util import forward_raw_swift_req
 
 
+MEMCACHE_TOKEN_KEY_FMT = 'cloud_connect_auth/token/%s'
+
+
 class CloudConnectAuth(object):
     """
     :param app: The next WSGI app in the pipeline
@@ -101,7 +104,8 @@ class CloudConnectAuth(object):
 
     def get_valid_account(self, env, token):
         """
-        Return the Swift Account name for which this token is valid, if any.
+        Return the Swift Account name, as a UTF8-encoded string, for which this
+        token is valid, if any.
 
         :param env: The current WSGI environment dictionary.
         :param token: Token to validate and return a Swift Account for.
@@ -113,14 +117,14 @@ class CloudConnectAuth(object):
         memcache_client = cache_from_env(env)
         if not memcache_client:
             raise Exception('Memcache required')
-        memcache_token_key = 'cloud_connect_auth/token/%s' % token
+        memcache_token_key = MEMCACHE_TOKEN_KEY_FMT % token
         cached_auth_data = memcache_client.get(memcache_token_key)
         if cached_auth_data:
             expires, acct = cached_auth_data
             if expires < time():
                 acct = None
 
-        return acct
+        return acct.encode('utf8')
 
     def handle_auth(self, env, start_response):
         """
@@ -205,7 +209,7 @@ class CloudConnectAuth(object):
                         token_life = float(token_expiry)
                     except Exception:
                         token_life = self.token_life
-                    memcache_token_key = 'cloud_connect_auth/token/%s' % token
+                    memcache_token_key = MEMCACHE_TOKEN_KEY_FMT % token
                     swift_account = urllib.unquote(
                         storage_url.rsplit('/', 1)[-1])
                     expires = time() + token_life

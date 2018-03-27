@@ -16,6 +16,7 @@ limitations under the License.
 
 import boto3
 import botocore.exceptions
+from contextlib import contextmanager
 import hashlib
 import json
 import os
@@ -23,6 +24,7 @@ import subprocess
 import swiftclient
 import time
 import unittest
+import urllib
 
 
 def clear_swift_container(client, container):
@@ -133,28 +135,42 @@ class TestCloudSyncBase(unittest.TestCase):
             'user': 'admin:admin',
             'key': 'admin',
         },
+        'cloud-connector': {
+            'user': u"\u062aacct:\u062auser".encode('utf8'),
+            'key': u"\u062apass".encode('utf8'),
+        },
     }
     S3_CREDS = {}
 
     @classmethod
-    def setUpClass(self):
-        self.test_conf = self._get_s3_sync_conf()
-        self.swift_src = swiftclient.client.Connection(
-            self.SWIFT_CREDS['authurl'],
-            self.SWIFT_CREDS['src']['user'],
-            self.SWIFT_CREDS['src']['key'])
-        self.swift_dst = swiftclient.client.Connection(
-            self.SWIFT_CREDS['authurl'],
-            self.SWIFT_CREDS['dst']['user'],
-            self.SWIFT_CREDS['dst']['key'])
-        self.cloud_connector_client = swiftclient.Connection(
-            'http://localhost:%d/auth/v1.0' % self.PORTS['cloud_connector'],
-            self.SWIFT_CREDS['src']['user'],
-            self.SWIFT_CREDS['src']['key'])
-        s3 = [container for container in self.test_conf['containers']
+    def setUpClass(klass):
+        klass.test_conf = klass._get_s3_sync_conf()
+        # It can be handy to be the reseller admin (see admin_conn_for context
+        # manager)
+        klass.admin_conn = swiftclient.client.Connection(
+            klass.SWIFT_CREDS['authurl'],
+            klass.SWIFT_CREDS['admin']['user'],
+            klass.SWIFT_CREDS['admin']['key'],
+            retries=0)
+        klass.swift_src = swiftclient.client.Connection(
+            klass.SWIFT_CREDS['authurl'],
+            klass.SWIFT_CREDS['src']['user'],
+            klass.SWIFT_CREDS['src']['key'],
+            retries=0)
+        klass.swift_dst = swiftclient.client.Connection(
+            klass.SWIFT_CREDS['authurl'],
+            klass.SWIFT_CREDS['dst']['user'],
+            klass.SWIFT_CREDS['dst']['key'],
+            retries=0)
+        klass.cloud_connector_client = swiftclient.Connection(
+            'http://localhost:%d/auth/v1.0' % klass.PORTS['cloud_connector'],
+            klass.SWIFT_CREDS['cloud-connector']['user'],
+            klass.SWIFT_CREDS['cloud-connector']['key'],
+            retries=0)
+        s3 = [container for container in klass.test_conf['containers']
               if container.get('protocol', 's3') == 's3'][0]
-        self.S3_CREDS.update({
-            'endpoint': 'http://localhost:%d' % self.PORTS['s3'],
+        klass.S3_CREDS.update({
+            'endpoint': 'http://localhost:%d' % klass.PORTS['s3'],
             'user': s3['aws_identity'],
             'key': s3['aws_secret'],
         })
@@ -162,48 +178,50 @@ class TestCloudSyncBase(unittest.TestCase):
             aws_access_key_id=s3['aws_identity'],
             aws_secret_access_key=s3['aws_secret'])
         conf = boto3.session.Config(s3={'addressing_style': 'path'})
-        self.s3_client = session.client(
+        klass.s3_client = session.client(
             's3', config=conf,
-            endpoint_url='http://localhost:%d' % self.PORTS['s3'])
+            endpoint_url='http://localhost:%d' % klass.PORTS['s3'])
 
         for container in \
-                self.test_conf['containers'] + self.test_conf['migrations']:
+                klass.test_conf['containers'] + klass.test_conf['migrations']:
             if container['container'].startswith('no-auto-'):
                 continue
             if container['protocol'] == 'swift':
-                self.swift_dst.put_container(container['aws_bucket'])
+                klass.swift_dst.put_container(container['aws_bucket'])
             else:
                 try:
-                    self.s3_client.create_bucket(
+                    klass.s3_client.create_bucket(
                         Bucket=container['aws_bucket'])
                 except botocore.exceptions.ClientError as e:
                     if e.response['Error']['Code'] == 409:
                         pass
-            self.swift_src.put_container(container['container'])
+            with klass.admin_conn_for(container['account']) as conn:
+                conn.put_container(container['container'])
 
     @classmethod
-    def tearDownClass(self):
+    def tearDownClass(klass):
         if 'NO_TEARDOWN' in os.environ:
             return
-        all_containers = self.test_conf['containers'] + \
-            self.test_conf['migrations']
+        all_containers = klass.test_conf['containers'] + \
+            klass.test_conf['migrations']
         for container in all_containers:
             if container['protocol'] == 'swift':
-                self._remove_swift_container(
-                    self.swift_dst, container['aws_bucket'])
+                klass._remove_swift_container(klass.swift_dst,
+                                              container['aws_bucket'])
             else:
                 try:
-                    clear_s3_bucket(self.s3_client, container['aws_bucket'])
+                    clear_s3_bucket(klass.s3_client, container['aws_bucket'])
                 except botocore.exceptions.ClientError as e:
                     if e.response['Error']['Code'] == 'NoSuchBucket':
                         continue
-                self.s3_client.delete_bucket(Bucket=container['aws_bucket'])
+                klass.s3_client.delete_bucket(
+                    Bucket=container['aws_bucket'])
 
         for container in all_containers:
-            self._remove_swift_container(
-                self.swift_src, container['container'])
+            with klass.admin_conn_for(container['account']) as conn:
+                klass._remove_swift_container(conn, container['container'])
 
-        for client in [self.swift_src, self.swift_dst]:
+        for client in [klass.swift_src, klass.swift_dst]:
             if client:
                 client.close()
 
@@ -241,11 +259,40 @@ class TestCloudSyncBase(unittest.TestCase):
         return getattr(self.s3_client, method)(*args, **kwargs)
 
     @classmethod
+    @contextmanager
+    def admin_conn_for(klass, swift_account):
+        """
+        Takes a Swift account in the "main" (onprem) Swift cluster as a
+        UTF8-encoded string or Unicode string and returns a
+        swiftclient.client.Connection instance with a reseller_admin token
+        pointed at that account.
+        """
+        if not klass.admin_conn.url:
+            klass.admin_conn.get_auth()
+        old_url = klass.admin_conn.url
+        old_conn = klass.admin_conn.http_conn
+        try:
+            if isinstance(swift_account, unicode):
+                swift_account = swift_account.encode('utf8')
+            klass.admin_conn.url = old_url.rsplit('/', 1)[0] + '/' + \
+                urllib.quote(swift_account)
+            yield klass.admin_conn
+        finally:
+            klass.admin_conn.url = old_url
+            klass.admin_conn.http_conn = old_conn
+
+    @classmethod
     def _find_mapping(klass, matcher):
         for mapping in klass.test_conf['containers']:
             if matcher(mapping):
                 return mapping
         raise RuntimeError('No matching mapping')
+
+    @classmethod
+    def s3_sync_cc_mapping(klass):
+        return klass._find_mapping(
+            lambda cont: (cont['protocol'] == 's3' and cont['retain_local'] and
+                          'cl-conn' in cont['container']))
 
     @classmethod
     def s3_sync_mapping(klass):

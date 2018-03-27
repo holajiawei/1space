@@ -1,8 +1,7 @@
-diff --git a/swift/common/middleware/tempauth.py b/swift/common/middleware/tempauth.py
-index 3c64090e..05209447 100644
---- a/swift/common/middleware/tempauth.py
-+++ b/swift/common/middleware/tempauth.py
-@@ -432,6 +432,8 @@ class TempAuth(object):
+diff -ru swift.orig/swift/common/middleware/tempauth.py swift/swift/common/middleware/tempauth.py
+--- swift.orig/swift/common/middleware/tempauth.py	2018-03-27 22:29:14.592611124 +0000
++++ swift/swift/common/middleware/tempauth.py	2018-03-27 22:31:53.563086105 +0000
+@@ -432,6 +432,8 @@
              expires, groups = cached_auth_data
              if expires < time():
                  groups = None
@@ -11,3 +10,12 @@ index 3c64090e..05209447 100644
  
          s3_auth_details = env.get('swift3.auth_details')
          if s3_auth_details:
+@@ -788,7 +790,7 @@
+             cached_auth_data = memcache_client.get(memcache_token_key)
+             if cached_auth_data:
+                 expires, old_groups = cached_auth_data
+-                old_groups = old_groups.split(',')
++                old_groups = [g.encode('utf8') for g in old_groups.split(',')]
+                 new_groups = self._get_user_groups(account, account_user,
+                                                    account_id)
+ 
