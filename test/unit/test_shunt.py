@@ -244,6 +244,7 @@ class TestShunt(unittest.TestCase):
                 # Need a container key, or the provider balks. Migrations move
                 # data from one name to the same name, so crib from aws_bucket
                 'container': 'some-bucket',
+                'migration': True,
             },
             ('AUTH_all-their-containers', '/*'): {
                 'account': 'AUTH_all-their-containers',
@@ -255,6 +256,7 @@ class TestShunt(unittest.TestCase):
                 'remote_account': 'AUTH_all-my-containers',
                 'restore_object': True,
                 'container': '/*',
+                'migration': True,
             },
         })
 

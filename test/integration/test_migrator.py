@@ -316,3 +316,37 @@ class TestMigrator(TestCloudSyncBase):
         remote_swift.put_object(migration['container'], 'test', 'test')
         hdrs, body = remote_swift.get_object(migration['container'], 'test')
         self.assertEqual(body, 'test')
+
+    def test_propagate_delete(self):
+        migration = self.swift_migration()
+        key = 'test_delete_object'
+        content = 'D' * 2**10
+
+        def _check_object_copied():
+            hdrs, listing = self.local_swift(
+                'get_container', migration['container'])
+            names = [obj['name'] for obj in listing]
+            return names[0] == key
+
+        def _check_removed():
+            _, listing = self.local_swift(
+                'get_container', migration['container'])
+            return listing == []
+
+        self.remote_swift('put_object', migration['aws_bucket'], key,
+                          StringIO.StringIO(content))
+
+        wait_for_condition(5, _check_object_copied)
+
+        for swift in [self.local_swift, self.remote_swift]:
+            hdrs, body = swift('get_object', migration['container'], key)
+            self.assertEqual(content, body)
+
+        self.local_swift('delete_object', migration['container'], key)
+        wait_for_condition(5, _check_removed)
+
+        _, listing = self.local_swift('get_container', migration['container'])
+        self.assertEqual([], listing)
+
+        clear_swift_container(self.swift_dst, migration['aws_bucket'])
+        clear_swift_container(self.swift_src, migration['container'])
