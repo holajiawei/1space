@@ -295,6 +295,10 @@ class SyncS3(BaseSync):
             with self.client_pool.get_client() as s3_client:
                 if self.settings.get('native'):
                     key_prefix = ''
+                elif self.use_custom_prefix:
+                    key_prefix = self.get_prefix()
+                    if len(key_prefix):
+                        key_prefix = '%s/' % (key_prefix,)
                 else:
                     key_prefix = '%s/%s/%s/' % (
                         self.get_prefix(), self.account, self.container)
@@ -562,6 +566,9 @@ class SyncS3(BaseSync):
                 queue.task_done()
 
     def get_prefix(self):
+        if self.use_custom_prefix:
+            return self.custom_prefix
+
         md5_hash = hashlib.md5('%s/%s' % (
             self.account.encode('utf-8'),
             self.container.encode('utf-8'))).hexdigest()
@@ -569,16 +576,41 @@ class SyncS3(BaseSync):
         return hex(long(md5_hash, 16) % self.PREFIX_SPACE)[2:-1]
 
     def get_s3_name(self, key):
-        return u'%s/%s' % (self.get_prefix(), self._full_name(key))
+        prefix = self.get_prefix()
+        if self.use_custom_prefix:
+            if len(prefix):
+                return u'%s/%s' % (prefix, key)
+            return key
+        return u'%s/%s' % (prefix, self._full_name(key))
 
     def get_manifest_name(self, s3_name):
-        # Split 3 times, as the format is:
-        # <prefix>/<account>/<container>/<object>
-        prefix, account, container, obj = s3_name.split('/', 3)
+        if self.use_custom_prefix:
+            prefix = self.get_prefix()
+            obj = s3_name[len(prefix):]
+            # Custom 1: Prefix is blank, format is:
+            # <object>
+            # manifest should be:
+            # .manifests/<obj_hash><SLO_MANIFEST_SUFFIX>
+            if prefix == u'':
+                obj = s3_name
+                obj_prefix = u'.manifests'
+            # Custom 2: Prefix is not blank, format is:
+            # <prefix>/<object>
+            # manifest should be:
+            # <prefix>/.manifests/<obj_hash><SLO_MANIFEST_SUFFIX>
+            else:
+                obj = s3_name[len(prefix) + 1:]
+                obj_prefix = u'/'.join(prefix, '.manifests')
+        else:
+            # Default behavior:
+            # Split 3 times, as the format is:
+            # <prefix>/<account>/<container>/<object>
+            prefix, account, container, obj = s3_name.split('/', 3)
+            obj_prefix = u'/'.join([prefix, '.manifests', account, container])
+
         obj_hash = hashlib.sha256(obj.encode('utf-8')).hexdigest()
         return u'/'.join([
-            prefix, '.manifests', account, container,
-            '%s%s' % (obj_hash, self.SLO_MANIFEST_SUFFIX)])
+            obj_prefix, '%s%s' % (obj_hash, self.SLO_MANIFEST_SUFFIX)])
 
     def get_manifest(self, key, bucket=None):
         if bucket is None:

@@ -432,6 +432,30 @@ class TestSyncS3(unittest.TestCase):
             self.assertEqual(expected_prefix, prefix)
 
     @mock.patch('s3_sync.sync_s3.boto3.session.Session')
+    def test_s3_name_custom_prefix(self, mock_session):
+        test_data = [('AUTH_test', 'container', 'key'),
+                     ('swift', 'stuff', 'my/key')]
+        prefixes = ['scary', 'scary/', 'scary/idea/', '', '/']
+        for c_pref in prefixes:
+            for account, container, key in test_data:
+                sync = SyncS3({'account': account,
+                               'container': container,
+                               'aws_bucket': 'bucket',
+                               'aws_identity': 'identity',
+                               'custom_prefix': c_pref,
+                               'aws_secret': 'secret'})
+                # Verify that the get_s3_name function is deterministic
+                self.assertEqual(sync.get_s3_name(key),
+                                 sync.get_s3_name(key))
+                s3_key = sync.get_s3_name(key)
+                e_pref = c_pref.strip('/')
+                if len(e_pref):
+                    expected = e_pref + '/' + key
+                else:
+                    expected = key
+                self.assertEqual(expected, s3_key)
+
+    @mock.patch('s3_sync.sync_s3.boto3.session.Session')
     def test_signature_version(self, session_mock):
         config_class = 's3_sync.sync_s3.boto3.session.Config'
         with mock.patch(config_class) as conf_mock:
