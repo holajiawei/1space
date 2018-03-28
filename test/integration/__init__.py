@@ -127,6 +127,10 @@ class TestCloudSyncBase(unittest.TestCase):
             'user': 'test:tester',
             'key': 'testing',
         },
+        'nuser': {
+            'user': 'nacct:nuser',
+            'key': 'npass',
+        },
         'dst': {
             'user': u"\u062aacct2:\u062auser2".encode('utf8'),
             'key': u"\u062apass2".encode('utf8'),
@@ -254,6 +258,9 @@ class TestCloudSyncBase(unittest.TestCase):
 
     def cloud_connector(self, method, *args, **kwargs):
         return getattr(self.cloud_connector_client, method)(*args, **kwargs)
+
+    def nuser_swift(self, method, *args, **kwargs):
+        return getattr(self.swift_nuser, method)(*args, **kwargs)
 
     def s3(self, method, *args, **kwargs):
         return getattr(self.s3_client, method)(*args, **kwargs)

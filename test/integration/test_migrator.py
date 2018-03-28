@@ -290,6 +290,54 @@ class TestMigrator(TestCloudSyncBase):
         hdrs, body = remote_swift.get_object(migration['container'], 'test')
         self.assertEqual(body, 'test')
 
+    def test_migrate_all_containers(self):
+        migration = self._find_migration(
+            lambda cont: cont['aws_bucket'] == '/*')
+
+        test_objects = [
+            ('swift-blobBBBB', 'blob content', {}),
+            ('swift-unicod\u00e9', '\xde\xad\xbe\xef', {}),
+            ('swift-with-headers',
+             'header-blob',
+             {'x-object-meta-custom-header': 'value',
+              'x-object-meta-unicod\u00e9': '\u262f',
+              'content-type': 'migrator/test',
+              'content-disposition': "attachment; filename='test-blob.jpg'",
+              'content-encoding': 'identity',
+              'x-delete-at': str(int(time.time() + 7200))})]
+
+        test_containers = ['container1', 'container2', 'container3']
+
+        def _check_objects_copied():
+            done = True
+            test_names = set([obj[0] for obj in test_objects])
+            for cont in test_containers:
+                hdrs, listing = self.local_swift(
+                    'get_container', cont)
+                swift_names = set([obj['name'] for obj in listing])
+                done = done and (test_names == swift_names)
+                if not done:
+                    return False
+            return True
+
+        for cont in test_containers:
+            self.clear_containers_nuser.append(cont)
+            self.clear_containers_local.append(cont)
+
+        for name, body, headers in test_objects:
+            self.nuser_swift('put_object', migration['aws_bucket'], name,
+                             StringIO.StringIO(body), headers=headers)
+
+        wait_for_condition(5, _check_objects_copied)
+
+        for name, expected_body, user_meta in test_objects:
+            for cont in test_containers:
+                hdrs, body = self.local_swift('get_object', cont, name)
+                self.assertEqual(expected_body, body)
+                for k, v in user_meta.items():
+                    self.assertIn(k, hdrs)
+                    self.assertEqual(v, hdrs[k])
+
     def test_propagate_delete(self):
         migration = self.swift_migration()
         key = 'test_delete_object'

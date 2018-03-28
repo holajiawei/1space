@@ -52,6 +52,12 @@ if ! grep -q "$tempauth_line1" /etc/swift/proxy-server.conf; then
     sed -i "s/egg:swift#tempauth/&\n$tempauth_line1\n$tempauth_line2/" /etc/swift/proxy-server.conf
 fi
 
+tempauth_nuser=$'user_nacct_nuser = npass .admin'
+tempauth_nuser2=$'user_nacct2_nuser2 = npass2 .admin'
+if ! grep -q "$tempauth_nuser" /etc/swift/proxy-server.conf; then
+    sed -i "s/user_test_tester3 = testing3/&\n$tempauth_nuser\n$tempauth_nuser2/" /etc/swift/proxy-server.conf
+fi
+
 set -e
 
 cd /swift-s3-sync; pip install -e .

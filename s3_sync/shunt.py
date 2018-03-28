@@ -67,17 +67,21 @@ def maybe_munge_profile_for_all_containers(sync_profile, container_name):
 
     If if the config applies to all containers, the returned config will be a
     copy of the supplied sync_profile and will include the given specific
-    container name and per_account will be True.  FWIW, note that container
-    names in sync profiles are Unicode strings.
+    container name and per_account will be True (except in the case of
+    migrations).  FWIW, note that container names in sync profiles are Unicode
+    strings.
 
     Otherwise, the original profile is returned and per_account will be False.
     """
     if sync_profile['container'] == '/*':
         new_profile = dict(sync_profile,
                            container=container_name.decode('utf-8'))
-        return new_profile, True
-    else:
-        return sync_profile, False
+        if sync_profile.get('migration'):
+            per_account = False
+        else:
+            per_account = True
+        return new_profile, per_account
+    return sync_profile, False
 
 
 class S3SyncShunt(object):
