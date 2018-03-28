@@ -77,12 +77,16 @@ class TestVerify(TestCloudSyncBase):
             '--endpoint=' + self.SWIFT_CREDS['authurl'],
             '--username=' + self.SWIFT_CREDS['admin']['user'],
             '--password=' + self.SWIFT_CREDS['admin']['key'],
-            '--account=AUTH_test2',
+            '--account=AUTH_\xd8\xaaacct2',
             '--bucket=' + self.swift_container,
         ]))
 
     @swift_is_unchanged
     def test_swift_admin_wrong_account(self):
+        # Note: "wrong account", here, means an account that doesn't have the
+        # specified bucket.
+        # ...which is basically the same as `test_swift_bad_container` but with
+        # an admin user.
         actual = s3_sync.verify.main([
             '--protocol=swift',
             '--endpoint=' + self.SWIFT_CREDS['authurl'],

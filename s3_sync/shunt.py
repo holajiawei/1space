@@ -60,6 +60,26 @@ class S3SyncProxyFSSwitch(object):
             'proxyfs-bimodal'))
 
 
+def maybe_munge_profile_for_all_containers(sync_profile, container_name):
+    """
+    Takes a sync profile config and a UTF8-encoded container name, and returns
+    a sync profile and a `per_account` boolean.
+
+    If if the config applies to all containers, the returned config will be a
+    copy of the supplied sync_profile and will include the given specific
+    container name and per_account will be True.  FWIW, note that container
+    names in sync profiles are Unicode strings.
+
+    Otherwise, the original profile is returned and per_account will be False.
+    """
+    if sync_profile['container'] == '/*':
+        new_profile = dict(sync_profile,
+                           container=container_name.decode('utf-8'))
+        return new_profile, True
+    else:
+        return sync_profile, False
+
+
 class S3SyncShunt(object):
     def __init__(self, app, conf_file, conf):
         self.logger = utils.get_logger(
@@ -114,12 +134,8 @@ class S3SyncShunt(object):
                              if (acct, c) in self.sync_profiles), None)
         if sync_profile is None:
             return self.app(env, start_response)
-        # If mapping all containers, make a new profile for just this request
-        if sync_profile['container'] == '/*':
-            sync_profile = dict(sync_profile, container=cont.decode('utf-8'))
-            per_account = True
-        else:
-            per_account = False
+        sync_profile, per_account = maybe_munge_profile_for_all_containers(
+            sync_profile, cont)
 
         if obj and req.method == 'DELETE' and\
                 sync_profile.get('migration'):

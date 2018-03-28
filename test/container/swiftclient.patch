@@ -1,0 +1,13 @@
+diff -ru python-swiftclient.orig/swiftclient/client.py python-swiftclient/swiftclient/client.py
+--- python-swiftclient.orig/swiftclient/client.py	2018-03-26 19:05:24.342545640 +0000
++++ python-swiftclient/swiftclient/client.py	2018-03-26 19:08:14.679512446 +0000
+@@ -162,6 +162,9 @@
+     else:
+         log_method = logger.info
+ 
++    if six.PY2:
++        string_parts = [s.decode('utf8') if not isinstance(s, unicode) else s
++                        for s in string_parts]
+     log_method("REQ: %s", "".join(string_parts))
+     log_method("RESP STATUS: %s %s", resp.status, resp.reason)
+     log_method("RESP HEADERS: %s", scrub_headers(resp.getheaders()))
