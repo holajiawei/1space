@@ -396,6 +396,7 @@ class TestMigrator(TestCloudSyncBase):
         history_container = migration['aws_bucket'] + '_history'
         self.remote_swift(
             'put_container', history_container)
+        clear_swift_container(self.swift_dst, history_container)
         self.remote_swift('put_container', migration['aws_bucket'],
                           headers={'X-History-Location': history_container})
         self.remote_swift(
