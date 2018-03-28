@@ -226,8 +226,8 @@ class TestCloudSyncBase(unittest.TestCase):
                 client.close()
 
     @classmethod
-    def _get_s3_sync_conf(self):
-        with open(self.CLOUD_SYNC_CONF) as conf_handle:
+    def _get_s3_sync_conf(klass):
+        with open(klass.CLOUD_SYNC_CONF) as conf_handle:
             conf = json.load(conf_handle)
             return conf
 
