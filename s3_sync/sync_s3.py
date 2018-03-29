@@ -214,8 +214,7 @@ class SyncS3(BaseSync):
         return response.to_wsgi()
 
     def head_object(self, swift_key, bucket=None, **options):
-        key = swift_key if self.settings.get('native') \
-            else self.get_s3_name(swift_key)
+        key = self.get_s3_name(swift_key)
         if bucket is None:
             bucket = self.aws_bucket
         response = self._call_boto(
@@ -224,8 +223,7 @@ class SyncS3(BaseSync):
         return response
 
     def get_object(self, swift_key, bucket=None, **options):
-        key = swift_key if self.settings.get('native') \
-            else self.get_s3_name(swift_key)
+        key = self.get_s3_name(swift_key)
         if bucket is None:
             bucket = self.aws_bucket
         return self._call_boto(
@@ -293,8 +291,11 @@ class SyncS3(BaseSync):
             prefix = ''
         try:
             with self.client_pool.get_client() as s3_client:
-                if self.settings.get('native'):
-                    key_prefix = ''
+                key_prefix = self.get_prefix()
+                if self.use_custom_prefix:
+                    key_prefix = self.get_prefix()
+                    if len(key_prefix):
+                        key_prefix = '%s/' % (key_prefix,)
                 else:
                     key_prefix = '%s/%s/%s/' % (
                         self.get_prefix(), self.account, self.container)
@@ -562,6 +563,9 @@ class SyncS3(BaseSync):
                 queue.task_done()
 
     def get_prefix(self):
+        if self.use_custom_prefix:
+            return self.custom_prefix
+
         md5_hash = hashlib.md5('%s/%s' % (
             self.account.encode('utf-8'),
             self.container.encode('utf-8'))).hexdigest()
@@ -569,16 +573,26 @@ class SyncS3(BaseSync):
         return hex(long(md5_hash, 16) % self.PREFIX_SPACE)[2:-1]
 
     def get_s3_name(self, key):
-        return u'%s/%s' % (self.get_prefix(), self._full_name(key))
+        prefix = self.get_prefix()
+        if self.use_custom_prefix:
+            return '/'.join(filter(None, (prefix, key)))
+        return u'%s/%s' % (prefix, self._full_name(key))
 
     def get_manifest_name(self, s3_name):
-        # Split 3 times, as the format is:
-        # <prefix>/<account>/<container>/<object>
-        prefix, account, container, obj = s3_name.split('/', 3)
+        if self.use_custom_prefix:
+            prefix = self.get_prefix()
+            obj_prefix = '/'.join(filter(None, (prefix, '.manifests')))
+            obj = s3_name[len(prefix):].lstrip('/')
+        else:
+            # Default behavior:
+            # Split 3 times, as the format is:
+            # <prefix>/<account>/<container>/<object>
+            prefix, account, container, obj = s3_name.split('/', 3)
+            obj_prefix = u'/'.join([prefix, '.manifests', account, container])
+
         obj_hash = hashlib.sha256(obj.encode('utf-8')).hexdigest()
         return u'/'.join([
-            prefix, '.manifests', account, container,
-            '%s%s' % (obj_hash, self.SLO_MANIFEST_SUFFIX)])
+            obj_prefix, '%s%s' % (obj_hash, self.SLO_MANIFEST_SUFFIX)])
 
     def get_manifest(self, key, bucket=None):
         if bucket is None:

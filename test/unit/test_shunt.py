@@ -240,7 +240,7 @@ class TestShunt(unittest.TestCase):
                 'restore_object': True,
                 # Also, inserted just for the migration, as we don't want to
                 # use the sharded S3 namespace
-                'native': True,
+                'custom_prefix': '',
                 # Need a container key, or the provider balks. Migrations move
                 # data from one name to the same name, so crib from aws_bucket
                 'container': 'some-bucket',
@@ -256,6 +256,7 @@ class TestShunt(unittest.TestCase):
                 'remote_account': 'AUTH_all-my-containers',
                 'restore_object': True,
                 'container': '/*',
+                'custom_prefix': '',
                 'migration': True,
             },
         })

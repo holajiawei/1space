@@ -110,8 +110,9 @@ class S3SyncShunt(object):
             profile.setdefault('restore_object', True)
             profile.setdefault('container', profile['aws_bucket'])
             profile.setdefault('migration', True)
-            if profile.get('protocol') != 'swift':
-                profile.setdefault('native', True)
+            # if, in the future, we support custom_prefix on the S3 side,
+            # we may need to change this. Swift side code ignores custom_prefix
+            profile['custom_prefix'] = ''
             key = (profile['account'].encode('utf-8'),
                    profile['container'].encode('utf-8'))
             self.sync_profiles[key] = profile
