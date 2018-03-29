@@ -73,7 +73,7 @@ sleep 5  # let S3Proxy start up
 export CONF_BUCKET=cloud-connector-conf
 export CONF_ENDPOINT=http://localhost:10080
 pip install s3cmd
-s3cmd -c /swift-s3-sync/s3cfg mb s3://$CONF_BUCKET
+s3cmd -c /swift-s3-sync/s3cfg mb s3://$CONF_BUCKET ||:
 s3cmd -c /swift-s3-sync/s3cfg put /swift-s3-sync/test/container/cloud-connector.conf \
     s3://$CONF_BUCKET
 s3cmd -c /swift-s3-sync/s3cfg put /swift-s3-sync/test/container/swift-s3-sync.conf \
