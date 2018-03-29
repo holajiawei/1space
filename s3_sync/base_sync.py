@@ -136,6 +136,14 @@ class BaseSync(object):
         self.endpoint = settings.get('aws_endpoint', None)
         self.aws_bucket = settings['aws_bucket']
 
+        # custom prefix can potentially cause conflicts/data over write,
+        # be VERY CAREFUL with this.
+        self.custom_prefix = settings.get('custom_prefix', None)
+        if self.custom_prefix is None:
+            self.use_custom_prefix = False
+        else:
+            self.use_custom_prefix = True
+            self.custom_prefix = self.custom_prefix.strip('/')
         self.client_pool = self.HttpClientPool(
             self._get_client_factory(), max_conns)
 

@@ -318,11 +318,15 @@ class SyncSwift(BaseSync):
         except swiftclient.exceptions.ClientException as e:
             return (e.http_status, e.message)
 
+        # If the identity gets in here as UTF8-encoded string (e.g. through the
+        # verify command's CLI, if the creds contain Unicode chars), then it
+        # needs to be upconverted to Unicode string.
+        u_ident = self.settings['aws_identity'] if isinstance(
+            self.settings['aws_identity'], unicode) else \
+            self.settings['aws_identity'].decode('utf8')
         for entry in results:
             entry['content_location'] = '%s;%s;%s' % (
-                self.endpoint,
-                self.settings['aws_identity'],
-                bucket)
+                self.endpoint, u_ident, bucket)
         return (200, results)
 
     def update_metadata(self, swift_key, metadata):

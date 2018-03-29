@@ -8,7 +8,7 @@ RUN apt-get update && \
 RUN pip install -e git://github.com/swiftstack/botocore.git@1.4.32.6#egg=botocore && \
     pip install boto3==1.3.1 && \
     pip install -e git://github.com/swiftstack/container-crawler.git@0.0.12#egg=container-crawler && \
-    pip install nose flake8==3.5.0 && \
+    pip install -U coverage nose flake8==3.5.0 && \
     pip uninstall -y hacking
 
 RUN mkdir -p /s3proxy/data

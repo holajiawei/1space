@@ -105,7 +105,7 @@ def get_and_write_conf_file_from_s3(obj_name, target_path, env_options,
         'aws_identity': env_options['AWS_ACCESS_KEY_ID'],
         'aws_secret': env_options['AWS_SECRET_ACCESS_KEY'],
         'encryption': False,  # TODO: get from CONF_ENCRYPTION or something
-        'native': True,
+        'custom_prefix': '',
         'account': 'notused',
         'container': 'notused',
         'aws_bucket': env_options['CONF_BUCKET'],

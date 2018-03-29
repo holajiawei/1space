@@ -586,7 +586,7 @@ class TestMigrator(unittest.TestCase):
         self.migrator.next_pass()
         create_provider_mock.assert_called_once_with(
             {'aws_bucket': 'bucket', 'container': 'bucket',
-             'account': 'AUTH_test', 'native': True},
+             'account': 'AUTH_test', 'custom_prefix': ''},
             self.migrator.ic_pool.max_size, False)
         self.migrator._next_pass.assert_called_once_with()
 

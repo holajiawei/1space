@@ -254,13 +254,13 @@ class TestMainTrackClientCalls(unittest.TestCase):
             mock.call.head_object(
                 Bucket='some-bucket',
                 Key=key),
-            mock.call.delete_object(
-                Bucket='some-bucket',
-                Key=key),
             mock.call.list_objects(
                 Bucket='some-bucket',
                 MaxKeys=1,
                 Prefix=u'9f9835/verify-auth/testing-\U0001f44d/'),
+            mock.call.delete_object(
+                Bucket='some-bucket',
+                Key=key),
         ])
 
     def test_google_no_bucket(self, mock_get_client):
@@ -331,13 +331,13 @@ class TestMainTrackClientCalls(unittest.TestCase):
             mock.call.head_object(
                 Bucket='some-bucket',
                 Key=key),
-            mock.call.delete_object(
-                Bucket='some-bucket',
-                Key=key),
             mock.call.list_objects(
                 Bucket='some-bucket',
                 MaxKeys=1,
                 Prefix=u'9f9835/verify-auth/testing-\U0001f44d/'),
+            mock.call.delete_object(
+                Bucket='some-bucket',
+                Key=key),
         ])
 
     def test_swift_no_bucket(self, mock_get_client):
@@ -382,8 +382,8 @@ class TestMainTrackClientCalls(unittest.TestCase):
                 {'content-type': 'text/plain',
                  'X-Object-Meta-Cloud-Sync': 'fabcab'}),
             mock.call.head_object('some-bucket', 'cloud_sync_test_object'),
-            mock.call.head_object('some-bucket', 'cloud_sync_test_object'),
-            mock.call.delete_object('some-bucket', 'cloud_sync_test_object'),
             mock.call.get_container('some-bucket', delimiter='', limit=1,
                                     marker='', prefix=''),
+            mock.call.head_object('some-bucket', 'cloud_sync_test_object'),
+            mock.call.delete_object('some-bucket', 'cloud_sync_test_object'),
         ])
