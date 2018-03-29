@@ -256,6 +256,7 @@ class TestShunt(unittest.TestCase):
                 'remote_account': 'AUTH_all-my-containers',
                 'restore_object': True,
                 'container': '/*',
+                'custom_prefix': '',
                 'migration': True,
             },
         })

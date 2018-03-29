@@ -217,10 +217,10 @@ class Migrator(object):
             # NOTE: in the future this may no longer be true, as we may allow
             # remapping buckets/containers during migrations.
             self.config['container'] = self.config['aws_bucket']
-        if self.config.get('protocol') != 'swift':
-            # s3 side of migration is always like native (there is no way
-            # to specify only take prefix from bucket at this time
-            self.config['custom_prefix'] = ''
+        # s3 side of migration is always like native (there is no way
+        # to specify only take prefix from bucket at this time) and swift
+        # cloud connector ignores the custom_prefix setting.
+        self.config['custom_prefix'] = ''
         self.status = status
         self.work_chunk = work_chunk
         self.max_conns = swift_pool.max_size
