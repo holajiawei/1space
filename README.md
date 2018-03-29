@@ -98,13 +98,14 @@ If you have docker and docker-compose already you can easily get started in the 
 docker-compose up -d
 ```
 
-Our current development/test environment only defines one container
-`swift-s3-sync`.  It is based on the
+Our current development/test environment only defines one Docker container
+named `swift-s3-sync`.  It is based on the
 [bouncestorage/swift-aio](https://hub.docker.com/r/bouncestorage/swift-aio/).
 The Dockerfile adds S3Proxy, backed by the file system and uses a Swift
 all-in-one docker container as the base.  The Compose file maps the current
-source tree into the container, so that it operates on your current state.
-Port 8080 is the Swift Proxy server, whereas 10080 is the S3Proxy.
+source tree into the container, so that the cloud sync code  operates on your
+current state.  Port 8080 is the Swift Proxy server, 10080 is the S3Proxy, and
+8081 is the Cloud Connector port.
 
 Tests pre-configure multiple
 [policies](https://github.com/swiftstack/swift-s3-sync/blob/master/test/container/swift-s3-sync.conf).
@@ -138,7 +139,7 @@ use_https = False
 If it makes life easier you can copy `s3cfg` to `~/.s3cfg` and s3cmd will pick
 it up automatically.
 
-> note: if you remapped your exposed ports with an custom compose file, you
+> note: if you remapped your exposed ports with a custom compose file, you
 > have to fix ST_AUTH and your s3cfg host options to which ever host port you
 > mapped to 8080 and 10080 in the container.
 
@@ -159,21 +160,38 @@ docker rm -sf
 
 ### Running tests
 
+You can easily run all tests (flake8, unit, and integration) by running
+```
+./run_tests
+```
+
+A code line and branch HTML coverage report for the unit tests will get
+written to `.coverhtml/`, and on macOS, you can view the results with
+```
+open ./.coverhtml/index.html
+```
 
 #### Unit tests
 
-If you have the development environment running, it will have all the
-dependencies already squared away, you can run arbitrary commands in the
-pre-configured development environment, including `/bin/bash` or the test
-suite:
+You can run just the unit tests with
+```
+./run_unit_tests
+```
+
+You can get a shell into the integration test container or run arbitrary
+commands within it like so:
 
 ```
-docker-compose exec swift-s3-sync nosetests /swift-s3-sync/test/unit
+docker-compose exec swift-s3-sync /bin/bash
+docker-compose exec swift-s3-sync nosetests --with-coverage \
+    --cover-branches --cover-package=s3_sync --cover-erase --cover-html \
+    --cover-html-dir=/swift-s3-sync/.coverhtml /swift-s3-sync/test/unit
 ```
 
 If you want to try to get all the dependencies squared away on your host, start
 here.  All commands below assume you're running them in the swift-s3-sync
-directory.
+directory.  NOTE: I (darrell) tried this on macOS and it never worked well wrt
+liberasurecode stuff, so I gave up and only run tests inside the container.
 
 It is recommended to setup virtualenv when working on this project:
 
@@ -203,11 +221,20 @@ Then just run unit tests with `nosetests test/unit`
 
 #### Integration tests
 
-For integration tests, we need access to a Swift cluster and some sort of an S3
-provider. Currently, the tests use a Docker container to provide Swift and are
+You can run the integration tests by running
+```
+./run_tests
+```
+
+Non-integration test time is so low that there isn't any reason to make
+another command that only runs integration tests.
+
+The integration tests need access to a Swift cluster and some sort of an S3
+provider. Currently, they use a Docker container to provide Swift and are
 configured to talk to [S3Proxy](https://github.com/andrewgaul/s3proxy).
 
-Start the provided development environment with:
+To run the integration tests by hand, if `./run_tests` somehow doesn't work for
+you, start the provided development environment with:
 
 ```
 docker-compose up -d
@@ -216,9 +243,12 @@ docker-compose up -d
 The container will be started in the background (`-d`) and will expose ports
 8080 and 10080 to connect to Swift and S3Proxy, respectively.
 
-> note: the services do not restart on code changes. You can either manually
+> note: the services do not restart on code changes. You can use `run_tests.py`
+> which will always ensure the daemons are restarted and the Docker image is
+> rebuilt if the Dockerfile changed (if it didn't change, the "build" is _very_
+> fast and no additional disk space is used nor new images created), or
 > stop/start the swift-s3-sync daemon (and Swift proxy if you're working on the
-> shunt), or just run `docker-compose restart`.
+> shunt), or run `docker-compose restart`.
 
 The cloud sync configuration for the tests is defined in
 `test/container/swift-s3-sync.conf`. In particular, there are mappings for S3
@@ -228,7 +258,7 @@ S3Proxy running on the host machine, listening on port 10080.
 You can run integration tests in the container as well:
 
 ```
-docker exec -e DOCKER=true swift-s3-sync nosetests /swift-s3-sync/test/integration
+docker-compose exec -e DOCKER=true swift-s3-sync nosetests /swift-s3-sync/test/integration
 ```
 
 With sufficient effort you might be able to get enough dependencies installed on
@@ -243,10 +273,13 @@ from an image named `swift-s3-sync`. You can override that behavior by
 specifying the test container to use with the `TEST_CONTAINER` environment
 variable.
 
-The tests create and destroy the containers and buckets configured in the
-`swift-s3-sync.conf` file. If you need to examine the state of a container,
-consider commenting out the `tearDownClass` method to be a NOOP (TODO: add a way
-to keep state).
+The tests create and destroy the Swift containers and S3 buckets configured in
+the `swift-s3-sync.conf` file.  If you need to examine the state of a Swift
+container or S3 bucket after the tests have finished executing, you can set
+`NO_TEARDOWN=1` in the environment when you run the integration tests.  This
+will make the `tearDownClass` method a NOOP.  It may also introduce test
+failures if different subclasses of `TestCloudSyncBase` end up operating on the
+same Swift containers or S3 buckets.
 
 If you would like to examine the logs from each of the services, all logs are in
 /var/log (e.g. /var/log/swift-s3-sync.log).
