@@ -220,8 +220,12 @@ class TestCloudSync(TestCloudSyncBase):
             prefix, '.manifests', account, container,
             '%s.swift_slo_manifest' % (key_hash)])
         manifest = [
-            {'bytes': 5 * 1024 * 1024, 'name': '/segments/part1'},
-            {'bytes': 1024 * 1024, 'name': '/segments/part2'}]
+            {'bytes': 5 * 1024 * 1024,
+             'name': '/segments/part1',
+             'hash': hashlib.md5('A' * 5 * 2**20).hexdigest()},
+            {'bytes': 1024 * 1024,
+             'name': '/segments/part2',
+             'hash': hashlib.md5('A' * 2**20).hexdigest()}]
         self.s3('put_object',
                 Bucket=mapping['aws_bucket'],
                 Key=manifest_key,

@@ -387,15 +387,16 @@ class TestShunt(unittest.TestCase):
             (u'AUTH_a/sw\u00e9ft',
              (200,
               [('Content-Length', len(payload)),
-               (utils.SLO_HEADER, 'True')],
+               (utils.SLO_HEADER, 'True'),
+               ('etag', 'etag')],
               StringIO.StringIO(payload)),
              mock_swift_shunt, True),
             ('AUTH_tee/tee',
-             (200, [('Content-Length', len(payload))],
+             (200, [('Content-Length', len(payload)), ('etag', 'etag')],
               StringIO.StringIO(payload)),
              mock_s3_shunt, True),
             (u'AUTH_a/sw\u00e9ft',
-             (200, [('Content-Length', len(payload))],
+             (200, [('Content-Length', len(payload)), ('etag', 'etag')],
               StringIO.StringIO(payload)),
              mock_swift_shunt, True)
         ]
@@ -409,7 +410,7 @@ class TestShunt(unittest.TestCase):
         }
 
         for path, resp, mock_call, is_put_back in responses:
-            if dict(resp[1]).get('etag', '').endswith('-2') or\
+            if dict(resp[1])['etag'].endswith('-2') or\
                     utils.SLO_HEADER in dict(resp[1]):
                 is_slo = True
             else:
@@ -417,7 +418,8 @@ class TestShunt(unittest.TestCase):
             if is_slo:
                 manifest = [{
                     'bytes': len(payload),
-                    'name': '/segments/part1'}]
+                    'name': '/segments/part1',
+                    'hash': 'etag'}]
                 mock_s3_get_manifest.return_value = manifest
                 mock_swift_get_manifest.return_value = manifest
             mock_call.return_value = resp

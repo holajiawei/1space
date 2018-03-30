@@ -67,6 +67,24 @@ class TestUtilsFunctions(unittest.TestCase):
         do_test(206, [('no', 'Content-Range')])
         do_test(500, [('Content-Range', 'bytes 0-1000/1001')])
 
+    def test_convert_to_local_headers(self):
+        self.assertEqual({'content-type': 'application/test',
+                          'x-object-meta': 'object-meta',
+                          'etag': 'deadbeef'},
+                         utils.convert_to_local_headers(
+                         {'Remote-x-transaction-id': 'some id',
+                          'content-type': 'application/test',
+                          'x-timestamp': 12345,
+                          'x-object-meta': 'object-meta',
+                          'etag': 'deadbeef'}.items()))
+        self.assertEqual(
+            {'content-type': 'application/test', 'x-timestamp': 12345},
+            utils.convert_to_local_headers(
+                {'Remote-x-object-meta': 'foo',
+                 'x-timestamp': 12345,
+                 'content-type': 'application/test'}.items(),
+                remove_timestamp=False))
+
 
 class FakeSwift(object):
     def __init__(self):
