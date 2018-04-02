@@ -1,3 +1,22 @@
+## 0.1.28 (2018-04-02)
+
+Features:
+
+    - Added the ability to change a container's name during migration.
+    - Handle Swift object versioning in migrations.
+    - Allow a custom prefix to be used when interacting with S3, instead of
+      a hash of the local account and container followed by the account and
+      container.
+
+Bug fixes:
+
+    - Improved unicode support in user and account names.
+    - Properly use ETag to add data-integrity checks when uploading to Swift.
+    - Propagate POST in Swift-to-Swift mappings, both when syncing and migrating.
+    - Propagate DELETE requests back to origin when migrating. This prevents deleted
+      objects from reappearing in listings.
+    - Fixed shunting migrations that map to all containers.
+
 ## 0.1.27 (2018-03-14)
 
 Features:
@@ -16,7 +35,7 @@ Bug fixes:
     - Static large objects are no longer considered different after the
       migrations if the manifests have the keys in a different order.
 
-Improvement
+Improvement:
 
     - Improved error reporting for missing containers in the migrator. A missing
       container no longer results in a traceback and prints a more informative
