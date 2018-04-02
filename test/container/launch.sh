@@ -12,6 +12,8 @@ touch /var/log/cloud-connector.log
 chown syslog:adm /var/log/cloud-connector.log
 chmod 644 /var/log/cloud-connector.log
 
+cp -f /swift-s3-sync/test/container/internal-client.conf /etc/swift/
+
 # Copied from the docker swift container. Unfortunately, there is no way to
 # plugin an additional invocation to start swift-s3-sync, so we had to do this.
 /usr/sbin/service rsyslog start
@@ -50,6 +52,12 @@ tempauth_line1=$'user_\xd8\xaaacct_\xd8\xaauser = \xd8\xaapass .admin'
 tempauth_line2=$'user_\xd8\xaaacct2_\xd8\xaauser2 = \xd8\xaapass2 .admin'
 if ! grep -q "$tempauth_line1" /etc/swift/proxy-server.conf; then
     sed -i "s/egg:swift#tempauth/&\n$tempauth_line1\n$tempauth_line2/" /etc/swift/proxy-server.conf
+fi
+
+tempauth_nuser=$'user_nacct_nuser = npass .admin'
+tempauth_nuser2=$'user_nacct2_nuser2 = npass2 .admin'
+if ! grep -q "$tempauth_nuser" /etc/swift/proxy-server.conf; then
+    sed -i "s/user_test_tester3 = testing3/&\n$tempauth_nuser\n$tempauth_nuser2/" /etc/swift/proxy-server.conf
 fi
 
 set -e

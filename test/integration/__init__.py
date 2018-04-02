@@ -49,6 +49,11 @@ def clear_s3_bucket(client, bucket):
         client.delete_object(Bucket=bucket, Key=obj['Key'])
 
 
+def clear_swift_account(client):
+    for cont in client.get_account()[1]:
+        clear_swift_container(client, cont['name'])
+
+
 def wait_for_condition(timeout, checker):
     start = time.time()
     while time.time() < start + timeout:
@@ -127,6 +132,14 @@ class TestCloudSyncBase(unittest.TestCase):
             'user': 'test:tester',
             'key': 'testing',
         },
+        'nuser': {
+            'user': 'nacct:nuser',
+            'key': 'npass',
+        },
+        'nuser2': {
+            'user': 'nacct2:nuser2',
+            'key': 'npass2',
+        },
         'dst': {
             'user': u"\u062aacct2:\u062auser2".encode('utf8'),
             'key': u"\u062apass2".encode('utf8'),
@@ -162,6 +175,16 @@ class TestCloudSyncBase(unittest.TestCase):
             klass.SWIFT_CREDS['dst']['user'],
             klass.SWIFT_CREDS['dst']['key'],
             retries=0)
+        klass.swift_nuser = swiftclient.client.Connection(
+            klass.SWIFT_CREDS['authurl'],
+            klass.SWIFT_CREDS['nuser']['user'],
+            klass.SWIFT_CREDS['nuser']['key'],
+            retries=0)
+        klass.swift_nuser2 = swiftclient.client.Connection(
+            klass.SWIFT_CREDS['authurl'],
+            klass.SWIFT_CREDS['nuser2']['user'],
+            klass.SWIFT_CREDS['nuser2']['key'],
+            retries=0)
         klass.cloud_connector_client = swiftclient.Connection(
             'http://localhost:%d/auth/v1.0' % klass.PORTS['cloud_connector'],
             klass.SWIFT_CREDS['cloud-connector']['user'],
@@ -184,7 +207,9 @@ class TestCloudSyncBase(unittest.TestCase):
 
         for container in \
                 klass.test_conf['containers'] + klass.test_conf['migrations']:
-            if container['container'].startswith('no-auto-'):
+            if container.get('container', '').startswith('no-auto-'):
+                continue
+            if container.get('aws_bucket') == '/*':
                 continue
             if container['protocol'] == 'swift':
                 klass.swift_dst.put_container(container['aws_bucket'])
@@ -195,8 +220,9 @@ class TestCloudSyncBase(unittest.TestCase):
                 except botocore.exceptions.ClientError as e:
                     if e.response['Error']['Code'] == 409:
                         pass
-            with klass.admin_conn_for(container['account']) as conn:
-                conn.put_container(container['container'])
+            if container.get('container'):
+                with klass.admin_conn_for(container['account']) as conn:
+                    conn.put_container(container['container'])
 
     @classmethod
     def tearDownClass(klass):
@@ -205,6 +231,8 @@ class TestCloudSyncBase(unittest.TestCase):
         all_containers = klass.test_conf['containers'] + \
             klass.test_conf['migrations']
         for container in all_containers:
+            if container.get('aws_bucket') == '/*':
+                continue
             if container['protocol'] == 'swift':
                 klass._remove_swift_container(klass.swift_dst,
                                               container['aws_bucket'])
@@ -218,8 +246,9 @@ class TestCloudSyncBase(unittest.TestCase):
                     Bucket=container['aws_bucket'])
 
         for container in all_containers:
-            with klass.admin_conn_for(container['account']) as conn:
-                klass._remove_swift_container(conn, container['container'])
+            if container.get('container'):
+                with klass.admin_conn_for(container['account']) as conn:
+                    klass._remove_swift_container(conn, container['container'])
 
         for client in [klass.swift_src, klass.swift_dst]:
             if client:
@@ -254,6 +283,12 @@ class TestCloudSyncBase(unittest.TestCase):
 
     def cloud_connector(self, method, *args, **kwargs):
         return getattr(self.cloud_connector_client, method)(*args, **kwargs)
+
+    def nuser_swift(self, method, *args, **kwargs):
+        return getattr(self.swift_nuser, method)(*args, **kwargs)
+
+    def nuser2_swift(self, method, *args, **kwargs):
+        return getattr(self.swift_nuser2, method)(*args, **kwargs)
 
     def s3(self, method, *args, **kwargs):
         return getattr(self.s3_client, method)(*args, **kwargs)

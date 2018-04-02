@@ -24,13 +24,15 @@ import time
 import urllib
 from . import (
     TestCloudSyncBase, clear_swift_container, wait_for_condition,
-    clear_s3_bucket)
+    clear_s3_bucket, clear_swift_account)
 
 
 class TestMigrator(TestCloudSyncBase):
     def tearDown(self):
         # Make sure all migration-related containers are cleared
         for container in self.test_conf['migrations']:
+            if container['aws_bucket'] == '/*':
+                continue
             if container['protocol'] == 'swift':
                 clear_swift_container(self.swift_dst,
                                       container['aws_bucket'])
@@ -43,7 +45,13 @@ class TestMigrator(TestCloudSyncBase):
                     if e.response['Error']['Code'] == 'NoSuchBucket':
                         continue
 
+        # Clean out all container accounts
+        clear_swift_account(self.swift_nuser)
+        clear_swift_account(self.swift_nuser2)
+
         for container in self.test_conf['migrations']:
+            if not container.get('container'):
+                continue
             with self.admin_conn_for(container['account']) as conn:
                 clear_swift_container(conn, container['container'])
                 clear_swift_container(conn,
@@ -289,6 +297,56 @@ class TestMigrator(TestCloudSyncBase):
         remote_swift.put_object(migration['container'], 'test', 'test')
         hdrs, body = remote_swift.get_object(migration['container'], 'test')
         self.assertEqual(body, 'test')
+
+    def test_migrate_all_containers(self):
+
+        test_objects = [
+            ('swift-blobBBB2', 'blob content', {}),
+            ('swift-2unicod\u00e9', '\xde\xad\xbe\xef', {}),
+            ('swift-2with-headers',
+             'header-blob',
+             {'x-object-meta-custom-header': 'value',
+              'x-object-meta-unicod\u00e9': '\u262f',
+              'content-type': 'migrator/test',
+              'content-disposition': "attachment; filename='test-blob.jpg'",
+              'content-encoding': 'identity',
+              'x-delete-at': str(int(time.time() + 7200))})]
+
+        test_containers = ['container1', 'container2', 'container3']
+
+        def _check_objects_copied():
+            done = True
+            test_names = set([obj[0] for obj in test_objects])
+            for cont in test_containers:
+                try:
+                    hdrs, listing = self.nuser2_swift(
+                        'get_container', cont)
+                except swiftclient.exceptions.ClientException as ce:
+                    if '404' in str(ce):
+                        return False
+                    else:
+                        raise
+                swift_names = set([obj['name'] for obj in listing])
+                done = done and (test_names == swift_names)
+                if not done:
+                    return False
+            return True
+
+        for cont in test_containers:
+            self.swift_nuser.put_container(cont)
+            for name, body, headers in test_objects:
+                self.nuser_swift('put_object', cont, name,
+                                 StringIO.StringIO(body), headers=headers)
+
+        wait_for_condition(5, _check_objects_copied)
+
+        for name, expected_body, user_meta in test_objects:
+            for cont in test_containers:
+                hdrs, body = self.nuser2_swift('get_object', cont, name)
+                self.assertEqual(expected_body, body)
+                for k, v in user_meta.items():
+                    self.assertIn(k, hdrs)
+                    self.assertEqual(v, hdrs[k])
 
     def test_propagate_delete(self):
         migration = self.swift_migration()
