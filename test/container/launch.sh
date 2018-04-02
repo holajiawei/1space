@@ -12,6 +12,8 @@ touch /var/log/cloud-connector.log
 chown syslog:adm /var/log/cloud-connector.log
 chmod 644 /var/log/cloud-connector.log
 
+cp -f /swift-s3-sync/test/container/internal-client.conf /etc/swift/
+
 # Copied from the docker swift container. Unfortunately, there is no way to
 # plugin an additional invocation to start swift-s3-sync, so we had to do this.
 /usr/sbin/service rsyslog start

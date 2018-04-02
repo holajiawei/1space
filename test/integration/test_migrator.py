@@ -24,13 +24,15 @@ import time
 import urllib
 from . import (
     TestCloudSyncBase, clear_swift_container, wait_for_condition,
-    clear_s3_bucket)
+    clear_s3_bucket, clear_swift_account)
 
 
 class TestMigrator(TestCloudSyncBase):
     def tearDown(self):
         # Make sure all migration-related containers are cleared
         for container in self.test_conf['migrations']:
+            if container['aws_bucket'] == '/*':
+                continue
             if container['protocol'] == 'swift':
                 clear_swift_container(self.swift_dst,
                                       container['aws_bucket'])
@@ -43,7 +45,13 @@ class TestMigrator(TestCloudSyncBase):
                     if e.response['Error']['Code'] == 'NoSuchBucket':
                         continue
 
+        # Clean out all container accounts
+        clear_swift_account(self.swift_nuser)
+        clear_swift_account(self.swift_nuser2)
+
         for container in self.test_conf['migrations']:
+            if not container.get('container'):
+                continue
             with self.admin_conn_for(container['account']) as conn:
                 clear_swift_container(conn, container['container'])
                 clear_swift_container(conn,
@@ -291,13 +299,11 @@ class TestMigrator(TestCloudSyncBase):
         self.assertEqual(body, 'test')
 
     def test_migrate_all_containers(self):
-        migration = self._find_migration(
-            lambda cont: cont['aws_bucket'] == '/*')
 
         test_objects = [
-            ('swift-blobBBBB', 'blob content', {}),
-            ('swift-unicod\u00e9', '\xde\xad\xbe\xef', {}),
-            ('swift-with-headers',
+            ('swift-blobBBB2', 'blob content', {}),
+            ('swift-2unicod\u00e9', '\xde\xad\xbe\xef', {}),
+            ('swift-2with-headers',
              'header-blob',
              {'x-object-meta-custom-header': 'value',
               'x-object-meta-unicod\u00e9': '\u262f',
@@ -312,8 +318,14 @@ class TestMigrator(TestCloudSyncBase):
             done = True
             test_names = set([obj[0] for obj in test_objects])
             for cont in test_containers:
-                hdrs, listing = self.local_swift(
-                    'get_container', cont)
+                try:
+                    hdrs, listing = self.nuser2_swift(
+                        'get_container', cont)
+                except swiftclient.exceptions.ClientException as ce:
+                    if '404' in str(ce):
+                        return False
+                    else:
+                        raise
                 swift_names = set([obj['name'] for obj in listing])
                 done = done and (test_names == swift_names)
                 if not done:
@@ -321,18 +333,16 @@ class TestMigrator(TestCloudSyncBase):
             return True
 
         for cont in test_containers:
-            self.clear_containers_nuser.append(cont)
-            self.clear_containers_local.append(cont)
-
-        for name, body, headers in test_objects:
-            self.nuser_swift('put_object', migration['aws_bucket'], name,
-                             StringIO.StringIO(body), headers=headers)
+            self.swift_nuser.put_container(cont)
+            for name, body, headers in test_objects:
+                self.nuser_swift('put_object', cont, name,
+                                 StringIO.StringIO(body), headers=headers)
 
         wait_for_condition(5, _check_objects_copied)
 
         for name, expected_body, user_meta in test_objects:
             for cont in test_containers:
-                hdrs, body = self.local_swift('get_object', cont, name)
+                hdrs, body = self.nuser2_swift('get_object', cont, name)
                 self.assertEqual(expected_body, body)
                 for k, v in user_meta.items():
                     self.assertIn(k, hdrs)
