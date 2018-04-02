@@ -422,6 +422,13 @@ class TestMigrator(TestCloudSyncBase):
                     return False
                 if 'swift' not in listing[0].get('content_location', []):
                     return False
+                # I had the listing of the versions container assert, down
+                # below, fail (empty listing), which seems crazy, but we might
+                # as well synchronize on that as well, here.
+                hdrs, listing = self.local_swift(
+                    'get_container', versions_container)
+                if len(listing) == 0:
+                    return False
                 return True
             except swiftclient.exceptions.ClientException as e:
                 if e.http_status == 404:
