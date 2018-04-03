@@ -308,27 +308,46 @@ class TestCloudSyncBase(unittest.TestCase):
                 mapping['aws_account'] = acct_utf8.decode('utf8')
 
             # Now maybe auto-create some containers
-            if mapping.get('container', '').startswith('no-auto-'):
-                continue
             if mapping.get('aws_bucket') == '/*':
                 continue
-            if mapping['protocol'] == 'swift' and mapping.get('aws_bucket'):
-                # For now, the aws_bucket is just a prefix, not a container
-                # name for a swift destination that has a source container of
-                # /*.  So don't create a container of that name.
-                if mapping.get('container') != '/*':
-                    conn = klass.conn_for_acct_noshunt(mapping['aws_account'])
-                    conn.put_container(mapping['aws_bucket'])
+            if not container['aws_bucket'].startswith('no-auto-'):
+                if mapping['protocol'] == 'swift' and \
+                        mapping.get('aws_bucket'):
+                    # For now, the aws_bucket is just a prefix, not a container
+                    # name for a swift destination that has a source container
+                    # of /*.  So don't create a container of that name.
+                    if mapping.get('container') != '/*':
+                        conn = klass.conn_for_acct_noshunt(
+                            mapping['aws_account'])
+                        conn.put_container(mapping['aws_bucket'])
+                else:
+                    try:
+                        klass.s3_client.create_bucket(
+                            Bucket=mapping['aws_bucket'])
+                    except botocore.exceptions.ClientError as e:
+                        if e.response['Error']['Code'] == 409:
+                            pass
             else:
-                try:
-                    klass.s3_client.create_bucket(
-                        Bucket=mapping['aws_bucket'])
-                except botocore.exceptions.ClientError as e:
-                    if e.response['Error']['Code'] == 409:
-                        pass
+                # Remove any no-auto create containers for swift
+                if mapping['protocol'] == 'swift':
+                    try:
+                        conn = klass.conn_for_acct_noshunt(
+                            mapping['aws_account'])
+                        conn.delete_container(mapping['aws_bucket'])
+                    except swiftclient.exceptions.ClientException as e:
+                        if e.http_status == 404:
+                            continue
+                        raise
             if mapping.get('container') and mapping.get('container') != '/*':
                 conn = klass.conn_for_acct_noshunt(mapping['account'])
-                conn.put_container(mapping['container'])
+                if mapping['container'].startswith('no-auto-'):
+                    try:
+                        conn.delete_container(mapping['container'])
+                    except swiftclient.exceptions.ClientException as e:
+                        if e.http_status != 404:
+                            raise
+                else:
+                    conn.put_container(mapping['container'])
 
         klass.swift_src = klass.conn_for_acct('AUTH_test')
         klass.swift_dst = klass.conn_for_acct(
@@ -382,6 +401,9 @@ class TestCloudSyncBase(unittest.TestCase):
 
     def remote_swift(self, method, *args, **kwargs):
         return getattr(self.swift_dst, method)(*args, **kwargs)
+
+    def local_noshunt(self, method, *args, **kwargs):
+        return getattr(self.swift_noshunt, method)(*args, **kwargs)
 
     def cloud_connector(self, method, *args, **kwargs):
         return getattr(self.cloud_connector_client, method)(*args, **kwargs)
