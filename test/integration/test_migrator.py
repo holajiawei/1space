@@ -31,6 +31,11 @@ class TestMigrator(TestCloudSyncBase):
     def tearDown(self):
         # Make sure all migration-related containers are cleared
         for container in self.test_conf['migrations']:
+            if container.get('container'):
+                conn = self.conn_for_acct_noshunt(container['account'])
+                clear_swift_container(conn, container['container'])
+                clear_swift_container(conn,
+                                      container['container'] + '_segments')
             if container['aws_bucket'] == '/*':
                 continue
             if container['protocol'] == 'swift':
@@ -48,14 +53,6 @@ class TestMigrator(TestCloudSyncBase):
         # Clean out all container accounts
         clear_swift_account(self.swift_nuser)
         clear_swift_account(self.swift_nuser2)
-
-        for container in self.test_conf['migrations']:
-            if not container.get('container'):
-                continue
-            with self.admin_conn_for(container['account']) as conn:
-                clear_swift_container(conn, container['container'])
-                clear_swift_container(conn,
-                                      container['container'] + '_segments')
 
     def test_s3_migration(self):
         migration = self.s3_migration()
