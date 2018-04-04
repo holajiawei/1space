@@ -43,8 +43,8 @@ cd /swift-s3-sync; pip install -e .
 
 python -m s3_sync --log-level debug \
     --config /swift-s3-sync/test/container/swift-s3-sync.conf &
-swift-s3-migrator --log-level debug \
-    --config /swift-s3-sync/test/container/swift-s3-sync.conf &
+# NOTE: integration tests will run the migrator as needed so they can better
+# control the timing of actions.
 
 /usr/bin/java -DLOG_LEVEL=debug -jar /s3proxy/s3proxy \
     --properties /swift-s3-sync/test/container/s3proxy.properties \
@@ -55,7 +55,7 @@ sleep 5  # let S3Proxy start up
 # Set up stuff for cloud-connector
 export CONF_BUCKET=cloud-connector-conf
 export CONF_ENDPOINT=http://localhost:10080
-pip install s3cmd
+# s3cmd is pip-installed in the Dockerfile
 s3cmd -c /swift-s3-sync/s3cfg mb s3://$CONF_BUCKET ||:
 s3cmd -c /swift-s3-sync/s3cfg put /swift-s3-sync/test/container/cloud-connector.conf \
     s3://$CONF_BUCKET

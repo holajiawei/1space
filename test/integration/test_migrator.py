@@ -80,7 +80,8 @@ class TestMigrator(TestCloudSyncBase):
                     Body=StringIO.StringIO(body), Metadata=headers,
                     **kwargs)
 
-        wait_for_condition(5, _check_objects_copied)
+        with self.migrator_running():
+            wait_for_condition(5, _check_objects_copied)
 
         for name, expected_body, user_meta, req_headers in test_objects:
             hdrs, body = self.local_swift(
@@ -127,7 +128,8 @@ class TestMigrator(TestCloudSyncBase):
             self.remote_swift('put_object', migration['aws_bucket'], name,
                               StringIO.StringIO(body), headers=headers)
 
-        wait_for_condition(5, _check_objects_copied)
+        with self.migrator_running():
+            wait_for_condition(5, _check_objects_copied)
 
         for name, expected_body, user_meta in test_objects:
             for swift in [self.local_swift, self.remote_swift]:
@@ -193,7 +195,8 @@ class TestMigrator(TestCloudSyncBase):
                 ['dlo-part-%d' % i for i in range(10)])
             return expected == set(segments)
 
-        wait_for_condition(5, _check_objects_copied)
+        with self.migrator_running():
+            wait_for_condition(5, _check_objects_copied)
 
         mismatched = []
 
@@ -248,7 +251,8 @@ class TestMigrator(TestCloudSyncBase):
             self.remote_swift('put_object', migration['aws_bucket'], name,
                               StringIO.StringIO(body), headers=headers)
 
-        wait_for_condition(5, _check_objects_copied)
+        with self.migrator_running():
+            wait_for_condition(5, _check_objects_copied)
 
         for name, expected_body, user_meta in test_objects:
             for swift, bkey in [(self.local_swift, 'container'),
@@ -278,7 +282,9 @@ class TestMigrator(TestCloudSyncBase):
                     return False
                 raise
 
-        hdrs, listing = wait_for_condition(5, _check_container_created)
+        with self.migrator_running():
+            hdrs, listing = wait_for_condition(5, _check_container_created)
+
         self.assertIn('x-container-meta-test', hdrs)
         self.assertEqual('test metadata', hdrs['x-container-meta-test'])
 
@@ -335,7 +341,8 @@ class TestMigrator(TestCloudSyncBase):
                 self.nuser_swift('put_object', cont, name,
                                  StringIO.StringIO(body), headers=headers)
 
-        wait_for_condition(5, _check_objects_copied)
+        with self.migrator_running():
+            wait_for_condition(5, _check_objects_copied)
 
         for name, expected_body, user_meta in test_objects:
             for cont in test_containers:
@@ -364,14 +371,16 @@ class TestMigrator(TestCloudSyncBase):
         self.remote_swift('put_object', migration['aws_bucket'], key,
                           StringIO.StringIO(content))
 
-        wait_for_condition(5, _check_object_copied)
+        with self.migrator_running():
+            wait_for_condition(5, _check_object_copied)
 
-        for swift in [self.local_swift, self.remote_swift]:
-            hdrs, body = swift('get_object', migration['container'], key)
-            self.assertEqual(content, body)
+            for swift in [self.local_swift, self.remote_swift]:
+                hdrs, body = swift('get_object', migration['container'], key)
+                self.assertEqual(content, body)
 
-        self.local_swift('delete_object', migration['container'], key)
-        wait_for_condition(5, _check_removed)
+            self.local_swift('delete_object', migration['container'], key)
+
+            wait_for_condition(5, _check_removed)
 
         _, listing = self.local_swift('get_container', migration['container'])
         self.assertEqual([], listing)
@@ -432,7 +441,8 @@ class TestMigrator(TestCloudSyncBase):
                     return False
                 raise
 
-        wait_for_condition(5, _check_objects_copied)
+        with self.migrator_running():
+            wait_for_condition(5, _check_objects_copied)
 
         hdrs, listing = self.local_swift(
             'get_container', migration['container'])
@@ -505,7 +515,8 @@ class TestMigrator(TestCloudSyncBase):
                     return False
                 raise
 
-        wait_for_condition(5, _check_objects_copied)
+        with self.migrator_running():
+            wait_for_condition(5, _check_objects_copied)
 
         hdrs, listing = self.local_swift(
             'get_container', migration['container'])
