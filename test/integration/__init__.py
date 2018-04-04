@@ -16,14 +16,66 @@ limitations under the License.
 
 import boto3
 import botocore.exceptions
+from contextlib import contextmanager
 import hashlib
 import json
 import os
+import psutil
+import signal
 import subprocess
 import swiftclient
 import time
 import unittest
 import urllib
+
+
+def wait_for_condition(timeout, checker):
+    start = time.time()
+    while time.time() < start + timeout:
+        ret = checker()
+        if ret:
+            return ret
+        time.sleep(0.1)
+    raise RuntimeError('Timeout (%s) expired' % timeout)
+
+
+def kill_a_pid(a_pid, timeout=4):
+    """
+    Kills a PID with SIGTERM, waits a specified number of seconds, then sends a
+    SIGKILL if the process hasn't exited yet.
+    """
+    def not_running():
+        try:
+            # NOTE: this is critical for migrator_running() to work
+            os.waitpid(a_pid, os.WNOHANG)  # reap zombie if possible
+        except Exception:
+            pass
+        try:
+            return not psutil.Process(a_pid).is_running()
+        except psutil.NoSuchProcess:
+            return True
+
+    os.kill(a_pid, signal.SIGTERM)
+    try:
+        wait_for_condition(timeout, not_running)
+    except RuntimeError:
+        os.kill(a_pid, signal.SIGKILL)
+        try:
+            wait_for_condition(timeout, not_running)
+        except RuntimeError:
+            raise Exception('Failed to kill pid %d' % a_pid)
+
+
+def is_migrator_running():
+    """
+    Returns the PID of a running migrator, or a false value otherwise.
+    """
+    for proc in psutil.process_iter():
+        try:
+            if 'swift-s3-migrator' in '\0'.join(proc.cmdline()):
+                return proc.pid
+        except Exception:
+            pass
 
 
 def clear_swift_container(client, container):
@@ -51,16 +103,6 @@ def clear_s3_bucket(client, bucket):
 def clear_swift_account(client):
     for cont in client.get_account()[1]:
         clear_swift_container(client, cont['name'])
-
-
-def wait_for_condition(timeout, checker):
-    start = time.time()
-    while time.time() < start + timeout:
-        ret = checker()
-        if ret:
-            return ret
-        time.sleep(0.1)
-    raise RuntimeError('Timeout expired')
 
 
 def s3_prefix(account, container, key):
@@ -341,6 +383,31 @@ class TestCloudSyncBase(unittest.TestCase):
 
     def s3(self, method, *args, **kwargs):
         return getattr(self.s3_client, method)(*args, **kwargs)
+
+    @contextmanager
+    def migrator_running(self):
+        """
+        Context manager that starts the migrator and then ensures it gets
+        stopped when the context is exited.
+        """
+        old_migrator_pid = is_migrator_running()
+        if old_migrator_pid:
+            kill_a_pid(old_migrator_pid)
+
+        devnull = open('/dev/null', 'wb')
+        proc = subprocess.Popen(
+            ['/usr/bin/python', '/usr/local/bin/swift-s3-migrator',
+             '--log-level', 'debug', '--config',
+             '/swift-s3-sync/test/container/swift-s3-sync.conf'],
+            close_fds=True,
+            cwd='/',
+            stdout=devnull, stderr=devnull)
+        try:
+            yield
+        finally:
+            devnull.close()
+            if proc.poll() is None:
+                kill_a_pid(proc.pid)
 
     @classmethod
     def _find_mapping(klass, matcher):
