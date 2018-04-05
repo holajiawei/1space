@@ -153,7 +153,7 @@ class S3SyncShunt(object):
             # TODO: think about what to do for POST, COPY
             return self.handle_object(req, start_response, sync_profile, obj,
                                       per_account)
-        elif obj and req.method == 'POST':
+        elif req.method == 'POST':
             return self.handle_post(req, start_response, sync_profile, obj,
                                     per_account)
 
@@ -331,6 +331,10 @@ class S3SyncShunt(object):
 
         if sync_profile.get('protocol') != 'swift':
             # TODO: Add S3 support
+            start_response(status, headers)
+            return app_iter
+
+        if not obj and not sync_profile.get('migration'):
             start_response(status, headers)
             return app_iter
 

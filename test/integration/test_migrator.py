@@ -467,6 +467,49 @@ class TestMigrator(TestCloudSyncBase):
         self.local_swift('put_container', migration['container'])
         self.remote_swift('put_container', migration['aws_bucket'])
 
+    def test_propagate_container_meta(self):
+        migration = self.swift_migration()
+        expected_meta = {
+            u'x-container-meta-migrated-\u062a': u'new-meta \u062a'}
+
+        # Since the shunt will propagate a container delete, we use the
+        # no-shunt proxy
+        conn_noshunt = self.conn_for_acct_noshunt(migration['account'])
+        conn_noshunt.delete_container(migration['container'])
+        self.local_swift('post_container', migration['container'],
+                         headers=expected_meta)
+
+        hdrs = self.remote_swift(
+            'head_container', migration['aws_bucket'])
+        self.assertEqual(
+            u'new-meta \u062a', hdrs.get(u'x-container-meta-migrated-\u062a'))
+
+        self.local_swift('put_container', migration['container'])
+        # The headers should no longer be visible on this container, as the
+        # local container should be authoritative and the shunt should not
+        # include any headers from the remote container.
+        new_hdrs = self.local_swift(
+            'head_container', migration['container'])
+        self.assertNotIn(u'x-container-meta-migrated-\u062a', new_hdrs)
+
+    def test_propagate_object_meta(self):
+        migration = self.swift_migration()
+        key = u'test_object-\u062a'
+        content = 'test object'
+        expected_meta = {
+            u'x-object-meta-migration-\u062a': u'new object meta \u062a'}
+
+        self.remote_swift('put_object', migration['aws_bucket'], key,
+                          StringIO.StringIO(content))
+        self.local_swift('post_object', migration['container'], key,
+                         headers=expected_meta)
+        hdrs = self.remote_swift(
+            'head_object', migration['aws_bucket'], key)
+        self.assertEqual(u'new object meta \u062a',
+                         hdrs.get(u'x-object-meta-migration-\u062a'))
+
+        clear_swift_container(self.swift_dst, migration['aws_bucket'])
+
     def test_swift_versions_location(self):
         migration = self._find_migration(
             lambda cont: cont['container'] == 'no-auto-versioning')
