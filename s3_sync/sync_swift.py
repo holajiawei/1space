@@ -55,7 +55,8 @@ class SyncSwift(BaseSync):
         if self.settings.get('remote_account'):
             scheme, rest = endpoint.split(':', 1)
             host = urllib.splithost(rest)[0]
-            path = '/v1/%s' % urllib.quote(self.settings['remote_account'])
+            path = '/v1/%s' % urllib.quote(
+                self.settings['remote_account'].encode('utf8'))
             os_options = {
                 'object_storage_url': '%s:%s%s' % (scheme, host, path)}
 

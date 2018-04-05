@@ -1,6 +1,7 @@
 #!/bin/bash
 
-# This will be fast if your bouncy is already up to date
+# This will be fast if your bouncestorage base image is already up to date in
+# your docker image library.
 docker pull bouncestorage/swift-aio
 # The --build is safe because if nothing in the Dockerfile has changed, it'll
 # just quickly "build" entirely from cache and not do anything.

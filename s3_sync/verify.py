@@ -94,15 +94,19 @@ def main(args=None):
     parser.add_argument('--account')
     parser.add_argument('--bucket')
     args = parser.parse_args(args)
+    # We normalize the conf to Unicode strings since that's how they come out
+    # of the JSON file.
     conf = {
         'protocol': args.protocol,
         'account': 'verify-auth',
         'container': u'testing-\U0001f44d',
         'aws_endpoint': args.endpoint,
-        'aws_identity': args.username,
-        'aws_secret': args.password,
-        'remote_account': args.account,
-        'aws_bucket': args.bucket,
+        'aws_identity': args.username.decode('utf8'),
+        'aws_secret': args.password.decode('utf8'),
+        'remote_account':
+        args.account.decode('utf8') if args.account else args.account,
+        'aws_bucket': args.bucket.decode('utf8') if args.bucket
+        else args.bucket,
     }
     if args.account and args.protocol != 'swift':
         return 'Invalid argument: account is only valid with swift protocol'
