@@ -283,9 +283,13 @@ class TestCloudSyncBase(unittest.TestCase):
 
             if mapping['protocol'] == 'swift':
                 # Get conns for the other side, too
-                conn_key = (mapping['aws_endpoint'], mapping['aws_identity'],
-                            mapping['aws_secret'])
-                acct_utf8 = url_user_key_to_acct.get(conn_key)
+                if mapping.get('remote_account'):
+                    acct_utf8 = mapping['remote_account'].encode('utf8')
+                else:
+                    conn_key = (mapping['aws_endpoint'],
+                                mapping['aws_identity'],
+                                mapping['aws_secret'])
+                    acct_utf8 = url_user_key_to_acct.get(conn_key)
                 if not acct_utf8:
                     # Need to auth to get acct name, then add it to the cache
                     conn = swiftclient.client.Connection(

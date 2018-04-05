@@ -254,7 +254,7 @@ class SwiftPutWrapper(object):
         resp = self.put_thread.wait()
         if not resp.is_success and self.logger:
             self.logger.warning(
-                'Failed to restore the object: %d' % resp.status)
+                'Failed to restore the object: %s' % resp.status)
         close_if_possible(resp.app_iter)
         return resp
 
