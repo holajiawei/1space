@@ -216,14 +216,20 @@ class SyncSwift(BaseSync):
         return resp.to_wsgi()
 
     def shunt_delete(self, req, swift_key):
-        """Propagate metadata to the remote store
+        """Propagate delete to the remote store
 
          :returns: (status, headers, body_iter) tuple
         """
         headers = dict([(k, req.headers[k]) for k in req.headers.keys()
                         if req.headers[k]])
-        resp = self._call_swiftclient(
-            'delete_object', self.remote_container, swift_key, headers=headers)
+        if not swift_key:
+            resp = self._call_swiftclient(
+                'delete_container', self.remote_container, None,
+                headers=headers)
+        else:
+            resp = self._call_swiftclient(
+                'delete_object', self.remote_container, swift_key,
+                headers=headers)
         return resp.to_wsgi()
 
     def head_object(self, swift_key, bucket=None, **options):

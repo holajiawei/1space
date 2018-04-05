@@ -419,13 +419,34 @@ class TestMigrator(TestCloudSyncBase):
         def _check_object_copied():
             hdrs, listing = self.local_swift(
                 'get_container', migration['container'])
-            names = [obj['name'] for obj in listing]
-            return names[0] == key
+            if not listing:
+                return False
+            if listing[0]['name'] != key:
+                return False
+            if 'swift' not in listing[0]['content_location']:
+                return False
+            return True
 
         def _check_removed():
             _, listing = self.local_swift(
                 'get_container', migration['container'])
             return listing == []
+
+        def _container_exists(client, container):
+            try:
+                client('get_container', container)
+                return True
+            except swiftclient.exceptions.ClientException as e:
+                if e.http_status == 404:
+                    return False
+                raise
+
+        def _check_removed_container():
+            if _container_exists(self.local_swift, migration['container']):
+                return False
+            if _container_exists(self.remote_swift, migration['aws_bucket']):
+                return False
+            return True
 
         self.remote_swift('put_object', migration['aws_bucket'], key,
                           StringIO.StringIO(content))
@@ -438,14 +459,13 @@ class TestMigrator(TestCloudSyncBase):
                 self.assertEqual(content, body)
 
             self.local_swift('delete_object', migration['container'], key)
-
             wait_for_condition(5, _check_removed)
+            self.local_swift('delete_container', migration['container'])
+            wait_for_condition(5, _check_removed_container)
 
-        _, listing = self.local_swift('get_container', migration['container'])
-        self.assertEqual([], listing)
-
-        clear_swift_container(self.swift_dst, migration['aws_bucket'])
-        clear_swift_container(self.swift_src, migration['container'])
+        # recreate the removed container for future tests
+        self.local_swift('put_container', migration['container'])
+        self.remote_swift('put_container', migration['aws_bucket'])
 
     def test_swift_versions_location(self):
         migration = self._find_migration(
