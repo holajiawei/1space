@@ -302,6 +302,9 @@ class TestCloudSyncBase(unittest.TestCase):
                 # As a convenience for ourselves, we'll stick the resolved
                 # remote Swift account name in the mapping as "aws_account"
                 # (stored as Unicode string for consistency)
+                # TODO(darrell): maybe use `remote_account` since the
+                # SwiftSync() class can eat that already, so there's precedent
+                # for the storage key name.
                 mapping['aws_account'] = acct_utf8.decode('utf8')
 
             # Now maybe auto-create some containers
@@ -309,9 +312,13 @@ class TestCloudSyncBase(unittest.TestCase):
                 continue
             if mapping.get('aws_bucket') == '/*':
                 continue
-            if mapping['protocol'] == 'swift':
-                conn = klass.conn_for_acct_noshunt(mapping['aws_account'])
-                conn.put_container(mapping['aws_bucket'])
+            if mapping['protocol'] == 'swift' and mapping.get('aws_bucket'):
+                # For now, the aws_bucket is just a prefix, not a container
+                # name for a swift destination that has a source container of
+                # /*.  So don't create a container of that name.
+                if mapping.get('container') != '/*':
+                    conn = klass.conn_for_acct_noshunt(mapping['aws_account'])
+                    conn.put_container(mapping['aws_bucket'])
             else:
                 try:
                     klass.s3_client.create_bucket(
@@ -319,7 +326,7 @@ class TestCloudSyncBase(unittest.TestCase):
                 except botocore.exceptions.ClientError as e:
                     if e.response['Error']['Code'] == 409:
                         pass
-            if mapping.get('container'):
+            if mapping.get('container') and mapping.get('container') != '/*':
                 conn = klass.conn_for_acct_noshunt(mapping['account'])
                 conn.put_container(mapping['container'])
 
@@ -412,6 +419,25 @@ class TestCloudSyncBase(unittest.TestCase):
             devnull.close()
             if proc.poll() is None:
                 kill_a_pid(proc.pid)
+
+    def get_swift_tree(self, conn):
+        return [
+            container['name']
+            for container in conn.get_account()[1]
+        ] + [
+            container['name'] + '/' + obj['name']
+            for container in conn.get_account()[1]
+            for obj in conn.get_container(container['name'])[1]]
+
+    def get_s3_tree(self):
+        return [
+            bucket['Name']
+            for bucket in self.s3_client.list_buckets()['Buckets']
+        ] + [
+            bucket['Name'] + '/' + obj['Key']
+            for bucket in self.s3_client.list_buckets()['Buckets']
+            for obj in self.s3_client.list_objects(
+                Bucket=bucket['Name']).get('Contents', [])]
 
     @classmethod
     def _find_mapping(klass, matcher):
