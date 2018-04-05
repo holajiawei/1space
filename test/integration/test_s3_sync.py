@@ -54,6 +54,36 @@ class TestCloudSync(TestCloudSyncBase):
             entry['content_location'])
         self.assertEqual(etag, get_etag(key))
 
+    def test_swift_sync_slash_star(self):
+        mapping = self._find_mapping(
+            lambda m: m['aws_bucket'] == 'crazy-target:')
+        target_conn = self.conn_for_acct_noshunt(mapping['aws_account'])
+
+        conn = self.conn_for_acct(mapping['account'])
+        puts = [  # (container, obj, body)
+            ('slashc1', 'c1.o1', 'the c1 o1'),
+            ('slashc1', 'c1.o2', 'the c1 o2'),
+            ('slashc2', 'c2.o1', 'the c2 o2')]
+        for cont, obj, body in puts:
+            conn.put_container(cont)
+            got_etag = conn.put_object(cont, obj, body)
+            self.assertEqual(hashlib.md5(body).hexdigest(), got_etag)
+
+        def _check_objs():
+            # The tree should have 2 containers and 3 objs
+            return len(self.get_swift_tree(target_conn)) == 5
+
+        try:
+            wait_for_condition(5, _check_objs)
+        except RuntimeError:
+            pass
+
+        self.assertEqual(['crazy-target:slashc1', 'crazy-target:slashc2',
+                          'crazy-target:slashc1/c1.o1',
+                          'crazy-target:slashc1/c1.o2',
+                          'crazy-target:slashc2/c2.o1'],
+                         self.get_swift_tree(target_conn))
+
     def test_s3_sync(self):
         s3_mapping = self.s3_sync_mapping()
 
