@@ -6,9 +6,9 @@ from . import TestCloudSyncBase
 def swift_is_unchanged(func):
     @wraps(func)
     def wrapper(test):
-        before = test.get_swift_tree()
+        before = test.get_swift_tree(test.swift_dst)
         func(test)
-        test.assertEqual(before, test.get_swift_tree())
+        test.assertEqual(before, test.get_swift_tree(test.swift_dst))
     return wrapper
 
 
@@ -31,25 +31,6 @@ class TestVerify(TestCloudSyncBase):
                 self.s3_bucket = container['aws_bucket']
             if self.swift_container and self.s3_bucket:
                 break
-
-    def get_swift_tree(self):
-        return [
-            container['name']
-            for container in self.swift_dst.get_account()[1]
-        ] + [
-            container['name'] + '/' + obj['name']
-            for container in self.swift_dst.get_account()[1]
-            for obj in self.swift_dst.get_container(container['name'])[1]]
-
-    def get_s3_tree(self):
-        return [
-            bucket['Name']
-            for bucket in self.s3_client.list_buckets()['Buckets']
-        ] + [
-            bucket['Name'] + '/' + obj['Key']
-            for bucket in self.s3_client.list_buckets()['Buckets']
-            for obj in self.s3_client.list_objects(
-                Bucket=bucket['Name']).get('Contents', [])]
 
     @swift_is_unchanged
     def test_swift_no_container(self):
