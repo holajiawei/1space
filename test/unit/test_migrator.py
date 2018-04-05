@@ -1063,12 +1063,12 @@ class TestMigrator(unittest.TestCase):
                 'remote_headers': {
                     'x-object-meta-custom': 'slo-meta',
                     'last-modified': create_timestamp(1.5e9),
-                    'x-static-large-object': True},
+                    'x-static-large-object': 'True'},
                 'expected_headers': {
                     'x-object-meta-custom': 'slo-meta',
                     'x-timestamp': Timestamp(1.5e9).internal,
-                    'x-static-large-object': True,
-                    'Content-Length': len(json.dumps(manifest))}
+                    'x-static-large-object': 'True',
+                    'Content-Length': str(len(json.dumps(manifest)))}
             },
             'part1': {
                 'remote_headers': {

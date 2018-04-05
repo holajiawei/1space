@@ -16,6 +16,7 @@ limitations under the License.
 
 
 import botocore
+from functools import partial
 import hashlib
 import json
 import StringIO
@@ -108,36 +109,94 @@ class TestMigrator(TestCloudSyncBase):
 
         test_objects = [
             ('swift-blob', 'blob content', {}),
-            ('swift-unicod\u00e9', '\xde\xad\xbe\xef', {}),
+            (u'swift-unicod\u00e9'.encode('utf8'), '\xde\xad\xbe\xef', {}),
             ('swift-with-headers',
              'header-blob',
              {'x-object-meta-custom-header': 'value',
-              'x-object-meta-unicod\u00e9': '\u262f',
+              u'x-object-meta-unicod\u00e9'.encode('utf8'):
+              u'\u262f'.encode('utf8'),
               'content-type': 'migrator/test',
               'content-disposition': "attachment; filename='test-blob.jpg'",
               'content-encoding': 'identity',
               'x-delete-at': str(int(time.time() + 7200))})]
 
-        def _check_objects_copied():
-            hdrs, listing = self.local_swift(
-                'get_container', migration['container'])
-            swift_names = [obj['name'] for obj in listing]
+        conn_remote = self.conn_for_acct(migration['aws_account'])
+        conn_noshunt = self.conn_for_acct_noshunt(migration['account'])
+        conn_local = self.conn_for_acct(migration['account'])
+
+        def _check_objects_copied(conn):
+            hdrs, listing = conn.get_container(migration['container'])
+            swift_names = [obj['name'].encode('utf8') for obj in listing]
             return set([obj[0] for obj in test_objects]) == set(swift_names)
 
         for name, body, headers in test_objects:
-            self.remote_swift('put_object', migration['aws_bucket'], name,
-                              StringIO.StringIO(body), headers=headers)
+            conn_remote.put_object(migration['aws_bucket'], name,
+                                   StringIO.StringIO(body),
+                                   headers=headers)
+
+        # Sanity-check (not actually migrated yet)
+        self.assertFalse(_check_objects_copied(conn_noshunt))
+
+        # But they are visible through the shunt
+        self.assertTrue(_check_objects_copied(conn_local))
 
         with self.migrator_running():
-            wait_for_condition(5, _check_objects_copied)
+            wait_for_condition(5, partial(_check_objects_copied, conn_noshunt))
 
         for name, expected_body, user_meta in test_objects:
-            for swift in [self.local_swift, self.remote_swift]:
-                hdrs, body = swift('get_object', migration['container'], name)
+            for conn in (conn_remote, conn_noshunt, conn_local):
+                hdrs, body = conn.get_object(migration['container'], name)
                 self.assertEqual(expected_body, body)
                 for k, v in user_meta.items():
-                    self.assertIn(k, hdrs)
-                    self.assertEqual(v, hdrs[k])
+                    self.assertIn(k.decode('utf8'), hdrs)
+                    self.assertEqual(v.decode('utf8'), hdrs[k.decode('utf8')])
+
+    def test_swift_migration_unicode_acct(self):
+        migration = self._find_migration(
+            lambda m: m.get('container') == 'flotty')
+
+        test_objects = [
+            ('swift-blog', 'blog content', {}),
+            (u'swift-unicog\u00e9'.encode('utf8'), 'g\xde\xad\xbe\xef', {}),
+            ('swift-with-headerg',
+             'header-blog',
+             {'x-object-meta-custom-headeg': 'valug',
+              u'x-object-meta-unicog\u00e9'.encode('utf8'):
+              u'\u262fg'.encode('utf8'),
+              'content-type': 'migrator/tesg',
+              'content-disposition': "attachment; filename='test-blog.jpg'",
+              'content-encoding': 'identitg',
+              'x-delete-at': str(int(time.time() + 7200))})]
+
+        conn_remote = self.conn_for_acct(migration['remote_account'])
+        conn_noshunt = self.conn_for_acct_noshunt(migration['account'])
+        conn_local = self.conn_for_acct(migration['account'])
+
+        def _check_objects_copied(conn):
+            hdrs, listing = conn.get_container(migration['container'])
+            swift_names = [obj['name'].encode('utf8') for obj in listing]
+            return set([obj[0] for obj in test_objects]) == set(swift_names)
+
+        for name, body, headers in test_objects:
+            conn_remote.put_object(migration['aws_bucket'], name,
+                                   StringIO.StringIO(body), headers=headers)
+
+        # Sanity-check (not actually migrated yet)
+        self.assertFalse(_check_objects_copied(conn_noshunt))
+
+        # But they are visible through the shunt
+        self.assertTrue(_check_objects_copied(conn_local))
+
+        with self.migrator_running():
+            wait_for_condition(5, partial(_check_objects_copied, conn_noshunt))
+
+        for name, expected_body, user_meta in test_objects:
+            for conn in (conn_remote, conn_noshunt, conn_local):
+                hdrs, body = conn.get_object(migration['container'], name)
+                self.assertEqual(expected_body, body)
+                for k, v in user_meta.items():
+                    self.assertIn(k.decode('utf8'), hdrs)
+                    self.assertEqual(v.decode('utf8'), hdrs[k.decode('utf8')])
 
     def test_swift_large_objects(self):
         migration = self.swift_migration()

@@ -598,7 +598,7 @@ class Migrator(object):
             work = MigrateObjectWork(container, container, segment_key)
             self.object_queue.put(work)
         manifest_blob = json.dumps(manifest)
-        headers['Content-Length'] = len(manifest_blob)
+        headers['Content-Length'] = str(len(manifest_blob))
         work = UploadObjectWork(slo_container, key,
                                 FileLikeIter(manifest_blob), headers)
         self.object_queue.put(work)
@@ -613,6 +613,9 @@ class Migrator(object):
             ts = Timestamp((ts - EPOCH).total_seconds()).internal
             headers['x-timestamp'] = ts
         del headers['last-modified']
+        # Encode all headers as UTF8
+        headers = {k.encode('utf8'): v.encode('utf8')
+                   for k, v in headers.items()}
         with self.ic_pool.item() as ic:
             try:
                 ic.upload_object(
