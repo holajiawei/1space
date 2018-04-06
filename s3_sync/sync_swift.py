@@ -278,7 +278,7 @@ class SyncSwift(BaseSync):
                 else:
                     resp = getattr(client, op)(container, key, **args)
                 if not resp:
-                    return ProviderResponse(True, '204 No Content', {}, [''])
+                    return ProviderResponse(True, 204, {}, [''])
 
                 if isinstance(resp, tuple):
                     headers, body = resp
