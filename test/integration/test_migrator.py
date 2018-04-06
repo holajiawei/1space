@@ -375,17 +375,25 @@ class TestMigrator(TestCloudSyncBase):
                                    'x-container-meta-test': 'test metadata'})
 
         conn_noshunt = self.conn_for_acct_noshunt(migration['account'])
+        conn_local = self.conn_for_acct(migration['account'])
 
-        def _check_container_created():
+        def _check_container_created(conn):
             try:
-                return conn_noshunt.get_container(migration['container'])
+                return conn.get_container(migration['container'])
             except swiftclient.exceptions.ClientException as e:
                 if e.http_status == 404:
                     return False
                 raise
 
+        res = _check_container_created(conn_local)
+        self.assertTrue(res)
+        hdrs, listing = res
+        self.assertIn('x-container-meta-test', hdrs)
+        self.assertEqual('test metadata', hdrs['x-container-meta-test'])
+
         with self.migrator_running():
-            hdrs, listing = wait_for_condition(5, _check_container_created)
+            hdrs, listing = wait_for_condition(5, partial(
+                _check_container_created, conn_noshunt))
 
         self.assertIn('x-container-meta-test', hdrs)
         self.assertEqual('test metadata', hdrs['x-container-meta-test'])

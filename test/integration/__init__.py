@@ -406,9 +406,6 @@ class TestCloudSyncBase(unittest.TestCase):
     def remote_swift(self, method, *args, **kwargs):
         return getattr(self.swift_dst, method)(*args, **kwargs)
 
-    def local_noshunt(self, method, *args, **kwargs):
-        return getattr(self.swift_noshunt, method)(*args, **kwargs)
-
     def cloud_connector(self, method, *args, **kwargs):
         return getattr(self.cloud_connector_client, method)(*args, **kwargs)
 
