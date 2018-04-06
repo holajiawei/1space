@@ -257,9 +257,19 @@ class SyncSwift(BaseSync):
         return self._call_swiftclient(
             'head_container', bucket, None, **options)
 
-    def list_buckets(self):
-        resp = self._call_swiftclient('get_account', None, None)
-        if resp.status == 200:
+    def list_buckets(self, marker, limit, prefix, parse_modified=True):
+        resp = self._call_swiftclient(
+            'get_account', None, None,
+            marker=marker, prefix=prefix, limit=limit)
+
+        if resp.status != 200:
+            return resp
+
+        for entry in resp.body:
+            entry['content_location'] = self._make_content_location(
+                entry['name'])
+
+        if parse_modified:
             for container in resp.body:
                 container['last_modified'] = datetime.datetime.strptime(
                     container['last_modified'], SWIFT_TIME_FMT)
@@ -318,6 +328,15 @@ class SyncSwift(BaseSync):
             with self.client_pool.get_client() as swift_client:
                 return _perform_op(swift_client)
 
+    def _make_content_location(self, bucket):
+        # If the identity gets in here as UTF8-encoded string (e.g. through the
+        # verify command's CLI, if the creds contain Unicode chars), then it
+        # needs to be upconverted to Unicode string.
+        u_ident = self.settings['aws_identity'] if isinstance(
+            self.settings['aws_identity'], unicode) else \
+            self.settings['aws_identity'].decode('utf8')
+        return '%s;%s;%s' % (self.endpoint, u_ident, bucket)
+
     def list_objects(self, marker, limit, prefix, delimiter=None,
                      bucket=None):
         if bucket is None:
@@ -329,15 +348,8 @@ class SyncSwift(BaseSync):
         if not resp.success:
             return resp
 
-        # If the identity gets in here as UTF8-encoded string (e.g. through the
-        # verify command's CLI, if the creds contain Unicode chars), then it
-        # needs to be upconverted to Unicode string.
-        u_ident = self.settings['aws_identity'] if isinstance(
-            self.settings['aws_identity'], unicode) else \
-            self.settings['aws_identity'].decode('utf8')
         for entry in resp.body:
-            entry['content_location'] = '%s;%s;%s' % (
-                self.endpoint, u_ident, bucket)
+            entry['content_location'] = self._make_content_location(bucket)
         return resp
 
     def update_metadata(self, swift_key, metadata):

@@ -425,23 +425,21 @@ class TestMigrator(TestCloudSyncBase):
               'content-encoding': 'identity',
               'x-delete-at': str(int(time.time() + 7200))})]
 
-        test_containers = ['container1', 'container2', 'container3']
+        test_containers = ['container1', 'container2', 'container3',
+                           u'container-\u062a']
 
         def _check_objects_copied():
-            done = True
             test_names = set([obj[0] for obj in test_objects])
             for cont in test_containers:
                 try:
-                    hdrs, listing = self.nuser2_swift(
-                        'get_container', cont)
+                    hdrs, listing = self.nuser2_swift('get_container', cont)
                 except swiftclient.exceptions.ClientException as ce:
                     if '404' in str(ce):
                         return False
                     else:
                         raise
                 swift_names = set([obj['name'] for obj in listing])
-                done = done and (test_names == swift_names)
-                if not done:
+                if test_names != swift_names:
                     return False
             return True
 
