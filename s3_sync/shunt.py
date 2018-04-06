@@ -16,6 +16,7 @@ limitations under the License.
 
 import json
 from lxml import etree
+import swiftclient
 
 from swift.common import constraints, swob, utils
 try:
@@ -203,19 +204,45 @@ class S3SyncShunt(object):
         # client-expected response.
         req.params = dict(req.params, format='json')
         status, headers, app_iter = req.call_application(self.app)
+
+        internal_resp = None
+        remote_iter = None
+        orig_status = None
+
+        if sync_profile.get('migration') and status.startswith('404 '):
+            # No local container, send remote only
+            try:
+                remote_iter = self.iter_remote(sync_profile, per_account,
+                                               marker, limit, prefix,
+                                               delimiter)
+            except swiftclient.exceptions.ClientException:
+                start_response(status, headers)
+                return app_iter
+
+            internal_resp = []
+            orig_status = status
+            status = '200 OK'
+
         if not status.startswith('200 '):
             # Only splice 200 (since it's JSON, we know there won't be a 204)
             start_response(status, headers)
             return app_iter
 
-        remote_iter = self.iter_remote(sync_profile, per_account, marker,
-                                       limit, prefix, delimiter)
+        if remote_iter is None:
+            remote_iter = self.iter_remote(sync_profile, per_account, marker,
+                                           limit, prefix, delimiter)
+
         remote_item, remote_key = next(remote_iter)
         if not remote_item:
-            start_response(status, headers)
+            if orig_status is not None:
+                start_response(orig_status, headers)
+            else:
+                start_response(status, headers)
             return app_iter
 
-        internal_resp = json.load(utils.FileLikeIter(app_iter))
+        if internal_resp is None:
+            internal_resp = json.load(utils.FileLikeIter(app_iter))
+
         spliced_response = []
         for local_item in internal_resp:
             if len(spliced_response) == limit:

@@ -25,44 +25,33 @@ import time
 import urllib
 from . import (
     TestCloudSyncBase, clear_swift_container, wait_for_condition,
-    clear_s3_bucket, clear_swift_account)
+    clear_s3_bucket, clear_swift_account, WaitTimedOut)
 
 
 class TestMigrator(TestCloudSyncBase):
     def tearDown(self):
+        def _clear_and_maybe_delete_container(account, container):
+            conn = self.conn_for_acct_noshunt(account)
+            clear_swift_container(conn, container)
+            clear_swift_container(conn, container + '_segments')
+            if container.startswith('no-auto-'):
+                try:
+                    conn.delete_container(container)
+                    conn.delete_container(container + '_segments')
+                except swiftclient.exceptions.ClientException as e:
+                    if e.http_status != 404:
+                        raise
+
         # Make sure all migration-related containers are cleared
         for container in self.test_conf['migrations']:
             if container.get('container'):
-                conn = self.conn_for_acct_noshunt(container['account'])
-                clear_swift_container(conn, container['container'])
-                clear_swift_container(conn,
-                                      container['container'] + '_segments')
-                if container['container'].startswith('no-auto-'):
-                    try:
-                        conn.delete_container(container['container'])
-                        conn.delete_container(container['container'] +
-                                              '_segments')
-                    except swiftclient.exceptions.ClientException as e:
-                        if e.http_status == 404:
-                            continue
-                        raise
+                _clear_and_maybe_delete_container(container['account'],
+                                                  container['container'])
             if container['aws_bucket'] == '/*':
                 continue
             if container['protocol'] == 'swift':
-                clear_swift_container(self.swift_dst,
-                                      container['aws_bucket'])
-                clear_swift_container(self.swift_dst,
-                                      container['aws_bucket'] + '_segments')
-                if container['aws_bucket'].startswith('no-auto-'):
-                    try:
-                        self.swift_dst.delete_container(
-                            container['aws_bucket'])
-                        self.swift_dst.delete_container(
-                            container['aws_bucket'] + '_segments')
-                    except swiftclient.exceptions.ClientException as e:
-                        if e.http_status == 404:
-                            continue
-                        raise
+                _clear_and_maybe_delete_container(container['aws_account'],
+                                                  container['aws_bucket'])
             else:
                 try:
                     clear_s3_bucket(self.s3_client, container['aws_bucket'])
@@ -319,53 +308,61 @@ class TestMigrator(TestCloudSyncBase):
               'content-encoding': 'identity',
               'x-delete-at': str(int(time.time() + 7200))})]
 
-        def _check_objects_copied():
+        conn_local = self.conn_for_acct(migration['account'])
+        conn_remote = self.conn_for_acct(migration['aws_account'])
+        conn_noshunt = self.conn_for_acct_noshunt(migration['account'])
+
+        test_object_set = set([obj[0] for obj in test_objects])
+
+        def _check_objects_copied(conn, container):
             try:
-                hdrs, listing = self.local_swift(
-                    'get_container', migration['container'])
+                hdrs, listing = conn.get_container(container)
                 swift_names = [obj['name'] for obj in listing]
-                return set([obj[0] for obj in test_objects]) == \
-                    set(swift_names)
+                return test_object_set == set(swift_names)
             except swiftclient.exceptions.ClientException as e:
                 if e.http_status == 404:
                     return False
                 raise
 
-        # stop migrator
-        for name, body, headers in test_objects:
-            self.remote_swift('put_object', migration['aws_bucket'], name,
-                              StringIO.StringIO(body), headers=headers)
-
-        with self.migrator_running():
-            wait_for_condition(5, _check_objects_copied)
-
-        for name, expected_body, user_meta in test_objects:
-            for swift, bkey in [(self.local_swift, 'container'),
-                                (self.remote_swift, 'aws_bucket')]:
-                hdrs, body = swift('get_object', migration[bkey], name)
+        def _verify_objects(conn, container):
+            for name, expected_body, user_meta in test_objects:
+                hdrs, body = conn.get_object(container, name)
                 self.assertEqual(expected_body, body)
                 for k, v in user_meta.items():
                     self.assertIn(k, hdrs)
                     self.assertEqual(v, hdrs[k])
-        # verify that objects aren't really migrated using no-shunt
-        # start migrator
-        # check objects using no-shunt proxy server
 
-        def _check_objects_really_copied():
-            conn = self.conn_for_acct_noshunt(migration['account'])
-            hdrs, listing = conn.get_container(migration['container'])
-            swift_names = [obj['name'] for obj in listing]
-            return set([obj[0] for obj in test_objects]) == set(swift_names)
+        for name, body, headers in test_objects:
+            conn_remote.put_object(migration['aws_bucket'], name,
+                                   StringIO.StringIO(body), headers=headers)
 
-        wait_for_condition(5, _check_objects_really_copied)
+        # verify that objects visible through shunt
+        self.assertTrue(_check_objects_copied(conn_local,
+                                              migration['container']))
+        _verify_objects(conn_local, migration['container'])
 
-        conn = self.conn_for_acct_noshunt(migration['account'])
-        for name, expected_body, user_meta in test_objects:
-            hdrs, body = conn.get_object(migration['container'], name)
-            self.assertEqual(expected_body, body)
-            for k, v in user_meta.items():
-                self.assertIn(k, hdrs)
-                self.assertEqual(v, hdrs[k])
+        # verify that objects are where they were put (sanity)
+        self.assertTrue(_check_objects_copied(conn_remote,
+                                              migration['aws_bucket']))
+        _verify_objects(conn_remote, migration['aws_bucket'])
+
+        # verify objects are not really there
+        self.assertFalse(_check_objects_copied(conn_noshunt,
+                                               migration['container']))
+
+        with self.migrator_running():
+            try:
+                wait_for_condition(5, partial(_check_objects_copied,
+                                              conn_noshunt,
+                                              migration['container']))
+            except WaitTimedOut:
+                hdrs, listing = conn_noshunt.get_container(
+                    migration['container'])
+                swift_names = [obj['name'] for obj in listing]
+                self.assertEqual(test_object_set, set(swift_names))
+
+        # verify objects are really there
+        _verify_objects(conn_noshunt, migration['container'])
 
     def test_container_meta(self):
         migration = self._find_migration(
@@ -377,10 +374,11 @@ class TestMigrator(TestCloudSyncBase):
                                    'x-container-write': acl,
                                    'x-container-meta-test': 'test metadata'})
 
+        conn_noshunt = self.conn_for_acct_noshunt(migration['account'])
+
         def _check_container_created():
             try:
-                return self.local_swift(
-                    'get_container', migration['container'])
+                return conn_noshunt.get_container(migration['container'])
             except swiftclient.exceptions.ClientException as e:
                 if e.http_status == 404:
                     return False

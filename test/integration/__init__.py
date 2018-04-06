@@ -29,6 +29,10 @@ import unittest
 import urllib
 
 
+class WaitTimedOut(RuntimeError):
+    pass
+
+
 def wait_for_condition(timeout, checker):
     start = time.time()
     while time.time() < start + timeout:
@@ -36,7 +40,7 @@ def wait_for_condition(timeout, checker):
         if ret:
             return ret
         time.sleep(0.1)
-    raise RuntimeError('Timeout (%s) expired' % timeout)
+    raise WaitTimedOut('Timeout (%s) expired' % timeout)
 
 
 def kill_a_pid(a_pid, timeout=4):
@@ -310,7 +314,18 @@ class TestCloudSyncBase(unittest.TestCase):
             # Now maybe auto-create some containers
             if mapping.get('aws_bucket') == '/*':
                 continue
-            if not container['aws_bucket'].startswith('no-auto-'):
+            if container['aws_bucket'].startswith('no-auto-'):
+                # Remove any no-auto create containers for swift
+                if mapping['protocol'] == 'swift':
+                    try:
+                        conn = klass.conn_for_acct_noshunt(
+                            mapping['aws_account'])
+                        conn.delete_container(mapping['aws_bucket'])
+                    except swiftclient.exceptions.ClientException as e:
+                        if e.http_status == 404:
+                            continue
+                        raise
+            else:
                 if mapping['protocol'] == 'swift' and \
                         mapping.get('aws_bucket'):
                     # For now, the aws_bucket is just a prefix, not a container
@@ -327,17 +342,6 @@ class TestCloudSyncBase(unittest.TestCase):
                     except botocore.exceptions.ClientError as e:
                         if e.response['Error']['Code'] == 409:
                             pass
-            else:
-                # Remove any no-auto create containers for swift
-                if mapping['protocol'] == 'swift':
-                    try:
-                        conn = klass.conn_for_acct_noshunt(
-                            mapping['aws_account'])
-                        conn.delete_container(mapping['aws_bucket'])
-                    except swiftclient.exceptions.ClientException as e:
-                        if e.http_status == 404:
-                            continue
-                        raise
             if mapping.get('container') and mapping.get('container') != '/*':
                 conn = klass.conn_for_acct_noshunt(mapping['account'])
                 if mapping['container'].startswith('no-auto-'):
