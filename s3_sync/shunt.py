@@ -142,8 +142,7 @@ class S3SyncShunt(object):
         sync_profile, per_account = maybe_munge_profile_for_all_containers(
             sync_profile, cont)
 
-        if obj and req.method == 'DELETE' and\
-                sync_profile.get('migration'):
+        if req.method == 'DELETE' and sync_profile.get('migration'):
             return self.handle_delete(
                 req, start_response, sync_profile, obj, per_account)
 
