@@ -221,13 +221,9 @@ class S3SyncShunt(object):
             if rem_resp.status == 200:
                 status = '200 OK'
                 headers = {}
-                propagated_hdrs = ['x-container-read', 'x-container-write',
-                                   'x-history-location', 'x-versions-location']
                 for hdr in rem_resp.headers:
-                    if hdr.startswith('x-container-meta-') or\
-                            hdr in propagated_hdrs:
-                        headers[hdr.encode('utf8')] = \
-                            rem_resp.headers[hdr].encode('utf8')
+                    headers[hdr.encode('utf8')] = \
+                        rem_resp.headers[hdr].encode('utf8')
                 internal_resp = []
 
         if not status.startswith('200 '):
