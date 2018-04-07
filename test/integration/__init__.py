@@ -76,7 +76,7 @@ def is_migrator_running():
     """
     for proc in psutil.process_iter():
         try:
-            if 'swift-s3-migrator' in '\0'.join(proc.cmdline()):
+            if '/usr/local/bin/swift-s3-migrator' in proc.cmdline():
                 return proc.pid
         except Exception:
             pass
