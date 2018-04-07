@@ -19,7 +19,7 @@ import json
 import StringIO
 
 from . import TestCloudSyncBase, clear_swift_container, wait_for_condition, \
-    swift_content_location, s3_key_name, clear_s3_bucket
+    swift_content_location, s3_key_name, clear_s3_bucket, WaitTimedOut
 
 
 class TestCloudSync(TestCloudSyncBase):
@@ -75,7 +75,7 @@ class TestCloudSync(TestCloudSyncBase):
 
         try:
             wait_for_condition(5, _check_objs)
-        except RuntimeError:
+        except WaitTimedOut:
             pass
 
         self.assertEqual(['crazy-target:slashc1', 'crazy-target:slashc2',

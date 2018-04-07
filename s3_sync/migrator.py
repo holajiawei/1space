@@ -50,7 +50,7 @@ IGNORE_KEYS = set(('status', 'aws_secret', 'all_buckets'))
 
 MigrateObjectWork = namedtuple('MigrateObjectWork', 'aws_bucket container key')
 UploadObjectWork = namedtuple('UploadObjectWork', 'container key object '
-                              'headers')
+                              'headers aws_bucket')
 
 
 class MigrationError(Exception):
@@ -310,14 +310,15 @@ class Migrator(object):
             q.put(None)
         q.join()
 
-    def _create_container(self, container, internal_client, timeout=1):
+    def _create_container(self, container, internal_client, aws_bucket,
+                          timeout=1):
         if self.config.get('protocol') == 'swift':
-            resp = self.provider.head_bucket(container)
+            resp = self.provider.head_bucket(aws_bucket)
             if resp.status == 404:
-                raise ContainerNotFound(container)
+                raise ContainerNotFound(aws_bucket)
             if resp.status != 200:
                 raise MigrationError('Failed to HEAD bucket/container "%s"' %
-                                     container)
+                                     aws_bucket)
             headers = {}
             propagated_hdrs = ['x-container-read', 'x-container-write']
             for hdr in resp.headers:
@@ -442,9 +443,9 @@ class Migrator(object):
         # x-history-location is configured), we should migrate the versions
         # before migrating the container itself.
         if self.config.get('protocol') == 'swift':
-            resp = self.provider.head_bucket(container)
+            resp = self.provider.head_bucket(aws_bucket)
             if resp.status == 404:
-                raise ContainerNotFound(container)
+                raise ContainerNotFound(aws_bucket)
             if resp.status != 200:
                 raise MigrationError('Failed to HEAD bucket/container "%s"' %
                                      container)
@@ -480,7 +481,7 @@ class Migrator(object):
             if not local:
                 if not ic.container_exists(self.config['account'],
                                            container):
-                    self._create_container(container, ic)
+                    self._create_container(container, ic, aws_bucket)
 
             remote = next(source_iter, None)
             if remote:
@@ -545,8 +546,10 @@ class Migrator(object):
             resp.body.close()
             self._migrate_slo(aws_bucket, container, key, put_headers)
         else:
-            self._upload_object(
-                container, key, FileLikeIter(resp.body), put_headers)
+            work = UploadObjectWork(
+                container, key, FileLikeIter(resp.body), put_headers,
+                aws_bucket)
+            self._upload_object(work)
 
     def _migrate_dlo(self, aws_bucket, container, key, headers):
         dlo_container, prefix = headers['x-object-manifest'].split('/', 1)
@@ -600,10 +603,12 @@ class Migrator(object):
         manifest_blob = json.dumps(manifest)
         headers['Content-Length'] = str(len(manifest_blob))
         work = UploadObjectWork(slo_container, key,
-                                FileLikeIter(manifest_blob), headers)
+                                FileLikeIter(manifest_blob), headers,
+                                slo_container)
         self.object_queue.put(work)
 
-    def _upload_object(self, container, key, content, headers):
+    def _upload_object(self, work):
+        container, key, content, headers, aws_bucket = work
         if 'x-timestamp' in headers:
             headers['x-timestamp'] = Timestamp(
                 float(headers['x-timestamp'])).internal
@@ -625,7 +630,7 @@ class Migrator(object):
             except UnexpectedResponse as e:
                 if e.resp.status_int != 404:
                     raise
-                self._create_container(container, ic)
+                self._create_container(container, ic, aws_bucket)
                 ic.upload_object(
                     content, self.config['account'], container, key,
                     headers)
@@ -643,7 +648,7 @@ class Migrator(object):
                     key = work.key
                     self._migrate_object(aws_bucket, container, key)
                 else:
-                    self._upload_object(*work)
+                    self._upload_object(work)
             except Exception:
                 self.errors.put((container, key, sys.exc_info()))
             finally:
