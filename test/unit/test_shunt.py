@@ -62,7 +62,7 @@ class TestShunt(unittest.TestCase):
             's3_sync.sync_s3.SyncS3.list_objects')]
         self.mock_shunt_swift = self.patchers[0].__enter__()
         self.mock_shunt_swift.return_value = (
-            200, [
+            '200 OK', [
                 ('Remote-x-openstack-request-id', 'also some trans id'),
                 ('Remote-x-trans-id', 'some trans id'),
                 ('CONNECTION', 'bad'),
@@ -77,7 +77,7 @@ class TestShunt(unittest.TestCase):
             ], StringIO.StringIO('remote swift'))
         self.mock_shunt_s3 = self.patchers[1].__enter__()
         self.mock_shunt_s3.return_value = (
-            200, [
+            '200 OK', [
                 ('Remote-x-amz-id-2', 'also some trans id'),
                 ('Remote-x-amz-request-id', 'some trans id'),
                 ('CONNECTION', 'bad'),
@@ -378,25 +378,25 @@ class TestShunt(unittest.TestCase):
         payload = 'bytes from remote'
         responses = [
             ('AUTH_tee/tee',
-             (200,
+             ('200 OK',
               [('Content-Length', len(payload)),
                (utils.SLO_HEADER, 'True'),
                ('etag', 'deadbeef-2')],
               StringIO.StringIO(payload)),
              mock_s3_shunt, True),
             (u'AUTH_a/sw\u00e9ft',
-             (200,
+             ('200 OK',
               [('Content-Length', len(payload)),
                (utils.SLO_HEADER, 'True'),
                ('etag', 'etag')],
               StringIO.StringIO(payload)),
              mock_swift_shunt, True),
             ('AUTH_tee/tee',
-             (200, [('Content-Length', len(payload)), ('etag', 'etag')],
+             ('200 OK', [('Content-Length', len(payload)), ('etag', 'etag')],
               StringIO.StringIO(payload)),
              mock_s3_shunt, True),
             (u'AUTH_a/sw\u00e9ft',
-             (200, [('Content-Length', len(payload)), ('etag', 'etag')],
+             ('200 OK', [('Content-Length', len(payload)), ('etag', 'etag')],
               StringIO.StringIO(payload)),
              mock_swift_shunt, True)
         ]

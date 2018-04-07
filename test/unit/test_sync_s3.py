@@ -1226,7 +1226,8 @@ class TestSyncS3(unittest.TestCase):
             status, headers, body_iter = self.sync_s3.shunt_object(req, key)
             self.assertEqual(
                 test['conns_start'], self.sync_s3.client_pool.free_count())
-            self.assertEqual(status, resp_meta['HTTPStatusCode'])
+            self.assertEqual(status.split()[0],
+                             str(resp_meta['HTTPStatusCode']))
             self.assertEqual(sorted(headers), sorted(expected_headers.items()))
             self.assertEqual(b''.join(body_iter), body)
             mocked.assert_called_once_with(Bucket=self.aws_bucket, Key=s3_name)
@@ -1260,7 +1261,7 @@ class TestSyncS3(unittest.TestCase):
             'If-Unmodified-Since': 'ius',
         })
         status, headers, body_iter = self.sync_s3.shunt_object(req, key)
-        self.assertEqual(status, 304)
+        self.assertEqual(status.split()[0], str(304))
         self.assertEqual(headers, [('Content-Length', 12)])
         self.assertEqual(b''.join(body_iter), body)
         self.assertEqual(self.mock_boto3_client.get_object.mock_calls,
@@ -1275,7 +1276,7 @@ class TestSyncS3(unittest.TestCase):
         # Again, but with HEAD
         req.method = 'HEAD'
         status, headers, body_iter = self.sync_s3.shunt_object(req, key)
-        self.assertEqual(status, 304)
+        self.assertEqual(status.split()[0], str(304))
         self.assertEqual(headers, [])
         self.assertEqual(b''.join(body_iter), b'')
         self.assertEqual(self.mock_boto3_client.head_object.mock_calls,
@@ -1329,7 +1330,7 @@ class TestSyncS3(unittest.TestCase):
             if test['method'] == 'GET':
                 self.assertEqual(test['conns_start'],
                                  self.sync_s3.client_pool.free_count())
-            self.assertEqual(status, test['status'])
+            self.assertEqual(status.split()[0], str(test['status']))
             self.assertEqual(headers, test['headers'])
             self.assertEqual(b''.join(body_iter), test['message'])
             mocked.assert_called_once_with(Bucket=self.aws_bucket,

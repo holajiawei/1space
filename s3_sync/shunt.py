@@ -153,7 +153,7 @@ class S3SyncShunt(object):
             # TODO: think about what to do for POST, COPY
             return self.handle_object(req, start_response, sync_profile, obj,
                                       per_account)
-        elif obj and req.method == 'POST':
+        elif req.method == 'POST':
             return self.handle_post(req, start_response, sync_profile, obj,
                                     per_account)
 
@@ -312,10 +312,10 @@ class S3SyncShunt(object):
             # We incur an extra request hit by checking for a possible SLO.
             manifest = provider.get_manifest(obj)
             self.logger.debug("Manifest: %s" % manifest)
-            status_code, headers, app_iter = provider.shunt_object(req, obj)
+            status, headers, app_iter = provider.shunt_object(req, obj)
             put_headers = convert_to_local_headers(headers)
 
-            if response_is_complete(status_code, headers):
+            if response_is_complete(int(status.split()[0]), headers):
                 if check_slo(put_headers) and manifest:
                     app_iter = SwiftSloPutWrapper(
                         app_iter, put_headers, req.environ['PATH_INFO'],
@@ -325,8 +325,7 @@ class S3SyncShunt(object):
                         app_iter, put_headers, req.environ['PATH_INFO'],
                         self.app, self.logger)
         else:
-            status_code, headers, app_iter = provider.shunt_object(req, obj)
-        status = '%s %s' % (status_code, swob.RESPONSE_REASONS[status_code][0])
+            status, headers, app_iter = provider.shunt_object(req, obj)
         self.logger.debug('Remote resp: %s' % status)
 
         headers = filter_hop_by_hop_headers(headers)
@@ -365,6 +364,10 @@ class S3SyncShunt(object):
 
         if sync_profile.get('protocol') != 'swift':
             # TODO: Add S3 support
+            start_response(status, headers)
+            return app_iter
+
+        if not obj and not sync_profile.get('migration'):
             start_response(status, headers)
             return app_iter
 

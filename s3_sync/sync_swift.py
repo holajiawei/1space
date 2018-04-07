@@ -211,8 +211,13 @@ class SyncSwift(BaseSync):
         """
         headers = dict([(k, req.headers[k]) for k in req.headers.keys()
                         if req.headers[k]])
-        resp = self._call_swiftclient(
-            'post_object', self.remote_container, swift_key, headers=headers)
+        if swift_key:
+            resp = self._call_swiftclient(
+                'post_object', self.remote_container, swift_key,
+                headers=headers)
+        else:
+            resp = self._call_swiftclient(
+                'post_container', self.remote_container, None, headers=headers)
         return resp.to_wsgi()
 
     def shunt_delete(self, req, swift_key):
@@ -278,7 +283,7 @@ class SyncSwift(BaseSync):
                 else:
                     resp = getattr(client, op)(container, key, **args)
                 if not resp:
-                    return ProviderResponse(True, '204 No Content', {}, [''])
+                    return ProviderResponse(True, 204, {}, [''])
 
                 if isinstance(resp, tuple):
                     headers, body = resp
