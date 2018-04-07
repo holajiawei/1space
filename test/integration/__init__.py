@@ -29,6 +29,10 @@ import unittest
 import urllib
 
 
+class WaitTimedOut(RuntimeError):
+    pass
+
+
 def wait_for_condition(timeout, checker):
     start = time.time()
     while time.time() < start + timeout:
@@ -36,7 +40,7 @@ def wait_for_condition(timeout, checker):
         if ret:
             return ret
         time.sleep(0.1)
-    raise RuntimeError('Timeout (%s) expired' % timeout)
+    raise WaitTimedOut('Timeout (%s) expired' % timeout)
 
 
 def kill_a_pid(a_pid, timeout=4):
@@ -308,27 +312,46 @@ class TestCloudSyncBase(unittest.TestCase):
                 mapping['aws_account'] = acct_utf8.decode('utf8')
 
             # Now maybe auto-create some containers
-            if mapping.get('container', '').startswith('no-auto-'):
-                continue
             if mapping.get('aws_bucket') == '/*':
                 continue
-            if mapping['protocol'] == 'swift' and mapping.get('aws_bucket'):
-                # For now, the aws_bucket is just a prefix, not a container
-                # name for a swift destination that has a source container of
-                # /*.  So don't create a container of that name.
-                if mapping.get('container') != '/*':
-                    conn = klass.conn_for_acct_noshunt(mapping['aws_account'])
-                    conn.put_container(mapping['aws_bucket'])
+            if container['aws_bucket'].startswith('no-auto-'):
+                # Remove any no-auto create containers for swift
+                if mapping['protocol'] == 'swift':
+                    try:
+                        conn = klass.conn_for_acct_noshunt(
+                            mapping['aws_account'])
+                        conn.delete_container(mapping['aws_bucket'])
+                    except swiftclient.exceptions.ClientException as e:
+                        if e.http_status == 404:
+                            continue
+                        raise
             else:
-                try:
-                    klass.s3_client.create_bucket(
-                        Bucket=mapping['aws_bucket'])
-                except botocore.exceptions.ClientError as e:
-                    if e.response['Error']['Code'] == 409:
-                        pass
+                if mapping['protocol'] == 'swift' and \
+                        mapping.get('aws_bucket'):
+                    # For now, the aws_bucket is just a prefix, not a container
+                    # name for a swift destination that has a source container
+                    # of /*.  So don't create a container of that name.
+                    if mapping.get('container') != '/*':
+                        conn = klass.conn_for_acct_noshunt(
+                            mapping['aws_account'])
+                        conn.put_container(mapping['aws_bucket'])
+                else:
+                    try:
+                        klass.s3_client.create_bucket(
+                            Bucket=mapping['aws_bucket'])
+                    except botocore.exceptions.ClientError as e:
+                        if e.response['Error']['Code'] == 409:
+                            pass
             if mapping.get('container') and mapping.get('container') != '/*':
                 conn = klass.conn_for_acct_noshunt(mapping['account'])
-                conn.put_container(mapping['container'])
+                if mapping['container'].startswith('no-auto-'):
+                    try:
+                        conn.delete_container(mapping['container'])
+                    except swiftclient.exceptions.ClientException as e:
+                        if e.http_status != 404:
+                            raise
+                else:
+                    conn.put_container(mapping['container'])
 
         klass.swift_src = klass.conn_for_acct('AUTH_test')
         klass.swift_dst = klass.conn_for_acct(

@@ -203,19 +203,53 @@ class S3SyncShunt(object):
         # client-expected response.
         req.params = dict(req.params, format='json')
         status, headers, app_iter = req.call_application(self.app)
+
+        internal_resp = None
+        remote_iter = None
+        orig_status = None
+
+        if sync_profile.get('migration') and status.startswith('404 '):
+            # No local container, send remote only
+            remote_iter = self.iter_remote(sync_profile, per_account,
+                                           marker, limit, prefix,
+                                           delimiter)
+
+            orig_status = status
+            provider = create_provider(sync_profile, max_conns=1,
+                                       per_account=per_account)
+            rem_resp = provider.head_bucket(sync_profile['aws_bucket'])
+            if rem_resp.status == 200:
+                status = '200 OK'
+                headers = {}
+                for hdr in rem_resp.headers:
+                    headers[hdr.encode('utf8')] = \
+                        rem_resp.headers[hdr].encode('utf8')
+                internal_resp = []
+
         if not status.startswith('200 '):
             # Only splice 200 (since it's JSON, we know there won't be a 204)
             start_response(status, headers)
             return app_iter
 
-        remote_iter = self.iter_remote(sync_profile, per_account, marker,
-                                       limit, prefix, delimiter)
+        if remote_iter is None:
+            remote_iter = self.iter_remote(sync_profile, per_account, marker,
+                                           limit, prefix, delimiter)
+
         remote_item, remote_key = next(remote_iter)
         if not remote_item:
+            if orig_status is not None:
+                dict_headers = dict(headers)
+                res = self._format_listing_response([], resp_type, cont)
+                dict_headers['Content-Length'] = len(res)
+                dict_headers['Content-Type'] = resp_type
+                start_response(status, dict_headers.items())
+                return res
             start_response(status, headers)
             return app_iter
 
-        internal_resp = json.load(utils.FileLikeIter(app_iter))
+        if internal_resp is None:
+            internal_resp = json.load(utils.FileLikeIter(app_iter))
+
         spliced_response = []
         for local_item in internal_resp:
             if len(spliced_response) == limit:
