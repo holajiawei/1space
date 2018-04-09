@@ -332,6 +332,8 @@ class S3SyncShunt(object):
                         self.app, self.logger)
         else:
             status, headers, app_iter = provider.shunt_object(req, obj)
+        headers = [(k.encode('utf-8'), unicode(v).encode('utf-8'))
+                   for k, v in headers]
         self.logger.debug('Remote resp: %s' % status)
 
         headers = filter_hop_by_hop_headers(headers)

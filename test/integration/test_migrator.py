@@ -415,11 +415,11 @@ class TestMigrator(TestCloudSyncBase):
 
         test_objects = [
             ('swift-blobBBB2', 'blob content', {}),
-            ('swift-2unicod\u00e9', '\xde\xad\xbe\xef', {}),
+            (u'swift-2unicod\u00e9', '\xde\xad\xbe\xef', {}),
             ('swift-2with-headers',
              'header-blob',
              {'x-object-meta-custom-header': 'value',
-              'x-object-meta-unicod\u00e9': '\u262f',
+              u'x-object-meta-unicod\u00e9': u'\u262f',
               'content-type': 'migrator/test',
               'content-disposition': "attachment; filename='test-blob.jpg'",
               'content-encoding': 'identity',

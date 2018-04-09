@@ -361,7 +361,7 @@ class TestShunt(unittest.TestCase):
                 self.assertEqual(headers, [
                     ('Remote-x-openstack-request-id', 'also some trans id'),
                     ('Remote-x-trans-id', 'some trans id'),
-                    ('Content-Length', 12)
+                    ('Content-Length', '12')
                 ])
                 self.assertEqual(b''.join(body_iter), b'remote swift')
                 self.mock_shunt_swift.reset_mock()

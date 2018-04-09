@@ -618,9 +618,6 @@ class Migrator(object):
             ts = Timestamp((ts - EPOCH).total_seconds()).internal
             headers['x-timestamp'] = ts
         del headers['last-modified']
-        # Encode all headers as UTF8
-        headers = {k.encode('utf8'): v.encode('utf8')
-                   for k, v in headers.items()}
         with self.ic_pool.item() as ic:
             try:
                 ic.upload_object(
