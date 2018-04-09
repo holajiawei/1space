@@ -261,14 +261,18 @@ class S3SyncShunt(object):
             return self.handle_delete(
                 req, start_response, sync_profile, obj, per_account)
 
-        if not obj and req.method == 'GET':
-            return self.handle_listing(req, start_response, sync_profile, cont,
-                                       per_account)
-        elif obj and req.method in ('GET', 'HEAD'):
+        if not obj:
+            if req.method == 'GET':
+                return self.handle_listing(
+                    req, start_response, sync_profile, cont, per_account)
+            if req.method == 'HEAD' and sync_profile.get('migration'):
+                return self.handle_container_head(
+                    req, start_response, sync_profile, cont, per_account)
+        if obj and req.method in ('GET', 'HEAD'):
             # TODO: think about what to do for POST, COPY
             return self.handle_object(req, start_response, sync_profile, obj,
                                       per_account)
-        elif req.method == 'POST':
+        if req.method == 'POST':
             return self.handle_post(req, start_response, sync_profile, obj,
                                     per_account)
 
@@ -368,6 +372,41 @@ class S3SyncShunt(object):
         dict_headers['Content-Type'] = resp_type
         start_response(status, dict_headers.items())
         return response
+
+    def handle_container_head(self, req, start_response, sync_profile, cont,
+                              per_account):
+        status, headers, app_iter = req.call_application(self.app)
+        if not status.startswith('404 '):
+            # Only shunt 404s
+            start_response(status, headers)
+            return app_iter
+
+        # Save off any existing trans-id headers so we can add them back later
+        trans_id_headers = [(h, v) for h, v in headers if h.lower() in (
+            'x-trans-id', 'x-openstack-request-id')]
+
+        provider = create_provider(sync_profile, max_conns=1,
+                                   per_account=per_account)
+
+        resp = provider.head_bucket(sync_profile['aws_bucket'])
+        if resp.status != 200:
+            # return original failure
+            start_response(status, headers)
+            return app_iter
+
+        headers = [(k.encode('utf-8'), unicode(v).encode('utf-8'))
+                   for k, v in resp.headers.iteritems()]
+        self.logger.debug('Remote resp: %s' % resp.status)
+
+        headers = filter_hop_by_hop_headers(headers)
+        headers.extend(trans_id_headers)
+
+        # TODO: Unfortunately, on HEAD bucket, S3 returns a 200 OK. To
+        # normalize this, we made the Swift provider also return 200 OK on
+        # HEAD. We should change the provider to return 204. When we fix the
+        # provider, we should return its return code.
+        start_response('204 No Content', headers)
+        return []
 
     def handle_object(self, req, start_response, sync_profile, obj,
                       per_account):

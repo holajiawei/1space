@@ -383,11 +383,20 @@ class TestMigrator(TestCloudSyncBase):
                     return False
                 raise
 
+        # verify get_head works through shunt
+        hdrs = conn_local.head_container(migration['container'])
+        self.assertIn('x-container-meta-test', hdrs)
+        self.assertEqual('test metadata', hdrs['x-container-meta-test'])
+
+        # Verify get_container works through shunt
         res = _check_container_created(conn_local)
         self.assertTrue(res)
         hdrs, listing = res
         self.assertIn('x-container-meta-test', hdrs)
         self.assertEqual('test metadata', hdrs['x-container-meta-test'])
+
+        # verify container not really there
+        self.assertFalse(_check_container_created(conn_noshunt))
 
         with self.migrator_running():
             hdrs, listing = wait_for_condition(5, partial(
@@ -411,6 +420,8 @@ class TestMigrator(TestCloudSyncBase):
 
     def test_migrate_all_containers(self):
 
+        migration = self._find_migration(
+            lambda cont: cont['aws_bucket'] == '/*')
         test_objects = [
             ('swift-blobBBB2', 'blob content', {}),
             (u'swift-2unicod\u00e9', '\xde\xad\xbe\xef', {}),
@@ -426,11 +437,14 @@ class TestMigrator(TestCloudSyncBase):
         test_containers = ['container1', 'container2', 'container3',
                            u'container-\u062a']
 
+        conn_local = self.conn_for_acct(migration['account'])
+        conn_remote = self.conn_for_acct(migration['aws_account'])
+
         def _check_objects_copied():
             test_names = set([obj[0] for obj in test_objects])
             for cont in test_containers:
                 try:
-                    hdrs, listing = self.nuser2_swift('get_container', cont)
+                    hdrs, listing = conn_local.get_container(cont)
                 except swiftclient.exceptions.ClientException as ce:
                     if '404' in str(ce):
                         return False
@@ -441,18 +455,29 @@ class TestMigrator(TestCloudSyncBase):
                     return False
             return True
 
-        for cont in test_containers:
-            self.swift_nuser.put_container(cont)
+        for i, container in enumerate(test_containers):
+            container_meta = {
+                u'x-container-meta-tes\u00e9t': u'test\u262f metadata%d' % i}
+            conn_remote.put_container(
+                # We create a new dictionary, because SwiftClient mutates the
+                # header dictionary that we pass it, unfortunately.
+                test_containers[i], headers=dict(container_meta))
+            # verify get_head works through shunt
+            hdrs = conn_local.head_container(test_containers[i])
+            for key, value in container_meta.items():
+                self.assertIn(key, hdrs)
+                self.assertEqual(value, hdrs[key])
+
             for name, body, headers in test_objects:
-                self.nuser_swift('put_object', cont, name,
-                                 StringIO.StringIO(body), headers=headers)
+                conn_remote.put_object(
+                    container, name, StringIO.StringIO(body), headers=headers)
 
         with self.migrator_running():
             wait_for_condition(5, _check_objects_copied)
 
         for name, expected_body, user_meta in test_objects:
             for cont in test_containers:
-                hdrs, body = self.nuser2_swift('get_object', cont, name)
+                hdrs, body = conn_local.get_object(cont, name)
                 self.assertEqual(expected_body, body)
                 for k, v in user_meta.items():
                     self.assertIn(k, hdrs)
