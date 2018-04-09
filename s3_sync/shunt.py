@@ -48,8 +48,12 @@ class S3SyncProxyFSSwitch(object):
         if 'pfs.is_bimodal' in env:
             return env['pfs.is_bimodal']
 
-        parts = env['PATH_INFO'].split('/', 3)
-        if len(parts) < 3 or parts[1] not in ('v1', 'v1.0'):
+        try:
+            # Need at least an account
+            vers, a, c, o = utils.split_path(env['PATH_INFO'], 2, 4, True)
+            if not constraints.valid_api_version(vers):
+                raise ValueError
+        except ValueError:
             # If it's not a swift request, it can't be a ProxyFS request
             return False
 
