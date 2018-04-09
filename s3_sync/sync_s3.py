@@ -234,7 +234,11 @@ class SyncS3(BaseSync):
             bucket = self.aws_bucket
         return self._call_boto('head_bucket', bucket, None, **options)
 
-    def list_buckets(self):
+    def list_buckets(self, marker, limit, prefix, parse_time=True):
+        '''As S3 does not support prefix/delimiter/marker for LIST buckets,
+           these options are NOOPs. Boto alreaded parses the time to datetime,
+           so that parameter is ignored, as well.
+        '''
         resp = self._call_boto('list_buckets')
         resp.body = [
             {'last_modified': bucket['CreationDate'],

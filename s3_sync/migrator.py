@@ -246,7 +246,14 @@ class Migrator(object):
         self.config['container'] = '.'
         self.provider = create_provider(
             self.config, self.max_conns, False)
-        resp = self.provider.list_buckets()
+        try:
+            # TODO: allow for > 10000 containers
+            resp = self.provider.list_buckets(None, 10000, None)
+        except Exception:
+            self.logger.error('Failed to list source buckets/containers')
+            self.logger.error(traceback.format_exc())
+            return
+
         if not resp.success:
             self.logger.error(
                 'Failed to list source buckets/containers: "%s"' %
