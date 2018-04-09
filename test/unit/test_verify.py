@@ -215,7 +215,7 @@ class TestMainTrackClientCalls(unittest.TestCase):
         ]
         mock_client.list_objects.return_value = {
             'Contents': [],
-            'ReponseMetadata': {
+            'ResponseMetadata': {
                 'HTTPStatusCode': 200,
                 'HTTPHeaders': {
                     'x-amz-meta-cloud-sync': 'fabcab',
@@ -294,7 +294,7 @@ class TestMainTrackClientCalls(unittest.TestCase):
         ]
         mock_client.list_objects.return_value = {
             'Contents': [],
-            'ReponseMetadata': {
+            'ResponseMetadata': {
                 'HTTPStatusCode': 200,
                 'HTTPHeaders': {
                     'x-amz-meta-cloud-sync': 'fabcab',

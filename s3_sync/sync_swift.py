@@ -322,13 +322,12 @@ class SyncSwift(BaseSync):
                      bucket=None):
         if bucket is None:
             bucket = self.remote_container
-        try:
-            with self.client_pool.get_client() as swift_client:
-                hdrs, results = swift_client.get_container(
-                    bucket, marker=marker, limit=limit,
-                    prefix=prefix, delimiter=delimiter)
-        except swiftclient.exceptions.ClientException as e:
-            return (e.http_status, e.message)
+        resp = self._call_swiftclient(
+            'get_container', bucket, None,
+            marker=marker, limit=limit, prefix=prefix, delimiter=delimiter)
+
+        if not resp.success:
+            return resp
 
         # If the identity gets in here as UTF8-encoded string (e.g. through the
         # verify command's CLI, if the creds contain Unicode chars), then it
@@ -336,10 +335,10 @@ class SyncSwift(BaseSync):
         u_ident = self.settings['aws_identity'] if isinstance(
             self.settings['aws_identity'], unicode) else \
             self.settings['aws_identity'].decode('utf8')
-        for entry in results:
+        for entry in resp.body:
             entry['content_location'] = '%s;%s;%s' % (
                 self.endpoint, u_ident, bucket)
-        return (200, results)
+        return resp
 
     def update_metadata(self, swift_key, metadata):
         with self.client_pool.get_client() as swift_client:

@@ -525,7 +525,8 @@ def convert_to_swift_headers(s3_headers):
 
 
 def convert_to_local_headers(headers, remove_timestamp=True):
-    put_headers = dict([(k, v) for k, v in headers
+    put_headers = dict([(k.encode('utf-8'), unicode(v).encode('utf-8'))
+                        for k, v in headers
                         if not k.startswith('Remote-')])
     # We must remove the X-Timestamp header, as otherwise objects may
     # never be restored if a tombstone is present (as the remote

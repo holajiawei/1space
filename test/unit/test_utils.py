@@ -78,7 +78,7 @@ class TestUtilsFunctions(unittest.TestCase):
                           'x-object-meta': 'object-meta',
                           'etag': 'deadbeef'}.items()))
         self.assertEqual(
-            {'content-type': 'application/test', 'x-timestamp': 12345},
+            {'content-type': 'application/test', 'x-timestamp': '12345'},
             utils.convert_to_local_headers(
                 {'Remote-x-object-meta': 'foo',
                  'x-timestamp': 12345,

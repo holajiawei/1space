@@ -415,11 +415,11 @@ class TestMigrator(TestCloudSyncBase):
 
         test_objects = [
             ('swift-blobBBB2', 'blob content', {}),
-            ('swift-2unicod\u00e9', '\xde\xad\xbe\xef', {}),
+            (u'swift-2unicod\u00e9', '\xde\xad\xbe\xef', {}),
             ('swift-2with-headers',
              'header-blob',
              {'x-object-meta-custom-header': 'value',
-              'x-object-meta-unicod\u00e9': '\u262f',
+              u'x-object-meta-unicod\u00e9': u'\u262f',
               'content-type': 'migrator/test',
               'content-disposition': "attachment; filename='test-blob.jpg'",
               'content-encoding': 'identity',
@@ -461,6 +461,28 @@ class TestMigrator(TestCloudSyncBase):
                 for k, v in user_meta.items():
                     self.assertIn(k, hdrs)
                     self.assertEqual(v, hdrs[k])
+
+    def test_shunt_all_containers(self):
+        test_objects = [
+            ('swift-blobBBB2', 'blob content', {}),
+            (u'swift-2unicod\u00e9', '\xde\xad\xbe\xef', {}),
+            ('swift-2with-headers',
+             'header-blob',
+             {'x-object-meta-custom-header': 'value',
+              u'x-object-meta-unicod\u00e9': u'\u262f',
+              'content-type': 'migrator/test',
+              'content-disposition': "attachment; filename='test-blob.jpg'",
+              'content-encoding': 'identity',
+              'x-delete-at': str(int(time.time() + 7200))})]
+
+        self.swift_nuser.put_container('container')
+        for name, body, headers in test_objects:
+            self.nuser_swift('put_object', 'container', name,
+                             StringIO.StringIO(body), headers=headers)
+        _, listing = self.nuser2_swift('get_container', 'container')
+        self.assertEqual(
+            sorted([obj[0] for obj in test_objects]),
+            [obj['name'] for obj in listing])
 
     def test_propagate_delete(self):
         migration = self.swift_migration()
