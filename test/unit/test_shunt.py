@@ -319,6 +319,9 @@ class TestShunt(unittest.TestCase):
             req.call_application(self.app)
             self.assertEqual(self.mock_shunt_swift.mock_calls, [])
             self.assertEqual(self.mock_shunt_s3.mock_calls, [])
+        # Just plain bad; crazy talk
+        _test_no_shunt('/v1//', '404 Not Found')
+        _test_no_shunt('/not/a/swift/request', '404 Not Found')
         # Not an affected container
         _test_no_shunt('/v1/AUTH_a/c/o', '404 Not Found')
         _test_no_shunt('/v1/AUTH_a/c/o', '404 Not Found')
