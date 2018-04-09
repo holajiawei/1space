@@ -28,8 +28,9 @@ from swift.proxy.controllers.base import get_account_info
 
 from .provider_factory import create_provider
 from .utils import (check_slo, SwiftPutWrapper, SwiftSloPutWrapper,
-                    convert_to_local_headers, response_is_complete,
-                    filter_hop_by_hop_headers, iter_listing)
+                    RemoteHTTPError, convert_to_local_headers,
+                    response_is_complete, filter_hop_by_hop_headers,
+                    iter_listing, get_container_headers)
 
 
 class S3SyncProxyFSSwitch(object):
@@ -276,6 +277,10 @@ class S3SyncShunt(object):
             return self.handle_post(req, start_response, sync_profile, obj,
                                     per_account)
 
+        if obj and req.method == 'PUT' and sync_profile.get('migration'):
+            return self.handle_object_put(
+                req, start_response, sync_profile, per_account)
+
         return self.app(env, start_response)
 
     def iter_remote_objects(
@@ -319,6 +324,53 @@ class S3SyncShunt(object):
         dict_headers['Content-Type'] = resp_type
         start_response(status, dict_headers.items())
         return response
+
+    def handle_object_put(
+            self, req, start_response, sync_profile, per_account):
+
+        # Check if the container exists
+        vers, acct, cont, _ = req.split_path(4, 4, True)
+        container_path = '/%s' % '/'.join([
+            vers, utils.quote(acct), utils.quote(cont)])
+        head_container_req = swob.Request.blank(
+            container_path,
+            environ={'REQUEST_METHOD': 'HEAD'})
+        status, headers, body = head_container_req.call_application(self.app)
+        utils.close_if_possible(body)
+
+        if not status.startswith('404 '):
+            status, headers, app_iter = req.call_application(self.app)
+            start_response(status, headers)
+            return app_iter
+
+        provider = create_provider(sync_profile, max_conns=1,
+                                   per_account=per_account)
+        headers = {}
+        if sync_profile.get('protocol') == 'swift':
+            try:
+                headers = get_container_headers(provider)
+            except RemoteHTTPError as e:
+                self.logger.warning(
+                    'Failed to query the remote container (%d): %s' % (
+                        e.resp.status, e.resp.body))
+                status, headers, app_iter = req.call_application(self.app)
+                start_response(status, headers)
+                return app_iter
+
+        put_container_env = {'REQUEST_METHOD': 'PUT', 'swift_owner': True}
+        put_container_req = swob.Request.blank(
+            container_path,
+            environ=put_container_env,
+            headers=headers)
+        status, headers, body = put_container_req.call_application(self.app)
+        utils.close_if_possible(body)
+
+        if int(status.split()[0]) // 100 != 2:
+            self.logger.warning('Failed to create container: %s' % status)
+
+        status, headers, app_iter = req.call_application(self.app)
+        start_response(status, headers)
+        return app_iter
 
     def handle_listing(self, req, start_response, sync_profile, cont,
                        per_account):
