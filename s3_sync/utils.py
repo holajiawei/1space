@@ -314,12 +314,12 @@ class SwiftSloPutWrapper(SwiftPutWrapper):
         self._ensure_segments_container()
         env = {'REQUEST_METHOD': 'PUT',
                'wsgi.input': self.put_wrapper,
-               'CONTENT_LENGTH': self.manifest[self.segment_index]['bytes'],
-               'ETAG': self.manifest[self.segment_index]['hash']}
+               'CONTENT_LENGTH': self.manifest[self.segment_index]['bytes']}
         return Request.blank(
             self._create_request_path(
                 self.manifest[self.segment_index]['name'][1:]),
-            environ=env)
+            environ=env,
+            headers={'ETag': self.manifest[self.segment_index]['hash']})
 
     def _upload_manifest(self):
         SLO_FIELD_MAP = {
