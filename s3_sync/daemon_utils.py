@@ -15,6 +15,7 @@ limitations under the License.
 """
 
 import argparse
+from distutils.version import LooseVersion
 import json
 import logging
 import logging.handlers
@@ -24,6 +25,7 @@ import time
 
 
 MAX_LOG_SIZE = 100 * 1024 * 1024
+MIN_SWIFT_VERSION = LooseVersion('2.13')
 
 
 def setup_logger(logger_name, config):
@@ -57,6 +59,9 @@ def load_swift(logger_name, once=False):
     while True:
         try:
             import swift  # NOQA
+            if LooseVersion(swift.__version__) < MIN_SWIFT_VERSION:
+                raise RuntimeError(
+                    'Swift version must be at least %s' % MIN_SWIFT_VERSION)
             break
         except ImportError as e:
             if once:

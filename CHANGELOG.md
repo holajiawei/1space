@@ -1,3 +1,18 @@
+## 0.1.29 (2018-04-09)
+
+Features:
+
+    - Configuring a per-account migration (/\*) now propagates container
+      listings (which allows calling GET on the account to get containers that
+      may not have been yet migrated).
+
+Bug fixes:
+
+    - Fixed unicode character handling in object metadata and container names
+      for the migrator.
+    - Fixed handling of not-yet migrated containers when issuing GET requests
+      against them.
+
 ## 0.1.28 (2018-04-02)
 
 Features:
