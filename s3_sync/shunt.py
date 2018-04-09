@@ -73,6 +73,13 @@ def maybe_munge_profile_for_all_containers(sync_profile, container_name):
 
     Otherwise, the original profile is returned and per_account will be False.
     """
+    # This can only occur for migrations
+    if sync_profile['aws_bucket'] == '/*':
+        new_profile = dict(sync_profile,
+                           aws_bucket=container_name.decode('utf-8'),
+                           container=container_name.decode('utf-8'))
+        return new_profile, False
+
     if sync_profile['container'] == '/*':
         new_profile = dict(sync_profile,
                            container=container_name.decode('utf-8'))
