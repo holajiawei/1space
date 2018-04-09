@@ -208,6 +208,7 @@ class TestMigrator(TestCloudSyncBase):
 
     def test_swift_large_objects(self):
         migration = self.swift_migration()
+        conn_noshunt = self.conn_for_acct_noshunt(migration['account'])
 
         segments_container = migration['aws_bucket'] + '_segments'
         content = ''.join([chr(97 + i) * 2**20 for i in range(10)])
@@ -247,20 +248,17 @@ class TestMigrator(TestCloudSyncBase):
                 else:
                     raise
 
-            _, listing = self.local_swift(
-                'get_container', migration['container'])
+            _, listing = conn_noshunt.get_container(migration['container'])
             swift_names = [obj['name'] for obj in listing]
-            if set(['dlo', 'slo']) != set(swift_names):
-                print "Swift names in %s: %s" % (migration['container'],
-                                                 swift_names)
+            objects = ['dlo', 'slo']
+            if sorted(objects) != swift_names:
                 return False
-            _, listing = self.local_swift(
-                'get_container', segments_container)
+            _, listing = conn_noshunt.get_container(segments_container)
             segments = [obj['name'] for obj in listing]
-            expected = set(
+            expected = sorted(
                 ['slo-part-%d' % i for i in range(10)] +
                 ['dlo-part-%d' % i for i in range(10)])
-            return expected == set(segments)
+            return expected == segments
 
         with self.migrator_running():
             wait_for_condition(5, _check_objects_copied)
@@ -270,8 +268,8 @@ class TestMigrator(TestCloudSyncBase):
         def _check_segments(prefix):
             for i in range(10):
                 part_name = prefix + '%d' % i
-                hdrs = self.local_swift(
-                    'head_object', segments_container, part_name)
+                hdrs = conn_noshunt.head_object(
+                    segments_container, part_name)
                 if hdrs.get('x-object-meta-part') != str(i):
                     mismatched.append('mismatched segment: %s != %s' % (
                         hdrs.get('x-object-meta-part'), i))
@@ -282,8 +280,8 @@ class TestMigrator(TestCloudSyncBase):
         _check_segments(dlo_part_prefix)
         if mismatched:
             self.fail('Found segment mismatches: %s' % '; '.join(mismatched))
-        slo_hdrs, slo_body = self.local_swift(
-            'get_object', migration['container'], 'slo')
+        slo_hdrs, slo_body = conn_noshunt.get_object(
+            migration['container'], 'slo')
         self.assertEqual('slo-meta', slo_hdrs.get('x-object-meta-slo'))
         self.assertTrue(content == slo_body)
 

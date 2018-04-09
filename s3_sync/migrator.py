@@ -21,6 +21,7 @@ eventlet.patcher.monkey_patch(all=True)
 from collections import namedtuple
 import datetime
 import errno
+import hashlib
 import json
 import logging
 import os
@@ -534,6 +535,23 @@ class Migrator(object):
         args = {'bucket': aws_bucket}
         if self.config.get('protocol', 's3') == 'swift':
             args['resp_chunk_size'] = 65536
+
+        if (container, key) in self._manifests:
+            # Special handling for the DLO manifests
+            args['query_string'] = 'multipart-manifest=get'
+            resp = self.provider.get_object(key, **args)
+            if 'x-object-manifest' not in resp.headers:
+                self.logger.warning('DLO object changed before upload: %s/%s' %
+                                    (aws_bucket, key))
+                resp.body.close()
+                return
+            self._upload_object(UploadObjectWork(
+                container, key, FileLikeIter(resp.body),
+                convert_to_local_headers(resp.headers.items(),
+                                         remove_timestamp=False),
+                aws_bucket))
+            return
+
         resp = self.provider.get_object(key, **args)
         if resp.status != 200:
             resp.body.close()
@@ -541,11 +559,10 @@ class Migrator(object):
                 aws_bucket, key, resp.body))
         put_headers = convert_to_local_headers(
             resp.headers.items(), remove_timestamp=False)
-        if 'x-object-manifest' in resp.headers and\
-                (container, key) not in self._manifests:
+        if 'x-object-manifest' in resp.headers:
             self.logger.warning(
-                'Migrating Dynamic Large Object "%s/%s" -- results may not be '
-                'consistent' % (container, key))
+                'Migrating Dynamic Large Object "%s/%s" -- '
+                'results may not be consistent' % (container, key))
             resp.body.close()
             self._migrate_dlo(aws_bucket, container, key, put_headers)
         elif 'x-static-large-object' in resp.headers:
@@ -609,6 +626,10 @@ class Migrator(object):
             self.object_queue.put(work)
         manifest_blob = json.dumps(manifest)
         headers['Content-Length'] = str(len(manifest_blob))
+        # The SLO middleware is not in the pipeline. The ETag we provide should
+        # be for the manifest *JSON content*, rather than the hash of hashes
+        # that the SLO middleware can validate.
+        headers['etag'] = hashlib.md5(manifest_blob).hexdigest()
         work = UploadObjectWork(slo_container, key,
                                 FileLikeIter(manifest_blob), headers,
                                 slo_container)
@@ -646,15 +667,15 @@ class Migrator(object):
             try:
                 if not work:
                     break
+                aws_bucket = work.aws_bucket
+                container = work.container
+                key = work.key
                 if isinstance(work, MigrateObjectWork):
-                    aws_bucket = work.aws_bucket
-                    container = work.container
-                    key = work.key
                     self._migrate_object(aws_bucket, container, key)
                 else:
                     self._upload_object(work)
             except Exception:
-                self.errors.put((container, key, sys.exc_info()))
+                self.errors.put((aws_bucket, key, sys.exc_info()))
             finally:
                 self.object_queue.task_done()
 

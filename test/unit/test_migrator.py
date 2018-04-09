@@ -16,6 +16,7 @@ limitations under the License.
 from contextlib import contextmanager
 import datetime
 import errno
+import hashlib
 import itertools
 import json
 import logging
@@ -1063,7 +1064,7 @@ class TestMigrator(unittest.TestCase):
 
         manifest = [{'name': '/'.join([segments_container, 'part1'])},
                     {'name': '/'.join([segments_container, 'part2'])}]
-
+        manifest_etag = hashlib.md5(json.dumps(manifest)).hexdigest()
         objects = {
             'slo': {
                 'remote_headers': {
@@ -1074,7 +1075,8 @@ class TestMigrator(unittest.TestCase):
                     'x-object-meta-custom': 'slo-meta',
                     'x-timestamp': Timestamp(1.5e9).internal,
                     'x-static-large-object': 'True',
-                    'Content-Length': str(len(json.dumps(manifest)))}
+                    'Content-Length': str(len(json.dumps(manifest))),
+                    'etag': manifest_etag}
             },
             'part1': {
                 'remote_headers': {
