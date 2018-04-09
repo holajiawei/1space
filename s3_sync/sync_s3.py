@@ -234,7 +234,11 @@ class SyncS3(BaseSync):
             bucket = self.aws_bucket
         return self._call_boto('head_bucket', bucket, None, **options)
 
-    def list_buckets(self):
+    def list_buckets(self, marker, limit, prefix, parse_time=True):
+        '''As S3 does not support prefix/delimiter/marker for LIST buckets,
+           these options are NOOPs. Boto alreaded parses the time to datetime,
+           so that parameter is ignored, as well.
+        '''
         resp = self._call_boto('list_buckets')
         resp.body = [
             {'last_modified': bucket['CreationDate'],
@@ -336,12 +340,20 @@ class SyncS3(BaseSync):
                     dict(subdir=urllib.unquote(row['Prefix'])[key_offset:],
                          content_location=content_location)
                     for row in resp.get('CommonPrefixes', [])]
-                return (200, sorted(
+                response_body = sorted(
                     keys + prefixes,
-                    key=lambda x: x['name'] if 'name' in x else x['subdir']))
+                    key=lambda x: x['name'] if 'name' in x else x['subdir'])
+                return ProviderResponse(
+                    True,
+                    resp['ResponseMetadata']['HTTPStatusCode'],
+                    resp['ResponseMetadata']['HTTPHeaders'],
+                    response_body)
         except botocore.exceptions.ClientError as e:
-            return (e.response['ResponseMetadata']['HTTPStatusCode'],
-                    e.message)
+            return ProviderResponse(
+                False,
+                e.response['ResponseMetadata']['HTTPStatusCode'],
+                e.response['ResponseMetadata']['HTTPHeaders'],
+                e.message)
 
     def upload_slo(self, swift_key, storage_policy_index, s3_meta,
                    internal_client):

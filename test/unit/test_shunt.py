@@ -23,6 +23,7 @@ import unittest
 
 from swift.common import swob
 
+from s3_sync.base_sync import ProviderResponse
 from s3_sync import shunt
 from s3_sync import sync_s3
 from s3_sync import sync_swift
@@ -62,7 +63,7 @@ class TestShunt(unittest.TestCase):
             's3_sync.sync_s3.SyncS3.list_objects')]
         self.mock_shunt_swift = self.patchers[0].__enter__()
         self.mock_shunt_swift.return_value = (
-            200, [
+            '200 OK', [
                 ('Remote-x-openstack-request-id', 'also some trans id'),
                 ('Remote-x-trans-id', 'some trans id'),
                 ('CONNECTION', 'bad'),
@@ -77,7 +78,7 @@ class TestShunt(unittest.TestCase):
             ], StringIO.StringIO('remote swift'))
         self.mock_shunt_s3 = self.patchers[1].__enter__()
         self.mock_shunt_s3.return_value = (
-            200, [
+            '200 OK', [
                 ('Remote-x-amz-id-2', 'also some trans id'),
                 ('Remote-x-amz-request-id', 'some trans id'),
                 ('CONNECTION', 'bad'),
@@ -363,7 +364,7 @@ class TestShunt(unittest.TestCase):
                 self.assertEqual(headers, [
                     ('Remote-x-openstack-request-id', 'also some trans id'),
                     ('Remote-x-trans-id', 'some trans id'),
-                    ('Content-Length', 12)
+                    ('Content-Length', '12')
                 ])
                 self.assertEqual(b''.join(body_iter), b'remote swift')
                 self.mock_shunt_swift.reset_mock()
@@ -381,25 +382,25 @@ class TestShunt(unittest.TestCase):
         payload = 'bytes from remote'
         responses = [
             ('AUTH_tee/tee',
-             (200,
+             ('200 OK',
               [('Content-Length', len(payload)),
                (utils.SLO_HEADER, 'True'),
                ('etag', 'deadbeef-2')],
               StringIO.StringIO(payload)),
              mock_s3_shunt, True),
             (u'AUTH_a/sw\u00e9ft',
-             (200,
+             ('200 OK',
               [('Content-Length', len(payload)),
                (utils.SLO_HEADER, 'True'),
                ('etag', 'etag')],
               StringIO.StringIO(payload)),
              mock_swift_shunt, True),
             ('AUTH_tee/tee',
-             (200, [('Content-Length', len(payload)), ('etag', 'etag')],
+             ('200 OK', [('Content-Length', len(payload)), ('etag', 'etag')],
               StringIO.StringIO(payload)),
              mock_s3_shunt, True),
             (u'AUTH_a/sw\u00e9ft',
-             (200, [('Content-Length', len(payload)), ('etag', 'etag')],
+             ('200 OK', [('Content-Length', len(payload)), ('etag', 'etag')],
               StringIO.StringIO(payload)),
              mock_swift_shunt, True)
         ]
@@ -477,19 +478,21 @@ class TestShunt(unittest.TestCase):
 
     def test_list_container_shunt_s3(self):
         self.mock_list_s3.side_effect = [
-            (200, [{'name': 'abc',
-                    'hash': 'ffff',
-                    'bytes': 42,
-                    'last_modified': 'date',
-                    'content_type': 'type',
-                    'content_location': 'mock-s3:bucket'},
-                   {'name': u'unicod\xe9',
-                    'hash': 'ffff',
-                    'bytes': 1000,
-                    'last_modified': 'date',
-                    'content_type': 'type',
-                    'content_location': 'mock-s3:bucket'}]),
-            (200, [])]
+            ProviderResponse(
+                True, 200, {},
+                [{'name': 'abc',
+                  'hash': 'ffff',
+                  'bytes': 42,
+                  'last_modified': 'date',
+                  'content_type': 'type',
+                  'content_location': 'mock-s3:bucket'},
+                 {'name': u'unicod\xe9',
+                  'hash': 'ffff',
+                  'bytes': 1000,
+                  'last_modified': 'date',
+                  'content_type': 'type',
+                  'content_location': 'mock-s3:bucket'}]),
+            ProviderResponse(True, 200, {}, [])]
         req = swob.Request.blank(
             '/v1/AUTH_a/s3',
             environ={'__test__.status': '200 OK',
@@ -517,7 +520,8 @@ class TestShunt(unittest.TestCase):
                      'content_type': 'type',
                      'content_location': 'http://some-swift'}]
         self.mock_list_s3.side_effect = [
-            (200, elements), (200, [])]
+            ProviderResponse(True, 200, {}, elements),
+            ProviderResponse(True, 200, {}, [])]
         req = swob.Request.blank(
             '/v1/AUTH_a/s3?format=xml',
             environ={'__test__.status': '200 OK',
@@ -566,7 +570,8 @@ class TestShunt(unittest.TestCase):
                      'content_location': 'mock-s3:bucket'}]
         mock_result = [dict(entry) for entry in elements]
         self.mock_list_s3.side_effect = [
-            (200, mock_result), (200, [])]
+            ProviderResponse(True, 200, {}, mock_result),
+            ProviderResponse(True, 200, {}, [])]
         req = swob.Request.blank(
             '/v1/AUTH_a/s3',
             environ={'__test__.status': '200 OK',
@@ -616,7 +621,8 @@ class TestShunt(unittest.TestCase):
                      'content_location': 's3-account:bucket'}]
         mock_result = [dict(entry) for entry in elements]
         self.mock_list_s3.side_effect = [
-            (200, mock_result), (200, [])]
+            ProviderResponse(True, 200, {}, mock_result),
+            ProviderResponse(True, 200, {}, [])]
         req = swob.Request.blank(
             '/v1/AUTH_a/s3?format=json',
             environ={'__test__.status': '200 OK',
@@ -650,7 +656,8 @@ class TestShunt(unittest.TestCase):
                      'content_location': 'mock-s3:bucket'}]
         mock_result = [dict(entry) for entry in elements]
         self.mock_list_s3.side_effect = [
-            (200, mock_result), (200, [])]
+            ProviderResponse(True, 200, {}, mock_result),
+            ProviderResponse(True, 200, {}, [])]
         req = swob.Request.blank(
             '/v1/AUTH_a/s3',
             environ={'__test__.status': '200 OK',
@@ -673,7 +680,8 @@ class TestShunt(unittest.TestCase):
     @mock.patch('s3_sync.shunt.create_provider')
     def test_list_container_shunt_all_containers(self, create_mock):
         create_mock.return_value = mock.Mock()
-        create_mock.return_value.list_objects.return_value = (200, [])
+        create_mock.return_value.list_objects.return_value = ProviderResponse(
+            True, 200, {}, [])
         req = swob.Request.blank(
             '/v1/AUTH_b/s3',
             environ={'__test__.status': '200 OK',
@@ -707,19 +715,21 @@ class TestShunt(unittest.TestCase):
 
     def test_list_container_shunt_swift(self):
         self.mock_list_swift.side_effect = [
-            (200, [{'name': 'abc',
-                    'hash': 'ffff',
-                    'bytes': 42,
-                    'last_modified': 'date',
-                    'content_type': 'type',
-                    'content_location': 'http://some-swift'},
-                   {'name': u'unicod\xe9',
-                    'hash': 'ffff',
-                    'bytes': 1000,
-                    'last_modified': 'date',
-                    'content_type': 'type',
-                    'content_location': 'http://some-swift'}]),
-            (200, [])]
+            ProviderResponse(
+                True, 200, {},
+                [{'name': 'abc',
+                  'hash': 'ffff',
+                  'bytes': 42,
+                  'last_modified': 'date',
+                  'content_type': 'type',
+                  'content_location': 'http://some-swift'},
+                 {'name': u'unicod\xe9',
+                  'hash': 'ffff',
+                  'bytes': 1000,
+                  'last_modified': 'date',
+                  'content_type': 'type',
+                  'content_location': 'http://some-swift'}]),
+            ProviderResponse(True, 200, {}, [])]
         req = swob.Request.blank(
             '/v1/AUTH_a/sw\xc3\xa9ft',
             environ={'__test__.status': '200 OK',
@@ -735,23 +745,25 @@ class TestShunt(unittest.TestCase):
 
     def test_list_container_shunt_with_duplicates(self):
         self.mock_list_swift.side_effect = [
-            (200, [{'subdir': u'a/',
-                    'content_location': 'http://some-swift'},
-                   {'name': u'unicod\xe9',
-                    'hash': 'ffff',
-                    'bytes': 1000,
-                    'last_modified': 'date',
-                    'content_type': 'type',
-                    'content_location': 'http://some-swift'},
-                   {'subdir': u'z/',
-                    'content_location': 'http://some-swift'},
-                   {'name': u'zzzzz',
-                    'hash': 'ffff',
-                    'bytes': 1000,
-                    'last_modified': 'date',
-                    'content_type': 'type',
-                    'content_location': 'http://some-swift'}]),
-            (200, [])]
+            ProviderResponse(
+                True, 200, {},
+                [{'subdir': u'a/',
+                  'content_location': 'http://some-swift'},
+                 {'name': u'unicod\xe9',
+                  'hash': 'ffff',
+                  'bytes': 1000,
+                  'last_modified': 'date',
+                  'content_type': 'type',
+                  'content_location': 'http://some-swift'},
+                 {'subdir': u'z/',
+                  'content_location': 'http://some-swift'},
+                 {'name': u'zzzzz',
+                  'hash': 'ffff',
+                  'bytes': 1000,
+                  'last_modified': 'date',
+                  'content_type': 'type',
+                  'content_location': 'http://some-swift'}]),
+            ProviderResponse(True, 200, {}, [])]
         # simulate being partially migrated
         local_data = [
             {'name': u'a',

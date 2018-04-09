@@ -12,7 +12,10 @@ touch /var/log/cloud-connector.log
 chown syslog:adm /var/log/cloud-connector.log
 chmod 644 /var/log/cloud-connector.log
 
-cp -f /swift-s3-sync/test/container/internal-client.conf /etc/swift/
+# Include our own internal-client config.
+# Ditto for proxy-server config, and a config that will run a no-auth, no-shunt
+# proxy-server instance on port 8082.
+cp -f /swift-s3-sync/test/container/{internal-client,proxy-server,proxy-server-noshunt}.conf /etc/swift/
 
 # Copied from the docker swift container. Unfortunately, there is no way to
 # plugin an additional invocation to start swift-s3-sync, so we had to do this.
@@ -34,42 +37,14 @@ mkdir -p /srv/1/node/sdb1 /srv/2/node/sdb2 /srv/3/node/sdb3 /srv/4/node/sdb4 \
     /srv/3 /srv/4 /var/run/swift
 /usr/bin/sudo -u swift /swift/bin/remakerings
 
-# stick cloud sync shunt into the proxy pipeline
-set +e
-if ! grep -q cloud_sync_shunt /etc/swift/proxy-server.conf; then
-    sed -i 's/tempurl tempauth/& cloud_sync_shunt/' /etc/swift/proxy-server.conf
-    cat <<EOF >> /etc/swift/proxy-server.conf
-[filter:cloud_sync_shunt]
-use = egg:swift-s3-sync#cloud-shunt
-conf_file = /swift-s3-sync/test/container/swift-s3-sync.conf
-EOF
-fi
-if ! grep -q log_level /etc/swift/proxy-server.conf; then
-    sed -i 's/log_facility = LOG_LOCAL1/&\nlog_level = DEBUG/' /etc/swift/proxy-server.conf
-fi
-# Go Unicode or go home: add an account with Unicode fancy-pants
-tempauth_line1=$'user_\xd8\xaaacct_\xd8\xaauser = \xd8\xaapass .admin'
-tempauth_line2=$'user_\xd8\xaaacct2_\xd8\xaauser2 = \xd8\xaapass2 .admin'
-if ! grep -q "$tempauth_line1" /etc/swift/proxy-server.conf; then
-    sed -i "s/egg:swift#tempauth/&\n$tempauth_line1\n$tempauth_line2/" /etc/swift/proxy-server.conf
-fi
-
-tempauth_nuser=$'user_nacct_nuser = npass .admin'
-tempauth_nuser2=$'user_nacct2_nuser2 = npass2 .admin'
-if ! grep -q "$tempauth_nuser" /etc/swift/proxy-server.conf; then
-    sed -i "s/user_test_tester3 = testing3/&\n$tempauth_nuser\n$tempauth_nuser2/" /etc/swift/proxy-server.conf
-fi
-
-set -e
-
 cd /swift-s3-sync; pip install -e .
 
 /usr/bin/sudo -u swift /swift/bin/startmain
 
 python -m s3_sync --log-level debug \
     --config /swift-s3-sync/test/container/swift-s3-sync.conf &
-swift-s3-migrator --log-level debug \
-    --config /swift-s3-sync/test/container/swift-s3-sync.conf &
+# NOTE: integration tests will run the migrator as needed so they can better
+# control the timing of actions.
 
 /usr/bin/java -DLOG_LEVEL=debug -jar /s3proxy/s3proxy \
     --properties /swift-s3-sync/test/container/s3proxy.properties \
@@ -80,7 +55,7 @@ sleep 5  # let S3Proxy start up
 # Set up stuff for cloud-connector
 export CONF_BUCKET=cloud-connector-conf
 export CONF_ENDPOINT=http://localhost:10080
-pip install s3cmd
+# s3cmd is pip-installed in the Dockerfile
 s3cmd -c /swift-s3-sync/s3cfg mb s3://$CONF_BUCKET ||:
 s3cmd -c /swift-s3-sync/s3cfg put /swift-s3-sync/test/container/cloud-connector.conf \
     s3://$CONF_BUCKET

@@ -1226,7 +1226,8 @@ class TestSyncS3(unittest.TestCase):
             status, headers, body_iter = self.sync_s3.shunt_object(req, key)
             self.assertEqual(
                 test['conns_start'], self.sync_s3.client_pool.free_count())
-            self.assertEqual(status, resp_meta['HTTPStatusCode'])
+            self.assertEqual(status.split()[0],
+                             str(resp_meta['HTTPStatusCode']))
             self.assertEqual(sorted(headers), sorted(expected_headers.items()))
             self.assertEqual(b''.join(body_iter), body)
             mocked.assert_called_once_with(Bucket=self.aws_bucket, Key=s3_name)
@@ -1260,7 +1261,7 @@ class TestSyncS3(unittest.TestCase):
             'If-Unmodified-Since': 'ius',
         })
         status, headers, body_iter = self.sync_s3.shunt_object(req, key)
-        self.assertEqual(status, 304)
+        self.assertEqual(status.split()[0], str(304))
         self.assertEqual(headers, [('Content-Length', 12)])
         self.assertEqual(b''.join(body_iter), body)
         self.assertEqual(self.mock_boto3_client.get_object.mock_calls,
@@ -1275,7 +1276,7 @@ class TestSyncS3(unittest.TestCase):
         # Again, but with HEAD
         req.method = 'HEAD'
         status, headers, body_iter = self.sync_s3.shunt_object(req, key)
-        self.assertEqual(status, 304)
+        self.assertEqual(status.split()[0], str(304))
         self.assertEqual(headers, [])
         self.assertEqual(b''.join(body_iter), b'')
         self.assertEqual(self.mock_boto3_client.head_object.mock_calls,
@@ -1329,7 +1330,7 @@ class TestSyncS3(unittest.TestCase):
             if test['method'] == 'GET':
                 self.assertEqual(test['conns_start'],
                                  self.sync_s3.client_pool.free_count())
-            self.assertEqual(status, test['status'])
+            self.assertEqual(status.split()[0], str(test['status']))
             self.assertEqual(headers, test['headers'])
             self.assertEqual(b''.join(body_iter), test['message'])
             mocked.assert_called_once_with(Bucket=self.aws_bucket,
@@ -1355,26 +1356,30 @@ class TestSyncS3(unittest.TestCase):
             'CommonPrefixes': [
                 dict(Prefix='%s/afirstpref' % prefix),
                 dict(Prefix='%s/preflast' % prefix),
-            ]
+            ],
+            'ResponseMetadata': {
+                'HTTPStatusCode': 200,
+                'HTTPHeaders': {}
+            }
         }
 
-        status, ret = self.sync_s3.list_objects('marker', 10, 'prefix', '-')
+        resp = self.sync_s3.list_objects('marker', 10, 'prefix', '-')
         self.mock_boto3_client.list_objects.assert_called_once_with(
             Bucket=self.aws_bucket,
             Prefix='%s/prefix' % prefix,
             Delimiter='-',
             MaxKeys=10,
             Marker='%s/marker' % prefix)
-        self.assertEqual(200, status)
+        self.assertEqual(200, resp.status)
         expected_location = 'AWS S3;%s;%s/' % (self.aws_bucket, prefix)
         self.assertEqual(
             dict(subdir='afirstpref',
                  content_location=expected_location),
-            ret[0])
+            resp.body[0])
         self.assertEqual(
             dict(subdir='preflast',
                  content_location=expected_location),
-            ret[3])
+            resp.body[3])
         self.assertEqual(
             dict(hash='badbeef',
                  name=u'bar\xf9',
@@ -1382,7 +1387,7 @@ class TestSyncS3(unittest.TestCase):
                  last_modified=now_date.isoformat(),
                  content_type='application/octet-stream',
                  content_location=expected_location),
-            ret[1])
+            resp.body[1])
         self.assertEqual(
             dict(hash='deadbeef',
                  name='foo',
@@ -1390,18 +1395,20 @@ class TestSyncS3(unittest.TestCase):
                  last_modified=now_date.isoformat(),
                  content_type='application/octet-stream',
                  content_location=expected_location),
-            ret[2])
+            resp.body[2])
 
     def test_list_objects_error(self):
         self.mock_boto3_client.list_objects.side_effect = ClientError(
-            dict(Error=dict(Code='ServerError'),
-                 ResponseMetadata=dict(HTTPStatusCode=500)), 'failed to list!')
+            dict(Error=dict(Code='ServerError', Message='failed to list'),
+                 ResponseMetadata=dict(HTTPStatusCode=500, HTTPHeaders={})),
+            'get_objects')
         prefix = '%s/%s/%s/' % (self.sync_s3.get_prefix(),
                                 self.sync_s3.account, self.sync_s3.container)
 
-        status, ret = self.sync_s3.list_objects('', 10, '', '')
+        resp = self.sync_s3.list_objects('', 10, '', '')
         self.mock_boto3_client.list_objects.assert_called_once_with(
             Bucket=self.aws_bucket,
             Prefix=prefix,
             MaxKeys=10)
-        self.assertEqual(500, status)
+        self.assertEqual(500, resp.status)
+        self.assertIn('failed to list', resp.body)

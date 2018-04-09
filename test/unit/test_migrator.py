@@ -800,11 +800,12 @@ class TestMigrator(unittest.TestCase):
                     True, 200, objects[name]['remote_headers'],
                     StringIO('object body'))
 
-            provider.list_objects.return_value = (
-                200, [{'name': name,
-                       'last_modified': objects[name]['list-time'],
-                       'hash': objects[name]['hash']}
-                      for name in objects.keys()])
+            provider.list_objects.return_value = ProviderResponse(
+                True, 200, {},
+                [{'name': name,
+                  'last_modified': objects[name]['list-time'],
+                  'hash': objects[name]['hash']}
+                 for name in objects.keys()])
             provider.head_bucket.return_value = mock.Mock(
                 status=200, headers={})
             provider.get_object.side_effect = get_object
@@ -827,7 +828,8 @@ class TestMigrator(unittest.TestCase):
         buckets = [{'name': 'bucket1'}, {'name': 'bucket2'}]
         provider_mock.list_buckets.return_value = ProviderResponse(
             True, 200, [], buckets)
-        provider_mock.list_objects.return_value = (200, [{'name': 'obj'}])
+        provider_mock.list_objects.return_value = ProviderResponse(
+            True, 200, {}, [{'name': 'obj'}])
         provider_mock.get_object.return_value = ProviderResponse(
             True, 200, {'last-modified': create_timestamp(1.5e9)},
             StringIO(''))
@@ -920,7 +922,8 @@ class TestMigrator(unittest.TestCase):
 
         self.migrator.status = mock.Mock()
         self.migrator.status.get_migration.return_value = {'marker': 'zzz'}
-        provider.list_objects.return_value = (200, [])
+        provider.list_objects.return_value = ProviderResponse(
+            True, 200, {}, [])
         self.swift_client.iter_objects.return_value = iter([])
 
         self.migrator.next_pass()
@@ -944,7 +947,8 @@ class TestMigrator(unittest.TestCase):
 
             provider.reset_mock()
             self.swift_client.reset_mock()
-            provider.list_objects.return_value = (200, [{'name': 'test'}])
+            provider.list_objects.return_value = ProviderResponse(
+                True, 200, {}, [{'name': 'test'}])
             provider.get_object.return_value = ProviderResponse(
                 True, 200, {'last-modified': create_timestamp(1.5e9)},
                 StringIO(''))
@@ -997,7 +1001,8 @@ class TestMigrator(unittest.TestCase):
         self.migrator.config['protocol'] = 'swift'
 
         provider = create_provider_mock.return_value
-        provider.list_objects.return_value = (200, [{'name': 'test'}])
+        provider.list_objects.return_value = ProviderResponse(
+            True, 200, {}, [{'name': 'test'}])
 
         resp = mock.Mock()
         resp.status = 404
@@ -1018,7 +1023,8 @@ class TestMigrator(unittest.TestCase):
     @mock.patch('s3_sync.migrator.create_provider')
     def test_create_container_timeout(self, create_provider_mock, time_mock):
         provider = create_provider_mock.return_value
-        provider.list_objects.return_value = (200, [{'name': 'test'}])
+        provider.list_objects.return_value = ProviderResponse(
+            True, 200, {}, [{'name': 'test'}])
 
         resp = mock.Mock()
         resp.status = 200
@@ -1063,12 +1069,12 @@ class TestMigrator(unittest.TestCase):
                 'remote_headers': {
                     'x-object-meta-custom': 'slo-meta',
                     'last-modified': create_timestamp(1.5e9),
-                    'x-static-large-object': True},
+                    'x-static-large-object': 'True'},
                 'expected_headers': {
                     'x-object-meta-custom': 'slo-meta',
                     'x-timestamp': Timestamp(1.5e9).internal,
-                    'x-static-large-object': True,
-                    'Content-Length': len(json.dumps(manifest))}
+                    'x-static-large-object': 'True',
+                    'Content-Length': str(len(json.dumps(manifest)))}
             },
             'part1': {
                 'remote_headers': {
@@ -1137,8 +1143,8 @@ class TestMigrator(unittest.TestCase):
         bucket_resp.headers = {}
 
         provider.head_bucket.return_value = bucket_resp
-        provider.list_objects.return_value = (
-            200, [{'name': 'slo'}])
+        provider.list_objects.return_value = ProviderResponse(
+            True, 200, {}, [{'name': 'slo'}])
         provider.get_object.side_effect = get_object
         provider.head_object.side_effect = head_object
         provider.get_manifest.return_value = manifest
@@ -1297,12 +1303,14 @@ class TestMigrator(unittest.TestCase):
 
         def list_objects(marker, chunk, prefix, bucket=None):
             if bucket is None or bucket == self.migrator.config['container']:
-                return (200, [{'name': 'dlo'}])
+                return ProviderResponse(True, 200, {}, [{'name': 'dlo'}])
             elif bucket == segments_container:
                 if marker == '':
-                    return (200, [{'name': '1'}, {'name': '2'}, {'name': '3'}])
+                    return ProviderResponse(
+                        True, 200, {},
+                        [{'name': '1'}, {'name': '2'}, {'name': '3'}])
                 if marker == '3':
-                    return (200, [])
+                    return ProviderResponse(True, 200, {}, [])
             raise RuntimeError('Unknown container')
 
         self.swift_client.container_exists.side_effect = container_exists
@@ -1410,9 +1418,10 @@ class TestMigrator(unittest.TestCase):
         self.swift_client.get_object_metadata.side_effect =\
             _get_object_metadata
         self.swift_client.get_object.side_effect = _get_object
-        provider.list_objects.return_value = (200, [
-            dict([('name', k)] + objects[k]['list_entry'].items())
-            for k in sorted(objects.keys())])
+        provider.list_objects.return_value = ProviderResponse(
+            True, 200, {},
+            [dict([('name', k)] + objects[k]['list_entry'].items())
+             for k in sorted(objects.keys())])
         provider.head_object.side_effect = _head_object
         provider.head_bucket.return_value = mock.Mock(status=200, headers={})
         provider.get_manifest.return_value = {}

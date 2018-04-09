@@ -492,7 +492,7 @@ class TestSyncSwift(unittest.TestCase):
             status, headers, body_iter = self.sync_swift.shunt_object(req, key)
             self.assertEqual(
                 test['conns_start'], self.sync_swift.client_pool.free_count())
-            self.assertEqual(status, 200)
+            self.assertEqual(status.split()[0], str(200))
             self.assertEqual(sorted(headers), sorted(expected_headers.items()))
             self.assertEqual(b''.join(body_iter), content)
             self.assertEquals(mocked.mock_calls, test['calls'])
@@ -526,7 +526,7 @@ class TestSyncSwift(unittest.TestCase):
             'swift.trans_id': 'local transaction id',
         }, headers={'Range': 'bytes=10-20'})
         status, headers, body_iter = self.sync_swift.shunt_object(req, key)
-        self.assertEqual(status, 206)
+        self.assertEqual(status.split()[0], str(206))
         self.assertEqual(sorted(headers), expected_headers)
         self.assertEqual(b''.join(body_iter), body)
         self.assertEqual(swift_client.get_object.mock_calls, [
@@ -539,7 +539,7 @@ class TestSyncSwift(unittest.TestCase):
         status, headers, body_iter = self.sync_swift.shunt_object(req, key)
         # This test doesn't exactly match Swift's behavior: on HEAD with Range
         # Swift will respond 200, but with no Content-Range
-        self.assertEqual(status, 206)
+        self.assertEqual(status.split()[0], str(206))
         self.assertEqual(sorted(headers), expected_headers)
         self.assertEqual(b''.join(body_iter), '')
         self.assertEqual(swift_client.head_object.mock_calls, [
@@ -604,7 +604,7 @@ class TestSyncSwift(unittest.TestCase):
             status, headers, body_iter = self.sync_swift.shunt_object(req, key)
             self.assertEqual(
                 test['conns_start'], self.sync_swift.client_pool.free_count())
-            self.assertEqual(status, test['status'])
+            self.assertEqual(status.split()[0], str(test['status']))
             self.assertEqual(headers, test['headers'])
             self.assertEqual(b''.join(body_iter), test['message'])
             mocked_method.assert_has_calls([test['mock_call']])

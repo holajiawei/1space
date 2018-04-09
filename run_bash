@@ -1,0 +1,9 @@
+#!/bin/bash
+
+# This will be fast if your bouncestorage base image is already up to date in
+# your docker image library.
+docker pull bouncestorage/swift-aio
+# The --build is safe because if nothing in the Dockerfile has changed, it'll
+# just quickly "build" entirely from cache and not do anything.
+docker-compose up --build -d
+docker-compose exec -e DOCKER=true -e TERM=$TERM swift-s3-sync /bin/bash

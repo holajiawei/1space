@@ -16,6 +16,7 @@ limitations under the License.
 
 import eventlet
 import logging
+from swift.common.swob import RESPONSE_REASONS
 
 
 class ProviderResponse(object):
@@ -26,7 +27,9 @@ class ProviderResponse(object):
         self.body = body
 
     def to_wsgi(self):
-        return self.status, self.headers.items(), self.body
+        # WSGI expects an HTTP status + reason string
+        wsgi_status = '%d %s' % (self.status, RESPONSE_REASONS[self.status][0])
+        return wsgi_status, self.headers.items(), self.body
 
 
 class BaseSync(object):
@@ -184,7 +187,7 @@ class BaseSync(object):
     def list_objects(self, marker, limit, prefix, delimiter=None, bucket=None):
         raise NotImplementedError()
 
-    def list_buckets(self):
+    def list_buckets(self, marker, limit, prefix, parse_time=True):
         raise NotImplementedError()
 
     def close(self):

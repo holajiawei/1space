@@ -55,7 +55,8 @@ class SyncSwift(BaseSync):
         if self.settings.get('remote_account'):
             scheme, rest = endpoint.split(':', 1)
             host = urllib.splithost(rest)[0]
-            path = '/v1/%s' % urllib.quote(self.settings['remote_account'])
+            path = '/v1/%s' % urllib.quote(
+                self.settings['remote_account'].encode('utf8'))
             os_options = {
                 'object_storage_url': '%s:%s%s' % (scheme, host, path)}
 
@@ -210,19 +211,30 @@ class SyncSwift(BaseSync):
         """
         headers = dict([(k, req.headers[k]) for k in req.headers.keys()
                         if req.headers[k]])
-        resp = self._call_swiftclient(
-            'post_object', self.remote_container, swift_key, headers=headers)
+        if swift_key:
+            resp = self._call_swiftclient(
+                'post_object', self.remote_container, swift_key,
+                headers=headers)
+        else:
+            resp = self._call_swiftclient(
+                'post_container', self.remote_container, None, headers=headers)
         return resp.to_wsgi()
 
     def shunt_delete(self, req, swift_key):
-        """Propagate metadata to the remote store
+        """Propagate delete to the remote store
 
          :returns: (status, headers, body_iter) tuple
         """
         headers = dict([(k, req.headers[k]) for k in req.headers.keys()
                         if req.headers[k]])
-        resp = self._call_swiftclient(
-            'delete_object', self.remote_container, swift_key, headers=headers)
+        if not swift_key:
+            resp = self._call_swiftclient(
+                'delete_container', self.remote_container, None,
+                headers=headers)
+        else:
+            resp = self._call_swiftclient(
+                'delete_object', self.remote_container, swift_key,
+                headers=headers)
         return resp.to_wsgi()
 
     def head_object(self, swift_key, bucket=None, **options):
@@ -245,9 +257,19 @@ class SyncSwift(BaseSync):
         return self._call_swiftclient(
             'head_container', bucket, None, **options)
 
-    def list_buckets(self):
-        resp = self._call_swiftclient('get_account', None, None)
-        if resp.status == 200:
+    def list_buckets(self, marker, limit, prefix, parse_modified=True):
+        resp = self._call_swiftclient(
+            'get_account', None, None,
+            marker=marker, prefix=prefix, limit=limit)
+
+        if resp.status != 200:
+            return resp
+
+        for entry in resp.body:
+            entry['content_location'] = self._make_content_location(
+                entry['name'])
+
+        if parse_modified:
             for container in resp.body:
                 container['last_modified'] = datetime.datetime.strptime(
                     container['last_modified'], SWIFT_TIME_FMT)
@@ -271,7 +293,7 @@ class SyncSwift(BaseSync):
                 else:
                     resp = getattr(client, op)(container, key, **args)
                 if not resp:
-                    return ProviderResponse(True, '204 No Content', {}, [''])
+                    return ProviderResponse(True, 204, {}, [''])
 
                 if isinstance(resp, tuple):
                     headers, body = resp
@@ -306,28 +328,29 @@ class SyncSwift(BaseSync):
             with self.client_pool.get_client() as swift_client:
                 return _perform_op(swift_client)
 
-    def list_objects(self, marker, limit, prefix, delimiter=None,
-                     bucket=None):
-        if bucket is None:
-            bucket = self.remote_container
-        try:
-            with self.client_pool.get_client() as swift_client:
-                hdrs, results = swift_client.get_container(
-                    bucket, marker=marker, limit=limit,
-                    prefix=prefix, delimiter=delimiter)
-        except swiftclient.exceptions.ClientException as e:
-            return (e.http_status, e.message)
-
+    def _make_content_location(self, bucket):
         # If the identity gets in here as UTF8-encoded string (e.g. through the
         # verify command's CLI, if the creds contain Unicode chars), then it
         # needs to be upconverted to Unicode string.
         u_ident = self.settings['aws_identity'] if isinstance(
             self.settings['aws_identity'], unicode) else \
             self.settings['aws_identity'].decode('utf8')
-        for entry in results:
-            entry['content_location'] = '%s;%s;%s' % (
-                self.endpoint, u_ident, bucket)
-        return (200, results)
+        return '%s;%s;%s' % (self.endpoint, u_ident, bucket)
+
+    def list_objects(self, marker, limit, prefix, delimiter=None,
+                     bucket=None):
+        if bucket is None:
+            bucket = self.remote_container
+        resp = self._call_swiftclient(
+            'get_container', bucket, None,
+            marker=marker, limit=limit, prefix=prefix, delimiter=delimiter)
+
+        if not resp.success:
+            return resp
+
+        for entry in resp.body:
+            entry['content_location'] = self._make_content_location(bucket)
+        return resp
 
     def update_metadata(self, swift_key, metadata):
         with self.client_pool.get_client() as swift_client:

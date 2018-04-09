@@ -77,6 +77,13 @@ def maybe_munge_profile_for_all_containers(sync_profile, container_name):
 
     Otherwise, the original profile is returned and per_account will be False.
     """
+    # This can only occur for migrations
+    if sync_profile['aws_bucket'] == '/*':
+        new_profile = dict(sync_profile,
+                           aws_bucket=container_name.decode('utf-8'),
+                           container=container_name.decode('utf-8'))
+        return new_profile, False
+
     if sync_profile['container'] == '/*':
         new_profile = dict(sync_profile,
                            container=container_name.decode('utf-8'))
@@ -86,6 +93,102 @@ def maybe_munge_profile_for_all_containers(sync_profile, container_name):
             per_account = True
         return new_profile, per_account
     return sync_profile, False
+
+
+def _splice_listing(internal_resp, remote_iter, limit):
+    remote_item, remote_key = next(remote_iter)
+    if not remote_item:
+        return internal_resp
+
+    spliced_response = []
+    for local_item in internal_resp:
+        if len(spliced_response) == limit:
+            break
+
+        if not remote_item:
+            spliced_response.append(local_item)
+            continue
+
+        if 'name' in local_item:
+            local_key = local_item['name']
+        else:
+            local_key = local_item['subdir']
+
+        while remote_item and remote_key < local_key:
+            spliced_response.append(remote_item)
+            remote_item, remote_key = next(remote_iter)
+
+        if remote_key == local_key:
+            # duplicate!
+            remote_item['content_location'].append('swift')
+            spliced_response.append(remote_item)
+            remote_item, remote_key = next(remote_iter)
+        else:
+            spliced_response.append(local_item)
+
+    while remote_item:
+        if len(spliced_response) == limit:
+            break
+        spliced_response.append(remote_item)
+        remote_item, _junk = next(remote_iter)
+    return spliced_response
+
+
+def get_list_params(req, list_limit):
+    limit = int(req.params.get('limit', list_limit))
+    marker = req.params.get('marker', '')
+    prefix = req.params.get('prefix', '')
+    delimiter = req.params.get('delimiter', '')
+    path = req.params.get('path', None)
+    return limit, marker, prefix, delimiter, path
+
+
+def _format_xml_listing(
+        list_results, root_node, root_name, entry_node, fields):
+    root = etree.Element(root_node, name=root_name)
+    for entry in list_results:
+        obj = etree.Element(entry_node)
+        for f in fields:
+            if f not in entry:
+                continue
+            el = etree.Element(f)
+            text = entry[f]
+            if type(text) == str:
+                text = text.decode('utf-8')
+            elif type(text) == int:
+                text = str(text)
+            el.text = text
+            obj.append(el)
+        root.append(obj)
+    resp = etree.tostring(root, encoding='UTF-8', xml_declaration=True)
+    return resp.replace("<?xml version='1.0' encoding='UTF-8'?>",
+                        '<?xml version="1.0" encoding="UTF-8"?>', 1)
+
+
+def _format_container_listing_response(list_results, list_format, account):
+    if list_format == 'application/json':
+        return json.dumps(list_results)
+    if list_format.endswith('/xml'):
+        fields = ['name', 'count', 'bytes', 'last_modified', 'subdir']
+        return _format_xml_listing(
+            list_results, 'account', account, 'container', fields)
+    # Default to plain format
+    return u'\n'.join(entry['name'] if 'name' in entry else entry['subdir']
+                      for entry in list_results).encode('utf-8')
+
+
+def _format_listing_response(list_results, list_format, container):
+    if list_format == 'application/json':
+        return json.dumps(list_results)
+    if list_format.endswith('/xml'):
+        fields = ['name', 'content_type', 'hash', 'bytes', 'last_modified',
+                  'subdir']
+        return _format_xml_listing(
+            list_results, 'container', container, 'object', fields)
+
+    # Default to plain format
+    return u'\n'.join(entry['name'] if 'name' in entry else entry['subdir']
+                      for entry in list_results).encode('utf-8')
 
 
 class S3SyncShunt(object):
@@ -128,7 +231,7 @@ class S3SyncShunt(object):
     def __call__(self, env, start_response):
         req = swob.Request(env)
         try:
-            vers, acct, cont, obj = req.split_path(3, 4, True)
+            vers, acct, cont, obj = req.split_path(2, 4, True)
         except ValueError:
             return self.app(env, start_response)
 
@@ -136,6 +239,14 @@ class S3SyncShunt(object):
             return self.app(env, start_response)
 
         if not cont:
+            sync_profile = self.sync_profiles.get((acct, '/*'))
+            if req.method == 'GET' and sync_profile and\
+                    sync_profile.get('migration'):
+                # TODO: make the container an optional parameter
+                profile, _ = maybe_munge_profile_for_all_containers(
+                    sync_profile, '.stub-container')
+                return self.handle_account(req, start_response, profile, acct)
+
             return self.app(env, start_response)
 
         sync_profile = next((self.sync_profiles[(acct, c)]
@@ -146,8 +257,7 @@ class S3SyncShunt(object):
         sync_profile, per_account = maybe_munge_profile_for_all_containers(
             sync_profile, cont)
 
-        if obj and req.method == 'DELETE' and\
-                sync_profile.get('migration'):
+        if req.method == 'DELETE' and sync_profile.get('migration'):
             return self.handle_delete(
                 req, start_response, sync_profile, obj, per_account)
 
@@ -158,45 +268,85 @@ class S3SyncShunt(object):
             # TODO: think about what to do for POST, COPY
             return self.handle_object(req, start_response, sync_profile, obj,
                                       per_account)
-        elif obj and req.method == 'POST':
+        elif req.method == 'POST':
             return self.handle_post(req, start_response, sync_profile, obj,
                                     per_account)
 
         return self.app(env, start_response)
 
-    def iter_remote(self, sync_profile, per_account, marker, limit, prefix,
-                    delimiter):
+    def iter_remote(self, list_method, marker, limit, prefix, *args):
+        def _results_iterator(_resp):
+            while True:
+                if _resp.status != 200:
+                    self.logger.error(
+                        'Failed to list the remote store: %s' %
+                        _resp.status)
+                    break
+                if not _resp.body:
+                    break
+                for item in _resp.body:
+                    if 'name' in item:
+                        marker = item['name']
+                    else:
+                        marker = item['subdir']
+                    item['content_location'] = [item['content_location']]
+                    yield item, marker
+                # WSGI supplies the request parameters as UTF-8 encoded
+                # strings. We should do the same when submitting
+                # subsequent requests.
+                marker = marker.encode('utf-8')
+                _resp = list_method(marker, limit, prefix, *args)
+            yield None, None  # just to simplify some book-keeping
+
+        resp = list_method(marker, limit, prefix, *args)
+        return resp, _results_iterator(resp)
+
+    def iter_remote_objects(
+            self, sync_profile, per_account, marker, limit, prefix, delimiter):
         provider = create_provider(sync_profile, max_conns=1,
                                    per_account=per_account)
-        while True:
-            status, resp = provider.list_objects(
-                marker, limit, prefix, delimiter)
-            if status != 200:
-                self.logger.error('Failed to list the remote store: %s' % resp)
-                break
-            if not resp:
-                break
-            for item in resp:
-                if 'name' in item:
-                    marker = item['name']
-                else:
-                    marker = item['subdir']
-                item['content_location'] = [item['content_location']]
-                yield item, marker
-            # WSGI supplies the request parameters as UTF-8 encoded
-            # strings. We should do the same when submitting
-            # subsequent requests.
-            marker = marker.encode('utf-8')
-        yield None, None  # just to simplify some book-keeping
+        return self.iter_remote(
+            provider.list_objects, marker, limit, prefix, delimiter)
+
+    def iter_remote_account(
+            self, sync_profile, marker, limit, prefix, delimiter):
+        '''Iterate through the remote listing of containers.'''
+        provider = create_provider(sync_profile, max_conns=1)
+        return self.iter_remote(
+            provider.list_buckets, marker, limit, prefix, False)
+
+    def handle_account(self, req, start_response, sync_profile, account):
+        limit, marker, prefix, delimiter, _ = get_list_params(
+            req, constraints.ACCOUNT_LISTING_LIMIT)
+        resp_type = get_listing_content_type(req)
+
+        # We always make the request with the json format and convert to the
+        # client-expected response.
+        req.params = dict(req.params, format='json')
+        status, headers, app_iter = req.call_application(self.app)
+        if not status.startswith('200 '):
+            # Only splice 200 (since it's JSON, we know there won't be a 204).
+            # The account must exist in both clusters.
+            start_response(status, headers)
+            return app_iter
+
+        _, remote_iter = self.iter_remote_account(
+            sync_profile, marker, limit, prefix, delimiter)
+        spliced = _splice_listing(
+            json.load(utils.FileLikeIter(app_iter)), remote_iter, limit)
+        response = _format_container_listing_response(
+            spliced, resp_type, account)
+        dict_headers = dict(headers)
+        dict_headers['Content-Length'] = len(response)
+        dict_headers['Content-Type'] = resp_type
+        start_response(status, dict_headers.items())
+        return response
 
     def handle_listing(self, req, start_response, sync_profile, cont,
                        per_account):
-        limit = int(req.params.get(
-            'limit', constraints.CONTAINER_LISTING_LIMIT))
-        marker = req.params.get('marker', '')
-        prefix = req.params.get('prefix', '')
-        delimiter = req.params.get('delimiter', '')
-        path = req.params.get('path', None)
+        limit, marker, prefix, delimiter, path = get_list_params(
+            req, constraints.CONTAINER_LISTING_LIMIT)
+
         if path:
             # We do not support the path parameter in listings
             status, headers, app_iter = req.call_application(self.app)
@@ -208,57 +358,42 @@ class S3SyncShunt(object):
         # client-expected response.
         req.params = dict(req.params, format='json')
         status, headers, app_iter = req.call_application(self.app)
-        if not status.startswith('200 '):
-            # Only splice 200 (since it's JSON, we know there won't be a 204)
+
+        if not status.startswith('200 ') and not\
+                (status.startswith('404 ') and sync_profile.get('migration')):
+            # Only splice 200 or 404 on migrations (since it's JSON, we know
+            # there won't be a 204)
             start_response(status, headers)
             return app_iter
 
-        remote_iter = self.iter_remote(sync_profile, per_account, marker,
-                                       limit, prefix, delimiter)
-        remote_item, remote_key = next(remote_iter)
-        if not remote_item:
-            start_response(status, headers)
-            return app_iter
+        remote_resp, remote_iter = self.iter_remote_objects(
+            sync_profile, per_account, marker, limit, prefix, delimiter)
 
-        internal_resp = json.load(utils.FileLikeIter(app_iter))
-        spliced_response = []
-        for local_item in internal_resp:
-            if len(spliced_response) == limit:
-                break
+        if status.startswith('404 '):
+            # This must be a migration, where the container has not yet been
+            # created
+            headers = {}
+            for hdr in remote_resp.headers:
+                # These are set after we mutate the request in the appropriate
+                # format
+                if hdr == 'content-type' or hdr == 'Content-Length':
+                    continue
+                headers[hdr.encode('utf8')] =\
+                    remote_resp.headers[hdr].encode('utf8')
+            # TODO: If to_wsgi does the utf8 header encoding, we wouldn't have
+            # to worry about it here.
+            status = remote_resp.to_wsgi()[0]
+            spliced = _splice_listing([], remote_iter, limit)
+        else:
+            spliced = _splice_listing(
+                json.load(utils.FileLikeIter(app_iter)), remote_iter, limit)
 
-            if not remote_item:
-                spliced_response.append(local_item)
-                continue
-
-            if 'name' in local_item:
-                local_key = local_item['name']
-            else:
-                local_key = local_item['subdir']
-
-            while remote_item and remote_key < local_key:
-                spliced_response.append(remote_item)
-                remote_item, remote_key = next(remote_iter)
-
-            if remote_key == local_key:
-                # duplicate!
-                remote_item['content_location'].append('swift')
-                spliced_response.append(remote_item)
-                remote_item, remote_key = next(remote_iter)
-            else:
-                spliced_response.append(local_item)
-
-        while remote_item:
-            if len(spliced_response) == limit:
-                break
-            spliced_response.append(remote_item)
-            remote_item, _junk = next(remote_iter)
-
-        res = self._format_listing_response(spliced_response, resp_type, cont)
+        response = _format_listing_response(spliced, resp_type, cont)
         dict_headers = dict(headers)
-        dict_headers['Content-Length'] = len(res)
+        dict_headers['Content-Length'] = len(response)
         dict_headers['Content-Type'] = resp_type
         start_response(status, dict_headers.items())
-        return res
+        return response
 
     def handle_object(self, req, start_response, sync_profile, obj,
                       per_account):
@@ -283,10 +418,10 @@ class S3SyncShunt(object):
             # We incur an extra request hit by checking for a possible SLO.
             manifest = provider.get_manifest(obj)
             self.logger.debug("Manifest: %s" % manifest)
-            status_code, headers, app_iter = provider.shunt_object(req, obj)
+            status, headers, app_iter = provider.shunt_object(req, obj)
             put_headers = convert_to_local_headers(headers)
 
-            if response_is_complete(status_code, headers):
+            if response_is_complete(int(status.split()[0]), headers):
                 if check_slo(put_headers) and manifest:
                     app_iter = SwiftSloPutWrapper(
                         app_iter, put_headers, req.environ['PATH_INFO'],
@@ -296,8 +431,9 @@ class S3SyncShunt(object):
                         app_iter, put_headers, req.environ['PATH_INFO'],
                         self.app, self.logger)
         else:
-            status_code, headers, app_iter = provider.shunt_object(req, obj)
-        status = '%s %s' % (status_code, swob.RESPONSE_REASONS[status_code][0])
+            status, headers, app_iter = provider.shunt_object(req, obj)
+        headers = [(k.encode('utf-8'), unicode(v).encode('utf-8'))
+                   for k, v in headers]
         self.logger.debug('Remote resp: %s' % status)
 
         headers = filter_hop_by_hop_headers(headers)
@@ -339,41 +475,15 @@ class S3SyncShunt(object):
             start_response(status, headers)
             return app_iter
 
+        if not obj and not sync_profile.get('migration'):
+            start_response(status, headers)
+            return app_iter
+
         provider = create_provider(sync_profile, max_conns=1,
                                    per_account=per_account)
         status, headers, app_iter = provider.shunt_post(req, obj)
         start_response(status, headers)
         return app_iter
-
-    @staticmethod
-    def _format_listing_response(list_results, list_format, container):
-        if list_format == 'application/json':
-            return json.dumps(list_results)
-        if list_format.endswith('/xml'):
-            fields = ['name', 'content_type', 'hash', 'bytes', 'last_modified',
-                      'subdir']
-            root = etree.Element('container', name=container)
-            for entry in list_results:
-                obj = etree.Element('object')
-                for f in fields:
-                    if f not in entry:
-                        continue
-                    el = etree.Element(f)
-                    text = entry[f]
-                    if type(text) == str:
-                        text = text.decode('utf-8')
-                    elif type(text) == int:
-                        text = str(text)
-                    el.text = text
-                    obj.append(el)
-                root.append(obj)
-            resp = etree.tostring(root, encoding='UTF-8', xml_declaration=True)
-            return resp.replace("<?xml version='1.0' encoding='UTF-8'?>",
-                                '<?xml version="1.0" encoding="UTF-8"?>', 1)
-
-        # Default to plain format
-        return u'\n'.join(entry['name'] if 'name' in entry else entry['subdir']
-                          for entry in list_results).encode('utf-8')
 
 
 def filter_factory(global_conf, **local_conf):

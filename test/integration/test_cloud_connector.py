@@ -26,9 +26,6 @@ from s3_sync.provider_factory import create_provider
 
 
 class TestCloudConnector(TestCloudSyncBase):
-    def setUp(self):
-        super(TestCloudConnector, self).setUp()
-
     def test_auth(self):
         # A successful auth through cloud-connect should result in a cached
         # token => Swift Account mapping, as well as a token valid inside the
@@ -65,9 +62,9 @@ class TestCloudConnector(TestCloudSyncBase):
         self.assertEqual(404, cm.exception.http_status)
 
         # put the obj in swift
-        with self.admin_conn_for(mapping['account']) as admin_conn:
-            admin_conn.put_object(mapping['container'], 'foobie', 'abc',
-                                  headers={'x-object-meta-crazy': 'madness'})
+        admin_conn = self.conn_for_acct(mapping['account'])
+        admin_conn.put_object(mapping['container'], 'foobie', 'abc',
+                              headers={'x-object-meta-crazy': 'madness'})
 
         rheaders, body = self.cloud_connector('get_object',
                                               mapping['container'], 'foobie')
@@ -105,9 +102,9 @@ class TestCloudConnector(TestCloudSyncBase):
         self.assertEqual('3', rheaders['content-length'])
 
         # put a diff obj in real swift, should still get the S3 one back
-        with self.admin_conn_for(mapping['account']) as admin_conn:
-            admin_conn.put_object(mapping['container'], 'barbie', 'abcd',
-                                  headers={'x-object-meta-crazy': 'madness'})
+        admin_conn = self.conn_for_acct(mapping['account'])
+        admin_conn.put_object(mapping['container'], 'barbie', 'abcd',
+                              headers={'x-object-meta-crazy': 'madness'})
 
         rheaders, body = self.cloud_connector('get_object',
                                               mapping['container'], 'barbie')
