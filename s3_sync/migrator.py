@@ -372,21 +372,21 @@ class Migrator(object):
         next_marker = marker
 
         while True:
-            status, keys = self.provider.list_objects(
+            resp = self.provider.list_objects(
                 next_marker, self.work_chunk, prefix, bucket=container)
-            if status == 404:
+            if resp.status == 404:
                 raise ContainerNotFound(container)
-            if status != 200:
+            if resp.status != 200:
                 raise MigrationError(
                     'Failed to list source bucket/container "%s"' %
                     self.config['aws_bucket'])
-            if not keys and marker and marker == next_marker:
+            if not resp.body and marker and marker == next_marker:
                 raise StopIteration
-            for key in keys:
-                yield key
-            if not list_all or not keys:
+            for entry in resp.body:
+                yield entry
+            if not list_all or not resp.body:
                 break
-            next_marker = keys[-1]['name']
+            next_marker = resp.body[-1]['name']
         yield None
 
     def _check_large_objects(self, aws_bucket, container, key, client):

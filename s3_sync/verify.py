@@ -68,10 +68,10 @@ def validate_bucket(provider, swift_key, create_bucket):
     if result.headers['x-object-meta-cloud-sync'] != 'fabcab':
         return 'Unexpected headers after setting metadata: %s' % result.headers
 
-    status, objects = provider.list_objects(
+    result = provider.list_objects(
         marker='', limit=1, prefix='', delimiter='')
-    if status != 200:
-        return 'Unexpected status code listing bucket: %s' % status
+    if result.status != 200:
+        return 'Unexpected status code listing bucket: %d' % result.status
 
     result = provider.delete_object(swift_key)
     if result is not None:

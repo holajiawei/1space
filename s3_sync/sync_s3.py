@@ -336,12 +336,20 @@ class SyncS3(BaseSync):
                     dict(subdir=urllib.unquote(row['Prefix'])[key_offset:],
                          content_location=content_location)
                     for row in resp.get('CommonPrefixes', [])]
-                return (200, sorted(
+                response_body = sorted(
                     keys + prefixes,
-                    key=lambda x: x['name'] if 'name' in x else x['subdir']))
+                    key=lambda x: x['name'] if 'name' in x else x['subdir'])
+                return ProviderResponse(
+                    True,
+                    resp['ResponseMetadata']['HTTPStatusCode'],
+                    resp['ResponseMetadata']['HTTPHeaders'],
+                    response_body)
         except botocore.exceptions.ClientError as e:
-            return (e.response['ResponseMetadata']['HTTPStatusCode'],
-                    e.message)
+            return ProviderResponse(
+                False,
+                e.response['ResponseMetadata']['HTTPStatusCode'],
+                e.response['ResponseMetadata']['HTTPHeaders'],
+                e.message)
 
     def upload_slo(self, swift_key, storage_policy_index, s3_meta,
                    internal_client):

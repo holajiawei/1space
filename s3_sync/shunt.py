@@ -91,6 +91,45 @@ def maybe_munge_profile_for_all_containers(sync_profile, container_name):
     return sync_profile, False
 
 
+def _splice_listing(internal_resp, remote_iter, limit):
+    remote_item, remote_key = next(remote_iter)
+    if not remote_item:
+        return internal_resp
+
+    spliced_response = []
+    for local_item in internal_resp:
+        if len(spliced_response) == limit:
+            break
+
+        if not remote_item:
+            spliced_response.append(local_item)
+            continue
+
+        if 'name' in local_item:
+            local_key = local_item['name']
+        else:
+            local_key = local_item['subdir']
+
+        while remote_item and remote_key < local_key:
+            spliced_response.append(remote_item)
+            remote_item, remote_key = next(remote_iter)
+
+        if remote_key == local_key:
+            # duplicate!
+            remote_item['content_location'].append('swift')
+            spliced_response.append(remote_item)
+            remote_item, remote_key = next(remote_iter)
+        else:
+            spliced_response.append(local_item)
+
+    while remote_item:
+        if len(spliced_response) == limit:
+            break
+        spliced_response.append(remote_item)
+        remote_item, _junk = next(remote_iter)
+    return spliced_response
+
+
 class S3SyncShunt(object):
     def __init__(self, app, conf_file, conf):
         self.logger = utils.get_logger(
@@ -168,28 +207,34 @@ class S3SyncShunt(object):
 
     def iter_remote(self, sync_profile, per_account, marker, limit, prefix,
                     delimiter):
+        def _results_iterator(internal_resp):
+            while True:
+                if internal_resp.status != 200:
+                    self.logger.error(
+                        'Failed to list the remote store: %s' %
+                        internal_resp.status)
+                    break
+                if not internal_resp.body:
+                    break
+                for item in internal_resp.body:
+                    if 'name' in item:
+                        marker = item['name']
+                    else:
+                        marker = item['subdir']
+                    item['content_location'] = [item['content_location']]
+                    yield item, marker
+                # WSGI supplies the request parameters as UTF-8 encoded
+                # strings. We should do the same when submitting
+                # subsequent requests.
+                marker = marker.encode('utf-8')
+                internal_resp = provider.list_objects(
+                    marker, limit, prefix, delimiter)
+            yield None, None  # just to simplify some book-keeping
+
         provider = create_provider(sync_profile, max_conns=1,
                                    per_account=per_account)
-        while True:
-            status, resp = provider.list_objects(
-                marker, limit, prefix, delimiter)
-            if status != 200:
-                self.logger.error('Failed to list the remote store: %s' % resp)
-                break
-            if not resp:
-                break
-            for item in resp:
-                if 'name' in item:
-                    marker = item['name']
-                else:
-                    marker = item['subdir']
-                item['content_location'] = [item['content_location']]
-                yield item, marker
-            # WSGI supplies the request parameters as UTF-8 encoded
-            # strings. We should do the same when submitting
-            # subsequent requests.
-            marker = marker.encode('utf-8')
-        yield None, None  # just to simplify some book-keeping
+        resp = provider.list_objects(marker, limit, prefix, delimiter)
+        return resp, _results_iterator(resp)
 
     def handle_listing(self, req, start_response, sync_profile, cont,
                        per_account):
@@ -211,90 +256,44 @@ class S3SyncShunt(object):
         req.params = dict(req.params, format='json')
         status, headers, app_iter = req.call_application(self.app)
 
-        internal_resp = None
-        remote_iter = None
-        orig_status = None
+        remote_resp, remote_iter = self.iter_remote(
+            sync_profile, per_account,
+            marker, limit, prefix,
+            delimiter)
 
-        if sync_profile.get('migration') and status.startswith('404 '):
-            # No local container, send remote only
-            remote_iter = self.iter_remote(sync_profile, per_account,
-                                           marker, limit, prefix,
-                                           delimiter)
-
-            orig_status = status
-            provider = create_provider(sync_profile, max_conns=1,
-                                       per_account=per_account)
-            rem_resp = provider.head_bucket(sync_profile['aws_bucket'])
-            if rem_resp.status == 200:
-                status = '200 OK'
-                headers = {}
-                for hdr in rem_resp.headers:
-                    headers[hdr.encode('utf8')] = \
-                        rem_resp.headers[hdr].encode('utf8')
-                internal_resp = []
-
-        if not status.startswith('200 '):
-            # Only splice 200 (since it's JSON, we know there won't be a 204)
+        if not status.startswith('200 ') and not\
+                (status.startswith('404 ') and sync_profile.get('migration')):
+            # Only splice 200 or 404 on migrations (since it's JSON, we know
+            # there won't be a 204)
             start_response(status, headers)
             return app_iter
 
-        if remote_iter is None:
-            remote_iter = self.iter_remote(sync_profile, per_account, marker,
-                                           limit, prefix, delimiter)
+        if status.startswith('404 '):
+            # This must be a migration, where the container has not yet been
+            # created
+            headers = {}
+            for hdr in remote_resp.headers:
+                # These are set after we mutate the request in the appropriate
+                # format
+                if hdr == 'content-type' or hdr == 'Content-Length':
+                    continue
+                headers[hdr.encode('utf8')] =\
+                    remote_resp.headers[hdr].encode('utf8')
+            # TODO: If to_wsgi does the utf8 header encoding, we wouldn't have
+            # to worry about it here.
+            status = remote_resp.to_wsgi()[0]
+            spliced = _splice_listing([], remote_iter, limit)
+        else:
+            spliced = _splice_listing(
+                json.load(utils.FileLikeIter(app_iter)), remote_iter, limit)
 
-        remote_item, remote_key = next(remote_iter)
-        if not remote_item:
-            if orig_status is not None:
-                dict_headers = dict(headers)
-                res = self._format_listing_response([], resp_type, cont)
-                dict_headers['Content-Length'] = len(res)
-                dict_headers['Content-Type'] = resp_type
-                start_response(status, dict_headers.items())
-                return res
-            start_response(status, headers)
-            return app_iter
-
-        if internal_resp is None:
-            internal_resp = json.load(utils.FileLikeIter(app_iter))
-
-        spliced_response = []
-        for local_item in internal_resp:
-            if len(spliced_response) == limit:
-                break
-
-            if not remote_item:
-                spliced_response.append(local_item)
-                continue
-
-            if 'name' in local_item:
-                local_key = local_item['name']
-            else:
-                local_key = local_item['subdir']
-
-            while remote_item and remote_key < local_key:
-                spliced_response.append(remote_item)
-                remote_item, remote_key = next(remote_iter)
-
-            if remote_key == local_key:
-                # duplicate!
-                remote_item['content_location'].append('swift')
-                spliced_response.append(remote_item)
-                remote_item, remote_key = next(remote_iter)
-            else:
-                spliced_response.append(local_item)
-
-        while remote_item:
-            if len(spliced_response) == limit:
-                break
-            spliced_response.append(remote_item)
-            remote_item, _junk = next(remote_iter)
-
-        res = self._format_listing_response(spliced_response, resp_type, cont)
+        response = self._format_listing_response(
+            spliced, resp_type, cont)
         dict_headers = dict(headers)
-        dict_headers['Content-Length'] = len(res)
+        dict_headers['Content-Length'] = len(response)
         dict_headers['Content-Type'] = resp_type
         start_response(status, dict_headers.items())
-        return res
+        return response
 
     def handle_object(self, req, start_response, sync_profile, obj,
                       per_account):

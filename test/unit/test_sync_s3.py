@@ -1356,26 +1356,30 @@ class TestSyncS3(unittest.TestCase):
             'CommonPrefixes': [
                 dict(Prefix='%s/afirstpref' % prefix),
                 dict(Prefix='%s/preflast' % prefix),
-            ]
+            ],
+            'ResponseMetadata': {
+                'HTTPStatusCode': 200,
+                'HTTPHeaders': {}
+            }
         }
 
-        status, ret = self.sync_s3.list_objects('marker', 10, 'prefix', '-')
+        resp = self.sync_s3.list_objects('marker', 10, 'prefix', '-')
         self.mock_boto3_client.list_objects.assert_called_once_with(
             Bucket=self.aws_bucket,
             Prefix='%s/prefix' % prefix,
             Delimiter='-',
             MaxKeys=10,
             Marker='%s/marker' % prefix)
-        self.assertEqual(200, status)
+        self.assertEqual(200, resp.status)
         expected_location = 'AWS S3;%s;%s/' % (self.aws_bucket, prefix)
         self.assertEqual(
             dict(subdir='afirstpref',
                  content_location=expected_location),
-            ret[0])
+            resp.body[0])
         self.assertEqual(
             dict(subdir='preflast',
                  content_location=expected_location),
-            ret[3])
+            resp.body[3])
         self.assertEqual(
             dict(hash='badbeef',
                  name=u'bar\xf9',
@@ -1383,7 +1387,7 @@ class TestSyncS3(unittest.TestCase):
                  last_modified=now_date.isoformat(),
                  content_type='application/octet-stream',
                  content_location=expected_location),
-            ret[1])
+            resp.body[1])
         self.assertEqual(
             dict(hash='deadbeef',
                  name='foo',
@@ -1391,18 +1395,20 @@ class TestSyncS3(unittest.TestCase):
                  last_modified=now_date.isoformat(),
                  content_type='application/octet-stream',
                  content_location=expected_location),
-            ret[2])
+            resp.body[2])
 
     def test_list_objects_error(self):
         self.mock_boto3_client.list_objects.side_effect = ClientError(
-            dict(Error=dict(Code='ServerError'),
-                 ResponseMetadata=dict(HTTPStatusCode=500)), 'failed to list!')
+            dict(Error=dict(Code='ServerError', Message='failed to list'),
+                 ResponseMetadata=dict(HTTPStatusCode=500, HTTPHeaders={})),
+            'get_objects')
         prefix = '%s/%s/%s/' % (self.sync_s3.get_prefix(),
                                 self.sync_s3.account, self.sync_s3.container)
 
-        status, ret = self.sync_s3.list_objects('', 10, '', '')
+        resp = self.sync_s3.list_objects('', 10, '', '')
         self.mock_boto3_client.list_objects.assert_called_once_with(
             Bucket=self.aws_bucket,
             Prefix=prefix,
             MaxKeys=10)
-        self.assertEqual(500, status)
+        self.assertEqual(500, resp.status)
+        self.assertIn('failed to list', resp.body)
