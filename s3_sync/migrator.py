@@ -33,11 +33,10 @@ from container_crawler.utils import create_internal_client
 from .daemon_utils import load_swift, setup_context, setup_logger
 from .provider_factory import create_provider
 from .utils import (convert_to_local_headers, convert_to_swift_headers,
-                    SWIFT_TIME_FMT, iter_listing)
+                    get_container_headers, iter_listing, RemoteHTTPError,
+                    SWIFT_TIME_FMT)
 from swift.common.internal_client import UnexpectedResponse
-from swift.common.middleware.versioned_writes import (
-    SYSMETA_VERSIONS_LOC, SYSMETA_VERSIONS_MODE)
-from swift.common.swob import Request
+from swift.common import swob
 from swift.common.utils import FileLikeIter, Timestamp
 
 
@@ -326,39 +325,17 @@ class Migrator(object):
     def _create_container(self, container, internal_client, aws_bucket,
                           timeout=1):
         if self.config.get('protocol') == 'swift':
-            resp = self.provider.head_bucket(aws_bucket)
-            if resp.status == 404:
-                raise ContainerNotFound(aws_bucket)
-            if resp.status != 200:
-                raise MigrationError('Failed to HEAD bucket/container "%s"' %
-                                     aws_bucket)
-            headers = {}
-            propagated_hdrs = ['x-container-read', 'x-container-write']
-            for hdr in resp.headers:
-                if hdr == 'x-history-location':
-                    headers[SYSMETA_VERSIONS_LOC] = \
-                        resp.headers[hdr].encode('utf8')
-                    headers[SYSMETA_VERSIONS_MODE] = 'history'
-                    continue
-
-                if hdr == 'x-versions-location':
-                    headers[SYSMETA_VERSIONS_LOC] = \
-                        resp.headers[hdr].encode('utf8')
-                    headers[SYSMETA_VERSIONS_MODE] = 'stack'
-                    continue
-
-                if hdr.startswith('x-container-meta-') or\
-                        hdr in propagated_hdrs:
-                    # Dunno why, really, but the internal client app will 503
-                    # with utf8-encoded header values IF the header key is a
-                    # unicode instance (even if it's just low ascii chars in
-                    # that unicode instance).  Go figure...
-                    headers[hdr.encode('utf8')] = \
-                        resp.headers[hdr].encode('utf8')
+            try:
+                headers = get_container_headers(self.provider, aws_bucket)
+            except RemoteHTTPError as e:
+                if e.resp.status == 404:
+                    raise ContainerNotFound(container)
+                else:
+                    raise
         else:
             headers = {}
 
-        req = Request.blank(
+        req = swob.Request.blank(
             internal_client.make_path(self.config['account'], container),
             environ={'REQUEST_METHOD': 'PUT',
                      'swift_owner': True},
