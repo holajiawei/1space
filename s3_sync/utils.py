@@ -570,3 +570,31 @@ def response_is_complete(status_code, headers):
     except ValueError:
         return False
     return end + 1 == length
+
+
+def iter_listing(list_func, logger, marker, limit, prefix, *args):
+    def _results_iterator(_resp):
+        while True:
+            if _resp.status != 200:
+                logger.error(
+                    'Failed to list the remote store: %s' %
+                    _resp.status)
+                break
+            if not _resp.body:
+                break
+            for item in _resp.body:
+                if 'name' in item:
+                    marker = item['name']
+                else:
+                    marker = item['subdir']
+                item['content_location'] = [item['content_location']]
+                yield item, marker
+            # WSGI supplies the request parameters as UTF-8 encoded
+            # strings. We should do the same when submitting
+            # subsequent requests.
+            marker = marker.encode('utf-8')
+            _resp = list_func(marker, limit, prefix, *args)
+        yield None, None  # just to simplify some book-keeping
+
+    resp = list_func(marker, limit, prefix, *args)
+    return resp, _results_iterator(resp)

@@ -595,8 +595,11 @@ class TestMigrator(unittest.TestCase):
         self.migrator.config['aws_bucket'] = '/*'
         self.migrator._find_missing_objects = mock.Mock(
             side_effect=Exception('kaboom'))
-        create_provider_mock.return_value.list_buckets.return_value = \
-            ProviderResponse(True, 200, [], [{'name': 'bucket'}])
+        create_provider_mock.return_value.list_buckets.side_effect = \
+            [ProviderResponse(True, 200, [], [
+                {'name': 'bucket',
+                 'content_location': 'some_provider'}]),
+             ProviderResponse(True, 200, [], [])]
         self.migrator.next_pass()
         self.assertEqual('Failed to migrate "bucket"',
                          self.stream.getvalue().splitlines()[0])
@@ -604,9 +607,10 @@ class TestMigrator(unittest.TestCase):
     @mock.patch('s3_sync.migrator.create_provider')
     def test_all_containers(self, create_provider_mock):
         provider_mock = mock.Mock()
-        buckets = [{'name': 'bucket'}]
-        provider_mock.list_buckets.return_value = ProviderResponse(
-            True, 200, [], buckets)
+        buckets = [{'name': 'bucket', 'content_location': 'other_swift'}]
+        provider_mock.list_buckets.side_effect = [
+            ProviderResponse(True, 200, [], buckets),
+            ProviderResponse(True, 200, [], [])]
 
         def check_provider(config, conns, per_account):
             # We have to check the arguments this way, as otherwise the
@@ -626,6 +630,47 @@ class TestMigrator(unittest.TestCase):
                          self.migrator.config['aws_bucket'])
         self.assertEqual(buckets[0]['name'], provider_mock.aws_bucket)
         self.assertTrue(self.migrator.config['all_buckets'])
+
+    @mock.patch('s3_sync.migrator.create_provider')
+    def test_all_containers_paginated(self, create_provider_mock):
+        provider_mock = mock.Mock()
+        buckets = [
+            {'name': 'bucket', 'content_location': 'other_swift'},
+            {'name': 'next-bucket', 'content_location': 'other_swift'}
+        ]
+        provider_mock.list_buckets.side_effect = [
+            ProviderResponse(True, 200, [], [buckets[0]]),
+            ProviderResponse(True, 200, [], [buckets[1]]),
+            ProviderResponse(True, 200, [], [])]
+        next_pass_call = [0]
+
+        def check_provider(config, conns, per_account):
+            # We have to check the arguments this way, as otherwise the
+            # dictionary gets mutated and assert_called_once_with check will
+            # fail.
+            self.assertEqual('/*', config['aws_bucket'])
+            self.assertEqual('.', config['container'])
+            self.assertEqual(self.migrator.ic_pool.max_size, conns)
+            return provider_mock
+
+        def check_pass_provider():
+            bucket = buckets[next_pass_call[0]]
+            self.assertEqual(bucket['name'], self.migrator.config['container'])
+            self.assertEqual(
+                bucket['name'], self.migrator.config['aws_bucket'])
+            self.assertEqual(bucket['name'], provider_mock.aws_bucket)
+            next_pass_call[0] += 1
+
+        create_provider_mock.side_effect = check_provider
+        self.migrator.config = {'aws_bucket': '/*'}
+        self.migrator._next_pass = mock.Mock(side_effect=check_pass_provider)
+        self.migrator.next_pass()
+        self.assertTrue(self.migrator.config['all_buckets'])
+        self.migrator._next_pass.assert_has_calls(
+            [mock.call(), mock.call()])
+        provider_mock.list_buckets.assert_has_calls(
+            [mock.call(None, 10000, None),
+             mock.call(buckets[0]['name'], 10000, None)])
 
     @mock.patch('s3_sync.migrator.create_provider')
     def test_list_buckets_error(self, create_provider_mock):
@@ -825,9 +870,11 @@ class TestMigrator(unittest.TestCase):
     @mock.patch('s3_sync.migrator.create_provider')
     def test_migrate_all_containers_next_pass(self, create_provider_mock):
         provider_mock = mock.Mock()
-        buckets = [{'name': 'bucket1'}, {'name': 'bucket2'}]
-        provider_mock.list_buckets.return_value = ProviderResponse(
-            True, 200, [], buckets)
+        buckets = [{'name': 'bucket1', 'content_location': 'other'},
+                   {'name': 'bucket2', 'content_location': 'other'}]
+        provider_mock.list_buckets.side_effect = [
+            ProviderResponse(True, 200, [], buckets),
+            ProviderResponse(True, 200, [], [])]
         provider_mock.list_objects.return_value = ProviderResponse(
             True, 200, {}, [{'name': 'obj'}])
         provider_mock.get_object.return_value = ProviderResponse(

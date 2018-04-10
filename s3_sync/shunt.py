@@ -29,7 +29,7 @@ from swift.proxy.controllers.base import get_account_info
 from .provider_factory import create_provider
 from .utils import (check_slo, SwiftPutWrapper, SwiftSloPutWrapper,
                     convert_to_local_headers, response_is_complete,
-                    filter_hop_by_hop_headers)
+                    filter_hop_by_hop_headers, iter_listing)
 
 
 class S3SyncProxyFSSwitch(object):
@@ -274,46 +274,20 @@ class S3SyncShunt(object):
 
         return self.app(env, start_response)
 
-    def iter_remote(self, list_method, marker, limit, prefix, *args):
-        def _results_iterator(_resp):
-            while True:
-                if _resp.status != 200:
-                    self.logger.error(
-                        'Failed to list the remote store: %s' %
-                        _resp.status)
-                    break
-                if not _resp.body:
-                    break
-                for item in _resp.body:
-                    if 'name' in item:
-                        marker = item['name']
-                    else:
-                        marker = item['subdir']
-                    item['content_location'] = [item['content_location']]
-                    yield item, marker
-                # WSGI supplies the request parameters as UTF-8 encoded
-                # strings. We should do the same when submitting
-                # subsequent requests.
-                marker = marker.encode('utf-8')
-                _resp = list_method(marker, limit, prefix, *args)
-            yield None, None  # just to simplify some book-keeping
-
-        resp = list_method(marker, limit, prefix, *args)
-        return resp, _results_iterator(resp)
-
     def iter_remote_objects(
             self, sync_profile, per_account, marker, limit, prefix, delimiter):
         provider = create_provider(sync_profile, max_conns=1,
                                    per_account=per_account)
-        return self.iter_remote(
-            provider.list_objects, marker, limit, prefix, delimiter)
+        return iter_listing(
+            provider.list_objects, self.logger, marker, limit, prefix,
+            delimiter)
 
     def iter_remote_account(
             self, sync_profile, marker, limit, prefix, delimiter):
         '''Iterate through the remote listing of containers.'''
         provider = create_provider(sync_profile, max_conns=1)
-        return self.iter_remote(
-            provider.list_buckets, marker, limit, prefix, False)
+        return iter_listing(
+            provider.list_buckets, self.logger, marker, limit, prefix, False)
 
     def handle_account(self, req, start_response, sync_profile, account):
         limit, marker, prefix, delimiter, _ = get_list_params(
