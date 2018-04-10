@@ -33,7 +33,7 @@ from container_crawler.utils import create_internal_client
 from .daemon_utils import load_swift, setup_context, setup_logger
 from .provider_factory import create_provider
 from .utils import (convert_to_local_headers, convert_to_swift_headers,
-                    SWIFT_TIME_FMT)
+                    SWIFT_TIME_FMT, iter_listing)
 from swift.common.internal_client import UnexpectedResponse
 from swift.common.middleware.versioned_writes import (
     SYSMETA_VERSIONS_LOC, SYSMETA_VERSIONS_MODE)
@@ -247,28 +247,33 @@ class Migrator(object):
         self.config['container'] = '.'
         self.provider = create_provider(
             self.config, self.max_conns, False)
+
         try:
-            # TODO: allow for > 10000 containers
-            resp = self.provider.list_buckets(None, 10000, None)
+            resp, iterator = iter_listing(
+                self.provider.list_buckets,
+                self.logger, None, 10000, None)
+
+            if not resp.success:
+                self.logger.error(
+                    'Failed to list source buckets/containers: "%s"' %
+                    ''.join(resp.body))
+                return
+
+            for index, entry in enumerate(iterator):
+                container, _ = entry
+                if not container:
+                    break
+                if index % self.nodes == self.node_id:
+                    # NOTE: we cannot remap container names when migrating all
+                    # containers
+                    self.config['aws_bucket'] = container['name']
+                    self.config['container'] = container['name']
+                    self.provider.aws_bucket = container['name']
+                    self._next_pass()
         except Exception:
             self.logger.error('Failed to list source buckets/containers')
             self.logger.error(traceback.format_exc())
             return
-
-        if not resp.success:
-            self.logger.error(
-                'Failed to list source buckets/containers: "%s"' %
-                ''.join(resp.body))
-            return
-
-        for index, container in enumerate(resp.body):
-            if index % self.nodes == self.node_id:
-                # NOTE: we cannot remap container names when migrating all
-                # containers
-                self.config['aws_bucket'] = container['name']
-                self.config['container'] = container['name']
-                self.provider.aws_bucket = container['name']
-                self._next_pass()
 
     def _next_pass(self):
         worker_pool = eventlet.GreenPool(self.workers)
