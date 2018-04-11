@@ -1,3 +1,17 @@
+## 0.1.30 (2018-04-11)
+
+Bug fixes:
+
+    - Migrations can now process accounts with more than 10000 containers (the
+      default list limit in Swift).
+    - Large object manifests (both static and dynamic) are properly copied on
+      migrations. Previously (in 0.1.29), the upload would result in a 422
+      error, due to an ETag mismatch.
+    - Migration shunt supports HEAD and PUT against containers that have not yet
+      been copied. In the case of HEAD, the headers from the source container
+      are returned. In the latter, the container is create when the first PUT
+      request against it is made.
+
 ## 0.1.29 (2018-04-09)
 
 Features:

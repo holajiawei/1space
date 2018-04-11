@@ -3,7 +3,7 @@
 from setuptools import setup
 
 setup(name='swift-s3-sync',
-      version='0.1.29',
+      version='0.1.30',
       author='SwiftStack',
       test_suite='nose.collector',
       url='https://github.com/swiftstack/swift-s3-sync',
