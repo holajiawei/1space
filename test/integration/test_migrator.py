@@ -750,3 +750,29 @@ class TestMigrator(TestCloudSyncBase):
         clear_swift_container(self.swift_dst, history_container)
         clear_swift_container(self.swift_src, migration['container'])
         clear_swift_container(self.swift_src, history_container)
+
+    def test_put_on_unmigrated_container(self):
+        migration = self._find_migration(
+            lambda cont: cont['aws_bucket'] == '/*')
+
+        test_objects = [
+            (u'swift-2unicod\u00e9', '\xde\xad\xbe\xef', {}),
+            (u'swift-3unicod\u00e9', '2\xde\xad\xbe\xef', {}),
+        ]
+
+        test_container = u'test_put-container-\u062a'
+
+        conn_remote = self.conn_for_acct(migration['aws_account'])
+        conn_local = self.conn_for_acct(migration['account'])
+
+        conn_remote.put_container(test_container)
+        for name, body, headers in test_objects:
+            conn_local.put_object(test_container, name,
+                                  StringIO.StringIO(body), headers=headers)
+
+        _, listing = conn_local.get_container(test_container)
+        self.assertEqual(
+            [obj[0] for obj in test_objects],
+            [obj['name'] for obj in listing])
+        for entry in listing:
+            self.assertNotIn('content_location', entry)

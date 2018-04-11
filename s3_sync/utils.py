@@ -20,6 +20,8 @@ import json
 import StringIO
 import urllib
 
+from swift.common.middleware.versioned_writes import (
+    SYSMETA_VERSIONS_LOC, SYSMETA_VERSIONS_MODE)
 from swift.common.swob import Request
 from swift.common.utils import FileLikeIter, close_if_possible
 
@@ -42,6 +44,15 @@ HOP_BY_HOP_HEADERS = set([
     'transfer-encoding',
     'upgrade',
 ])
+
+
+class RemoteHTTPError(Exception):
+    def __init__(self, resp, *args, **kwargs):
+        self.resp = resp
+        super(RemoteHTTPError, self).__init__(*args, **kwargs)
+
+    def __unicode__(self):
+        return u'Error (%d): %s' % (self.resp.status, self.resp.body)
 
 
 class FileWrapper(object):
@@ -480,6 +491,38 @@ class ClosingResourceIterable(object):
             destructor.
         """
         self.close()
+
+
+def get_container_headers(provider, aws_bucket=None):
+    resp = provider.head_bucket(aws_bucket)
+    if resp.status != 200:
+        raise RemoteHTTPError(resp)
+
+    headers = {}
+    propagated_hdrs = ['x-container-read', 'x-container-write']
+    for hdr in resp.headers:
+        if hdr == 'x-history-location':
+            headers[SYSMETA_VERSIONS_LOC] = \
+                resp.headers[hdr].encode('utf8')
+            headers[SYSMETA_VERSIONS_MODE] = 'history'
+            continue
+
+        if hdr == 'x-versions-location':
+            headers[SYSMETA_VERSIONS_LOC] = \
+                resp.headers[hdr].encode('utf8')
+            headers[SYSMETA_VERSIONS_MODE] = 'stack'
+            continue
+
+        if hdr.startswith('x-container-meta-') or\
+                hdr in propagated_hdrs:
+            # Dunno why, really, but the internal client app will 503
+            # with utf8-encoded header values IF the header key is a
+            # unicode instance (even if it's just low ascii chars in
+            # that unicode instance).  Go figure...
+            headers[hdr.encode('utf8')] = \
+                resp.headers[hdr].encode('utf8')
+
+    return headers
 
 
 def filter_hop_by_hop_headers(headers):
