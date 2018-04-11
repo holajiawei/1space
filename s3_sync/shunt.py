@@ -18,6 +18,7 @@ import json
 from lxml import etree
 
 from swift.common import constraints, swob, utils
+from swift.common.wsgi import make_subrequest
 try:
     from swift.common.middleware.listing_formats import (
         get_listing_content_type)
@@ -328,15 +329,7 @@ class S3SyncShunt(object):
     def handle_object_put(
             self, req, start_response, sync_profile, per_account):
 
-        # Check if the container exists
-        vers, acct, cont, _ = req.split_path(4, 4, True)
-        container_path = '/%s' % '/'.join([
-            vers, utils.quote(acct), utils.quote(cont)])
-        head_container_req = swob.Request.blank(
-            container_path,
-            environ={'REQUEST_METHOD': 'HEAD'})
-        status, headers, body = head_container_req.call_application(self.app)
-        utils.close_if_possible(body)
+        status, headers, app_iter = req.call_application(self.app)
 
         if not status.startswith('404 '):
             status, headers, app_iter = req.call_application(self.app)
@@ -357,11 +350,16 @@ class S3SyncShunt(object):
                 start_response(status, headers)
                 return app_iter
 
-        put_container_env = {'REQUEST_METHOD': 'PUT', 'swift_owner': True}
-        put_container_req = swob.Request.blank(
-            container_path,
-            environ=put_container_env,
-            headers=headers)
+        vers, acct, cont, _ = req.split_path(4, 4, True)
+        container_path = '/%s' % '/'.join([
+            vers, utils.quote(acct), utils.quote(cont)])
+        put_container_req = make_subrequest(
+            req.environ,
+            method='PUT',
+            path=container_path,
+            headers=headers,
+            swift_source='CloudSync Shunt')
+        put_container_req.environ['swift_owner'] = True
         status, headers, body = put_container_req.call_application(self.app)
         utils.close_if_possible(body)
 
