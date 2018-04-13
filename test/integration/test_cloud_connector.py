@@ -18,11 +18,9 @@ from . import TestCloudSyncBase
 
 from swift.common.memcached import MemcacheRing
 from swiftclient.client import get_auth
-from swiftclient.exceptions import ClientException
 import urllib
 
 from s3_sync.cloud_connector.auth import MEMCACHE_TOKEN_KEY_FMT
-from s3_sync.provider_factory import create_provider
 
 
 class TestCloudConnector(TestCloudSyncBase):
@@ -52,66 +50,3 @@ class TestCloudConnector(TestCloudSyncBase):
 
         self.assertEqual(exp_acct, got_acct.encode('utf8'))
         self.assertAlmostEqual(got_expires, tempauth_expires, delta=1)
-
-    def test_obj_head_and_get_not_in_s3(self):
-        mapping = self.s3_sync_cc_mapping()
-
-        # A GET for an obj not in S3 should check in the Swift cluster
-        with self.assertRaises(ClientException) as cm:
-            self.cloud_connector('get_object', mapping['container'], 'foobie')
-        self.assertEqual(404, cm.exception.http_status)
-
-        # put the obj in swift
-        admin_conn = self.conn_for_acct(mapping['account'])
-        admin_conn.put_object(mapping['container'], 'foobie', 'abc',
-                              headers={'x-object-meta-crazy': 'madness'})
-
-        rheaders, body = self.cloud_connector('get_object',
-                                              mapping['container'], 'foobie')
-        self.assertEqual('abc', body)
-        self.assertEqual('madness', rheaders['x-object-meta-crazy'])
-
-        rheaders = self.cloud_connector('head_object', mapping['container'],
-                                        'foobie')
-        self.assertEqual('madness', rheaders['x-object-meta-crazy'])
-        self.assertEqual('3', rheaders['content-length'])
-
-    def test_obj_head_and_get_in_s3(self):
-        mapping = self.s3_sync_cc_mapping()
-
-        # A GET for an obj in S3 should return the S3 obj (even in preference
-        # to a copy also in Swift)
-        with self.assertRaises(ClientException) as cm:
-            self.cloud_connector('get_object', mapping['container'], 'barbie')
-        self.assertEqual(404, cm.exception.http_status)
-
-        # put the obj in S3
-        provider = create_provider(mapping, 1)
-        s3_key = provider.get_s3_name('barbie')
-        self.s3('put_object', Bucket=mapping['aws_bucket'], Key=s3_key,
-                Body='def', Metadata={'jojo': 'foofoo'})
-
-        rheaders, body = self.cloud_connector('get_object',
-                                              mapping['container'], 'barbie')
-        self.assertEqual('def', body)
-        self.assertEqual('foofoo', rheaders['x-object-meta-jojo'])
-
-        rheaders = self.cloud_connector('head_object', mapping['container'],
-                                        'barbie')
-        self.assertEqual('foofoo', rheaders['x-object-meta-jojo'])
-        self.assertEqual('3', rheaders['content-length'])
-
-        # put a diff obj in real swift, should still get the S3 one back
-        admin_conn = self.conn_for_acct(mapping['account'])
-        admin_conn.put_object(mapping['container'], 'barbie', 'abcd',
-                              headers={'x-object-meta-crazy': 'madness'})
-
-        rheaders, body = self.cloud_connector('get_object',
-                                              mapping['container'], 'barbie')
-        self.assertEqual('def', body)
-        self.assertEqual('foofoo', rheaders['x-object-meta-jojo'])
-
-        rheaders = self.cloud_connector('head_object', mapping['container'],
-                                        'barbie')
-        self.assertEqual('foofoo', rheaders['x-object-meta-jojo'])
-        self.assertEqual('3', rheaders['content-length'])

@@ -25,14 +25,16 @@ from swift.proxy.controllers.base import Controller
 from swift.proxy.server import Application as ProxyApplication
 
 from s3_sync.cloud_connector.util import (
-    forward_raw_swift_req, get_and_write_conf_file_from_s3, get_env_options)
+    get_and_write_conf_file_from_s3, get_env_options)
 from s3_sync.provider_factory import create_provider
 from s3_sync.shunt import maybe_munge_profile_for_all_containers
-from s3_sync.utils import filter_hop_by_hop_headers
 
 
 CLOUD_CONNECTOR_CONF_PATH = os.path.sep + os.path.join(
     'tmp', 'cloud-connector.conf')
+CLOUD_CONNECTOR_SYNC_CONF_PATH = os.path.sep + os.path.join(
+    'tmp', 'sync.json')
+ROOT_UID = 0
 
 
 class CloudConnectorController(Controller):
@@ -60,32 +62,9 @@ class CloudConnectorController(Controller):
     def GETorHEAD(self, req):
         # Note: account operations were already filtered out in
         # get_controller()
-        if not self.object_name:
-            # container listing; we'll list the remote store first, then
-            # overlay any listing results from the onprem Swift cluster.
-            #
-            # TODO: implement this
-            return swob.HTTPNotImplemented()
-
-        # Try "remote" (with respect to config--this store should actually be
-        # "closer" to this daemon) first
-        provider_fn = self.provider.get_object if req.method == 'GET' else \
-            self.provider.head_object
-        remote_resp = provider_fn(self.object_name)
-        if remote_resp.status // 100 == 2:
-            # successy!
-            # NOTE: any S3 headers will have already had
-            # convert_to_swift_headers() called on them.
-            resp_headers = dict(filter_hop_by_hop_headers(
-                remote_resp.headers.items()))
-            return swob.Response(app_iter=remote_resp.body,
-                                 status=remote_resp.status,
-                                 headers=resp_headers,
-                                 request=req)
-
-        # Nope... try "local" (with respect to config--this swift cluster
-        # should actually be "further away from" this daemon) swift.
-        return forward_raw_swift_req(self.app.swift_baseurl, req)
+        #
+        # TODO: implement this
+        return swob.HTTPNotImplemented()
 
     @utils.public
     def GET(self, req):
@@ -105,10 +84,17 @@ class CloudConnectorController(Controller):
 
     @utils.public
     def POST(self, req):
+        # TODO: implement this
         return swob.HTTPNotImplemented()
 
     @utils.public
     def DELETE(self, req):
+        # TODO: implement this
+        return swob.HTTPNotImplemented()
+
+    @utils.public
+    def OPTIONS(self, req):
+        # TODO: implement this (or not)
         return swob.HTTPNotImplemented()
 
 
@@ -118,20 +104,33 @@ class CloudConnectorApplication(ProxyApplication):
     swift3 middleware) to run on cloud compute nodes and
     seamlessly provide R/W access to the "cloud sync" data namespace.
     """
-    def __init__(self, sync_conf_path, conf, memcache=None, logger=None):
+    def __init__(self, conf, logger=None):
         self.conf = conf
 
         if logger is None:
             self.logger = utils.get_logger(conf, log_route='cloud-connector')
         else:
             self.logger = logger
-        self.memcache = memcache
         self.deny_host_headers = [
             host.strip() for host in
             conf.get('deny_host_headers', '').split(',') if host.strip()]
 
+        # This gets called more than once on startup; first as root, then as
+        # the configured user.  If root writes conf files down, then when the
+        # 2nd invocation tries to write it down, it'll fail.  We solve this
+        # writing it down the first time (instantiation of our stuff will fail
+        # otherwise), but chowning the file to the final user if we're
+        # currently euid == ROOT_UID.
+        unpriv_user = conf.get('user', 'swift')
+        sync_conf_obj_name = conf.get(
+            'conf_file', '/etc/swift-s3-sync/sync.json').lstrip('/')
+        env_options = get_env_options()
+        get_and_write_conf_file_from_s3(
+            sync_conf_obj_name, CLOUD_CONNECTOR_SYNC_CONF_PATH, env_options,
+            user=unpriv_user)
+
         try:
-            with open(sync_conf_path, 'rb') as fp:
+            with open(CLOUD_CONNECTOR_SYNC_CONF_PATH, 'rb') as fp:
                 self.sync_conf = json.load(fp)
         except (IOError, ValueError) as err:
             # There's no sane way we should get executed without something
@@ -139,7 +138,7 @@ class CloudConnectorApplication(ProxyApplication):
             # telling us to look.  So if we can't find it, there's nothing
             # better to do than to fully exit the process.
             exit("Couldn't read sync_conf_path %r: %s; exiting" % (
-                sync_conf_path, err))
+                CLOUD_CONNECTOR_SYNC_CONF_PATH, err))
 
         self.sync_profiles = {}
         for cont in self.sync_conf['containers']:
@@ -162,16 +161,19 @@ class CloudConnectorApplication(ProxyApplication):
 
         if not obj and not cont:
             # We've decided to not support any actions on accounts...
-            raise swob.HTTPException(status="403 Can't Touch This",
-                                     body="Account operations are not "
+            raise swob.HTTPForbidden(body="Account operations are not "
                                      "supported.")
+
+        if not obj and req.method != 'GET':
+            # We've decided to only support container listings (GET)
+            raise swob.HTTPForbidden(body="The only supported container "
+                                     "operation is GET (listing).")
 
         profile_key1, profile_key2 = (acct, cont), (acct, '/*')
         profile = self.sync_profiles.get(
             profile_key1, self.sync_profiles.get(profile_key2, None))
         if not profile:
-            raise swob.HTTPException(status="403 Can't Touch This",
-                                     body="No matching sync profile.")
+            raise swob.HTTPForbidden(body="No matching sync profile.")
 
         d = dict(sync_profile=profile,
                  version=ver,
@@ -186,30 +188,18 @@ def app_factory(global_conf, **local_conf):
     conf = global_conf.copy()
     conf.update(local_conf)
 
-    # This gets called more than once on startup; first as root, then as the
-    # configured user.  If root writes conf files down, then when the 2nd
-    # invocation tries to write it down, it'll fail.  We solve this writing it
-    # down the first time (instantiation of our stuff will fail otherwise), but
-    # chowning the file to the final user if we're currently euid == 0.
-    unpriv_user = conf.get('user', 'swift')
-    sync_conf_path = os.path.sep + os.path.join('tmp', 'sync.json')
-    sync_conf_obj_name = conf.get('conf_file',
-                                  '/etc/swift-s3-sync/sync.json').lstrip('/')
-
-    env_options = get_env_options()
-    get_and_write_conf_file_from_s3(sync_conf_obj_name, sync_conf_path,
-                                    env_options, user=unpriv_user)
-
+    # See comment in CloudConnectorApplication.__init__().
     # For the same reason, if we don't chown the main conf file, it can't be
     # read after we drop privileges.  NOTE: we didn't know the configured user
     # to which we will drop privileges the first time we wrote the main config
     # file, in main(), so we couldn't do this then.
-    if os.geteuid() == 0:
+    if os.geteuid() == ROOT_UID:
+        unpriv_user = conf.get('user', 'swift')
         user_ent = pwd.getpwnam(unpriv_user)
         os.chown(CLOUD_CONNECTOR_CONF_PATH,
                  user_ent.pw_uid, user_ent.pw_gid)
 
-    app = CloudConnectorApplication(sync_conf_path, conf)
+    app = CloudConnectorApplication(conf)
     return app
 
 
