@@ -68,10 +68,9 @@ class TestMigrator(TestCloudSyncBase):
 
         test_objects = [
             ('s3-blob', 's3 content', {}, {}),
-            ('s3-unicod\u00e9', '\xde\xad\xbe\xef', {}, {}),
+            (u's3-unicod\u00e9', '\xde\xad\xbe\xef', {}, {}),
             ('s3-with-headers', 'header-blob',
-             {'custom-header': 'value',
-              'unicod\u00e9': '\u262f'},
+             {'custom-header': 'value'},
              {'content-type': 'migrator/test',
               'content-disposition': "attachment; filename='test-blob.jpg'",
               'content-encoding': 'identity'})]
@@ -85,8 +84,10 @@ class TestMigrator(TestCloudSyncBase):
         for name, body, headers, req_headers in test_objects:
             kwargs = dict([('Content' + key.split('-')[1].capitalize(), value)
                            for key, value in req_headers.items()])
-            self.s3('put_object', Bucket=migration['aws_bucket'], Key=name,
-                    Body=StringIO.StringIO(body), Metadata=headers,
+            self.s3('put_object', Bucket=migration['aws_bucket'],
+                    Key=name,
+                    Body=StringIO.StringIO(body),
+                    Metadata=headers,
                     **kwargs)
 
         with self.migrator_running():
@@ -296,11 +297,11 @@ class TestMigrator(TestCloudSyncBase):
 
         test_objects = [
             ('swift-blobBBBB', 'blob content', {}),
-            ('swift-unicod\u00e9', '\xde\xad\xbe\xef', {}),
+            (u'swift-unicod\u00e9', '\xde\xad\xbe\xef', {}),
             ('swift-with-headers',
              'header-blob',
              {'x-object-meta-custom-header': 'value',
-              'x-object-meta-unicod\u00e9': '\u262f',
+              u'x-object-meta-unicod\u00e9': u'\u262f',
               'content-type': 'migrator/test',
               'content-disposition': "attachment; filename='test-blob.jpg'",
               'content-encoding': 'identity',
