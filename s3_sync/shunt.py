@@ -479,6 +479,7 @@ class S3SyncShunt(object):
         if req.method == 'GET' and sync_profile.get('restore_object', False) \
                 and 'range' not in req.headers:
             # We incur an extra request hit by checking for a possible SLO.
+            obj = obj.decode('utf-8')
             manifest = provider.get_manifest(obj)
             self.logger.debug("Manifest: %s" % manifest)
             status, headers, app_iter = provider.shunt_object(req, obj)
