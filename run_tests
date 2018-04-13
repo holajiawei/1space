@@ -6,13 +6,13 @@ docker pull bouncestorage/swift-aio
 # The --build is safe because if nothing in the Dockerfile has changed, it'll
 # just quickly "build" entirely from cache and not do anything.
 docker-compose up --build -d
-docker-compose exec swift-s3-sync /bin/bash -c 'cd /swift-s3-sync; flake8'
+docker exec swift-s3-sync /bin/bash -c 'cd /swift-s3-sync; flake8'
 export COVER_HTML_DIR=/swift-s3-sync/.coverhtml
-docker-compose exec swift-s3-sync /bin/bash -c "mkdir -p $COVER_HTML_DIR; \
+docker exec swift-s3-sync /bin/bash -c "mkdir -p $COVER_HTML_DIR; \
     cd /swift-s3-sync; \
     nosetests --with-coverage --cover-branches \
     --cover-package=s3_sync --cover-erase --cover-html \
     --cover-html-dir=$COVER_HTML_DIR test/unit"
 echo Waiting for container services to start...
-docker-compose exec swift-s3-sync timeout 40 bash -c 'until echo > /dev/tcp/localhost/8081; do sleep 0.5; done' >/dev/null 2>&1
-docker-compose exec -e DOCKER=true  swift-s3-sync nosetests --nocapture /swift-s3-sync/test/integration/
+docker exec swift-s3-sync timeout 40 bash -c 'until echo > /dev/tcp/localhost/8081; do sleep 0.5; done' >/dev/null 2>&1
+docker exec -e DOCKER=true  swift-s3-sync nosetests --nocapture /swift-s3-sync/test/integration/
