@@ -26,6 +26,23 @@ from s3_sync.sync_s3 import SyncS3
 from s3_sync.utils import ClosingResourceIterable, filter_hop_by_hop_headers
 
 
+def get_ecs_creds():
+    opts = {}
+
+    aws_creds_relative_uri = os.environ.get(
+        'AWS_CONTAINER_CREDENTIALS_RELATIVE_URI', None)
+    if aws_creds_relative_uri:
+        creds_uri = 'http://169.254.170.2%s' % (aws_creds_relative_uri,)
+        resp = requests.get(creds_uri)
+        resp.raise_for_status()
+        aws_creds = resp.json()
+        opts['AWS_ACCESS_KEY_ID'] = aws_creds['AccessKeyId']
+        opts['AWS_SECRET_ACCESS_KEY'] = aws_creds['SecretAccessKey']
+        opts['AWS_SECURITY_TOKEN_STRING'] = aws_creds['Token']
+        # NOTE: this temporary key will expire in like a day.
+    return opts
+
+
 def get_env_options():
     """
     Reads various environment variables to determine how to load configuration
@@ -35,7 +52,7 @@ def get_env_options():
         CONF_NAME: optional; object name of main config file residing in
             the CONF_BUCKET; defaults to `cloud-connector.conf`
 
-    For authen/authz, one set of the following is required:
+    For authen/authz into S3, one set of the following is required:
         AWS_CONTAINER_CREDENTIALS_RELATIVE_URI: Amazon ECS can set this env var
             to allow the container to load temporary session S3 credentials
     or:
@@ -55,22 +72,11 @@ def get_env_options():
     opts['AWS_SECRET_ACCESS_KEY'] = os.environ.get('AWS_SECRET_ACCESS_KEY',
                                                    None)
 
-    aws_creds_relative_uri = os.environ.get(
-        'AWS_CONTAINER_CREDENTIALS_RELATIVE_URI', None)
     # Grabbing creds in this order and with this logic allows a container
     # deployment to overide the ECS-configured temporary IAM role session creds
     # with a specific access key id and secret access key.
-    if aws_creds_relative_uri and not (opts['AWS_ACCESS_KEY_ID'] and
-                                       opts['AWS_SECRET_ACCESS_KEY']):
-        creds_uri = 'http://169.254.170.2%s' % (aws_creds_relative_uri,)
-        resp = requests.get(creds_uri)
-        resp.raise_for_status()
-        aws_creds = resp.json()
-        opts['AWS_ACCESS_KEY_ID'] = aws_creds['AccessKeyId']
-        opts['AWS_SECRET_ACCESS_KEY'] = aws_creds['SecretAccessKey']
-        opts['AWS_SECURITY_TOKEN_STRING'] = aws_creds['Token']
-        # NOTE: this temporary key will expire in like a day, but we only use
-        # it for fetching config on start-up, so that shouldn't be a problem.
+    if not (opts['AWS_ACCESS_KEY_ID'] and opts['AWS_SECRET_ACCESS_KEY']):
+        opts.update(get_ecs_creds())
 
     if not (opts['AWS_ACCESS_KEY_ID'] and opts['AWS_SECRET_ACCESS_KEY']):
         exit('Missing either AWS_CONTAINER_CREDENTIALS_RELATIVE_URI or '
