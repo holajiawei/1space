@@ -28,8 +28,6 @@ from swift.common import swob, utils as swift_utils, wsgi
 
 from s3_sync.cloud_connector import app
 
-from utils import FakeLogger
-
 
 class TestCloudSyncBase(unittest.TestCase):
     def setUp(self):
@@ -122,8 +120,7 @@ class TestCloudSyncApp(TestCloudSyncBase):
         mock_get_and_write.side_effect = _config_writer
 
         conf = {'swift_baseurl': self.swift_baseurl}
-        self.fake_logger = FakeLogger()
-        self.app = app.CloudConnectorApplication(conf, logger=self.fake_logger)
+        self.app = app.CloudConnectorApplication(conf, logger=mock.MagicMock())
 
     def controller_for(self, account, container, obj, verb):
         req = swob.Request.blank('http://a.b.c:123/v1/%s/%s/%s' % (
