@@ -271,8 +271,9 @@ class SyncSwift(BaseSync):
 
         if parse_modified:
             for container in resp.body:
-                container['last_modified'] = datetime.datetime.strptime(
-                    container['last_modified'], SWIFT_TIME_FMT)
+                if 'last_modified' in container:
+                    container['last_modified'] = datetime.datetime.strptime(
+                        container['last_modified'], SWIFT_TIME_FMT)
         return resp
 
     def _call_swiftclient(self, op, container, key, **args):
