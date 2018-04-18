@@ -648,3 +648,42 @@ class TestSyncSwift(unittest.TestCase):
         self.sync_swift.upload_object('foo', 'policy', mock_ic)
         self.assertEqual([mock.call.head_object('bucketcontainer', 'foo')],
                          swift_client.mock_calls)
+
+    @mock.patch('s3_sync.sync_swift.swiftclient.client.Connection')
+    def test_list_buckets(self, mock_swift):
+        containers = [
+            {'name': 'a', 'last_modified': '2018-01-01T22:22:22.000000',
+             'count': 1000, 'bytes': 2**20},
+            {'name': 'b', 'last_modified': '2018-01-02T23:23:23.123456',
+             'count': 10000, 'bytes': 3**20},
+            {'name': u'\u062a', 'last_modified': '2000-10-10T01:01:01.867530',
+             'count': 1, 'bytes': 1**20}]
+
+        swift_client = mock.Mock()
+        mock_swift.return_value = swift_client
+        swift_client.get_account.return_value = (
+            {'x-account-meta-header': 'value'}, containers)
+
+        resp = self.sync_swift.list_buckets(None, 1000, None)
+
+        self.assertEqual(200, resp.status)
+        self.assertEqual({'x-account-meta-header': 'value'}, resp.headers)
+        self.assertEqual(containers, resp.body)
+
+    @mock.patch('s3_sync.sync_swift.swiftclient.client.Connection')
+    def test_list_buckets_no_last_modified(self, mock_swift):
+        containers = [
+            {'name': 'a', 'count': 1000, 'bytes': 2**20},
+            {'name': 'b', 'count': 10000, 'bytes': 3**20},
+            {'name': u'\u062a', 'count': 1, 'bytes': 1**20}]
+
+        swift_client = mock.Mock()
+        mock_swift.return_value = swift_client
+        swift_client.get_account.return_value = (
+            {'x-account-meta-header': 'value'}, containers)
+
+        resp = self.sync_swift.list_buckets(None, 1000, None)
+
+        self.assertEqual(200, resp.status)
+        self.assertEqual({'x-account-meta-header': 'value'}, resp.headers)
+        self.assertEqual(containers, resp.body)
