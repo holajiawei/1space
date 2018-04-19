@@ -78,8 +78,8 @@ class CloudConnectAuth(object):
         TODO(darrell): add support for Swift v1 authen/authz
         TODO(darrell): add support for X-Auth-Token header
 
-        Currently only supports authen (via swift3 callback) and authz for S3
-        API requests.
+        Currently only supports authentication (via swift3 callback) and
+        authorization for S3 API requests.
         """
         # TODO(darrell): sniff out and handle Swift v1 auth requests
 
