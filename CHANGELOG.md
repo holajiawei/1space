@@ -1,3 +1,11 @@
+## 0.1.30.1 (2018-04-18)
+
+Improvement:
+
+    - Older Swift clusters may not supply `last_modified` in the response to
+      account GET requests for each container. The swift-s3-sync migrator should
+      be robust to that and not attempt to process the `last_modified` entry.
+
 ## 0.1.30 (2018-04-11)
 
 Bug fixes:
