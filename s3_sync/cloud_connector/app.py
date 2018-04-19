@@ -114,6 +114,10 @@ class CloudConnectorApplication(ProxyApplication):
         self.deny_host_headers = [
             host.strip() for host in
             conf.get('deny_host_headers', '').split(',') if host.strip()]
+        # We shouldn't _need_ any caching, but the proxy server will access
+        # this attribute, and if it's None, it'll try to get a cache client
+        # from the env.
+        self.memcache = 'look but dont touch'
 
         # This gets called more than once on startup; first as root, then as
         # the configured user.  If root writes conf files down, then when the
@@ -158,7 +162,6 @@ class CloudConnectorApplication(ProxyApplication):
         # splititng it.  Unlike our superclass' similarly-named method, we're
         # going to leave the acct/cont/obj values UTF8-encoded and unquoted.
         ver, acct, cont, obj = req.split_path(1, 4, True)
-
         if not obj and not cont:
             # We've decided to not support any actions on accounts...
             raise swob.HTTPForbidden(body="Account operations are not "
@@ -173,6 +176,8 @@ class CloudConnectorApplication(ProxyApplication):
         profile = self.sync_profiles.get(
             profile_key1, self.sync_profiles.get(profile_key2, None))
         if not profile:
+            self.logger.debug('No matching sync profile for %r or %r',
+                              profile_key1, profile_key2)
             raise swob.HTTPForbidden(body="No matching sync profile.")
 
         d = dict(sync_profile=profile,

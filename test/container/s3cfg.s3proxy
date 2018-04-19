@@ -1,0 +1,6 @@
+[default]
+access_key=s3-sync-test
+secret_key=s3-sync-test
+host_base=localhost:10080
+host_bucket=localhost:10080
+use_https = False

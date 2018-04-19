@@ -1,0 +1,33 @@
+[{
+    "access_key": "admin:admin",
+    "secret_key": "admin",
+    "account": "AUTH_admin"
+}, {
+    "access_key": "test:tester",
+    "secret_key": "testing",
+    "account": "AUTH_test"
+}, {
+    "access_key": "test2:tester2",
+    "secret_key": "testing2",
+    "account": "AUTH_test2"
+}, {
+    "access_key": "\u062aacct:\u062auser",
+    "secret_key": "\u062apass",
+    "account": "AUTH_\u062aacct"
+}, {
+    "access_key": "\u062aacct2:\u062auser2",
+    "secret_key": "\u062apass2",
+    "account": "AUTH_\u062aacct2"
+}, {
+    "access_key": "nacct:nuser",
+    "secret_key": "npass",
+    "account": "AUTH_nacct"
+}, {
+    "access_key": "nacct2:nuser2",
+    "secret_key": "npass2",
+    "account": "AUTH_nacct2"
+}, {
+    "access_key": "slashacct:slashuser",
+    "secret_key": "slashpass",
+    "account": "AUTH_slashacct"
+}]

@@ -60,7 +60,9 @@ s3cmd -c /swift-s3-sync/s3cfg mb s3://$CONF_BUCKET ||:
 s3cmd -c /swift-s3-sync/s3cfg put /swift-s3-sync/test/container/cloud-connector.conf \
     s3://$CONF_BUCKET
 s3cmd -c /swift-s3-sync/s3cfg put /swift-s3-sync/test/container/swift-s3-sync.conf \
-    s3://$CONF_BUCKET/sync-config.json; \
+    s3://$CONF_BUCKET/sync-config.json
+s3cmd -c /swift-s3-sync/s3cfg put /swift-s3-sync/test/container/s3-passwd.json \
+    s3://$CONF_BUCKET/s3-passwd.json
 AWS_ACCESS_KEY_ID=s3-sync-test AWS_SECRET_ACCESS_KEY=s3-sync-test cloud-connector \
     2>&1 >> /var/log/cloud-connector.log &
 
