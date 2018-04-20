@@ -29,7 +29,7 @@ from swift.common import swob, utils as swift_utils, wsgi
 from s3_sync.cloud_connector import app
 
 
-class TestCloudSyncBase(unittest.TestCase):
+class TestCloudConnectorBase(unittest.TestCase):
     def setUp(self):
         self.tempdir = tempfile.mkdtemp()
         self.cloud_connector_conf_path = os.path.join(
@@ -96,9 +96,9 @@ class TestCloudSyncBase(unittest.TestCase):
         shutil.rmtree(self.tempdir, ignore_errors=True)
 
 
-class TestCloudSyncApp(TestCloudSyncBase):
+class TestCloudConnectorApp(TestCloudConnectorBase):
     def setUp(self):
-        super(TestCloudSyncApp, self).setUp()
+        super(TestCloudConnectorApp, self).setUp()
 
         self.swift_baseurl = 'http://1.2.3.4:5678'
 
@@ -215,7 +215,7 @@ class TestCloudSyncApp(TestCloudSyncBase):
                 }, kwargs)
 
 
-class TestCloudSyncAppConstruction(TestCloudSyncBase):
+class TestCloudConnectorAppConstruction(TestCloudConnectorBase):
     @mock.patch('s3_sync.cloud_connector.app.get_env_options')
     @mock.patch('s3_sync.cloud_connector.app.get_and_write_conf_file_from_s3')
     def test_app_init_json_load_error(self, mock_get_and_write,

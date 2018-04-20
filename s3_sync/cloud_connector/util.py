@@ -18,12 +18,8 @@ import os
 import pwd
 import requests
 import traceback
-from urlparse import urlsplit
-
-from swift.common import swob, utils, bufferedhttp
 
 from s3_sync.sync_s3 import SyncS3
-from s3_sync.utils import ClosingResourceIterable, filter_hop_by_hop_headers
 
 
 def get_aws_ecs_creds():
@@ -131,54 +127,13 @@ def get_and_write_conf_file_from_s3(obj_name, target_path, env_options,
             obj_name, resp.status, ''.join(resp.body)))
     try:
         with open(target_path, 'wb') as fh:
-            if user is not None and os.getuid() == 0:
+            if user is not None and os.geteuid() == 0:
                 user_ent = pwd.getpwnam(user)
                 os.fchown(fh.fileno(), user_ent.pw_uid, user_ent.pw_gid)
             os.fchmod(fh.fileno(), 0o0640)
             for chunk in resp.body:
                 fh.write(chunk)
     except Exception:
+        os.unlink(target_path)
         raise GetAndWriteFileException('Writing %s: %s' % (
             obj_name, traceback.format_exc()))
-
-
-def forward_raw_swift_req(swift_baseurl, req):
-    """
-    Given a swift.common.swob.Request instance, send it to the public
-    proxy-server endpoint specified in swift_baseurl, returning a
-    swift.common.swob.Response instance representing the Swift cluster's
-    response.
-
-    This cute trick works when _we_ got a Swift API request, but won't help
-    when we got a S3 API request and thus don't have a X-Auth-Token header to
-    send along in the request to the Swift cluster.  Ah well...
-    """
-    scheme, netloc, _, _, _ = urlsplit(swift_baseurl)
-    ssl = (scheme == 'https')
-    swift_host, swift_port = utils.parse_socket_string(netloc,
-                                                       443 if ssl else 80)
-    swift_port = int(swift_port)
-    if ssl:
-        conn = bufferedhttp.HTTPSConnection(swift_host, port=swift_port)
-    else:
-        conn = bufferedhttp.BufferedHTTPConnection(swift_host, port=swift_port)
-    conn.path = req.path_qs
-    conn.putrequest(req.method, req.path_qs, skip_host=True)
-    for header, value in filter_hop_by_hop_headers(req.headers.items()):
-        if header.lower() == 'host':
-            continue
-        conn.putheader(header, str(value))
-    conn.putheader('Host', str(swift_host))
-    conn.endheaders()
-
-    resp = conn.getresponse()
-    headers = dict(filter_hop_by_hop_headers(resp.getheaders()))
-    # XXX If this is a GET, do we want to "tee" the Swift object into the
-    # remote (S3) store as it's fed back out to the client??
-    body_len = 0 if req.method == 'HEAD' \
-        else int(headers['content-length'])
-    app_iter = ClosingResourceIterable(
-        resource=conn, data_src=resp,
-        length=body_len)
-    return swob.Response(app_iter=app_iter, status=resp.status,
-                         headers=headers, request=req)
