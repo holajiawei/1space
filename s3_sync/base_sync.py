@@ -201,4 +201,5 @@ class BaseSync(object):
 
     def _full_name(self, key):
         return u'%s/%s/%s' % (self.account, self.container,
-                              key.decode('utf-8'))
+                              key if isinstance(key, unicode)
+                              else key.decode('utf-8'))

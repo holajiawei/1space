@@ -251,21 +251,32 @@ class SyncS3(BaseSync):
         def _perform_op(s3_client):
             try:
                 resp = getattr(s3_client, op)(**args)
-                body = resp.get('Body', [''])
+                body = resp.get('Body', iter(['']))
                 return ProviderResponse(
                     True, resp['ResponseMetadata']['HTTPStatusCode'],
                     convert_to_swift_headers(
                         resp['ResponseMetadata']['HTTPHeaders']),
                     body)
             except botocore.exceptions.ClientError as e:
+                self.logger.debug(
+                    'S3 API %r to %s/%s (key_id: %s) got %r',
+                    op, self.settings.get('aws_endpoint', 's3:/'),
+                    self.settings['aws_bucket'].encode('utf8'),
+                    self.settings['aws_identity'].encode('utf8'),
+                    e.response)
                 return ProviderResponse(
                     False, e.response['ResponseMetadata']['HTTPStatusCode'],
                     convert_to_swift_headers(
                         e.response['ResponseMetadata']['HTTPHeaders']),
                     iter(e.response['Error']['Message']))
-            except Exception:
-                self.logger.exception('Error contacting remote s3 cluster')
-                return ProviderResponse(False, 502, {}, iter('Bad Gateway'))
+            except Exception as e:
+                self.logger.exception(
+                    'Error with S3 API %r to %s/%s (key_id: %s): %r',
+                    op, self.settings.get('aws_endpoint', 's3:/'),
+                    self.settings['aws_bucket'].encode('utf8'),
+                    self.settings['aws_identity'].encode('utf8'),
+                    e.message)
+                return ProviderResponse(False, 502, {}, iter(['Bad Gateway']))
 
         if op == 'get_object':
             entry = self.client_pool.get_client()
