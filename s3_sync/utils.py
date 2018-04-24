@@ -44,6 +44,7 @@ HOP_BY_HOP_HEADERS = set([
     'transfer-encoding',
     'upgrade',
 ])
+PROPAGATED_HDRS = ['x-container-read', 'x-container-write']
 
 
 class RemoteHTTPError(Exception):
@@ -493,13 +494,16 @@ class ClosingResourceIterable(object):
         self.close()
 
 
+def _propagated_hdr(hdr):
+    return hdr.startswith('x-container-meta-') or hdr in PROPAGATED_HDRS
+
+
 def get_container_headers(provider, aws_bucket=None):
     resp = provider.head_bucket(aws_bucket)
     if resp.status != 200:
         raise RemoteHTTPError(resp)
 
     headers = {}
-    propagated_hdrs = ['x-container-read', 'x-container-write']
     for hdr in resp.headers:
         if hdr == 'x-history-location':
             headers[SYSMETA_VERSIONS_LOC] = \
@@ -513,8 +517,7 @@ def get_container_headers(provider, aws_bucket=None):
             headers[SYSMETA_VERSIONS_MODE] = 'stack'
             continue
 
-        if hdr.startswith('x-container-meta-') or\
-                hdr in propagated_hdrs:
+        if _propagated_hdr(hdr):
             # Dunno why, really, but the internal client app will 503
             # with utf8-encoded header values IF the header key is a
             # unicode instance (even if it's just low ascii chars in
@@ -523,6 +526,25 @@ def get_container_headers(provider, aws_bucket=None):
                 resp.headers[hdr].encode('utf8')
 
     return headers
+
+
+def diff_container_headers(remote_headers, local_headers):
+    # remote_headers are unicode, local are str returns str
+    rem_headers = dict([(k.encode('utf8'), v.encode('utf8')) for k, v in
+                        remote_headers.items() if _propagated_hdr(k)])
+
+    matching_keys = set(rem_headers.keys()).intersection(local_headers.keys())
+    missing_remote_keys = set(
+        local_headers.keys()).difference(rem_headers.keys())
+
+    missing_local_keys = set(
+        rem_headers.keys()).difference(local_headers.keys())
+
+    return dict([(k, rem_headers[k])
+                 for k in matching_keys if
+                 rem_headers[k] != local_headers.get(k)] +
+                [(k, rem_headers[k]) for k in missing_local_keys] +
+                [(k, '') for k in missing_remote_keys if _propagated_hdr(k)])
 
 
 def filter_hop_by_hop_headers(headers):

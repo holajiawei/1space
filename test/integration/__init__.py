@@ -107,6 +107,7 @@ def clear_s3_bucket(client, bucket):
 def clear_swift_account(client):
     for cont in client.get_account()[1]:
         clear_swift_container(client, cont['name'])
+        client.delete_container(cont['name'])
 
 
 def s3_prefix(account, container, key):

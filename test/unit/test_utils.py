@@ -85,6 +85,33 @@ class TestUtilsFunctions(unittest.TestCase):
                  'content-type': 'application/test'}.items(),
                 remove_timestamp=False))
 
+    def test_diff_container_headers(self):
+        hdrs_remote = {
+            'x-history-location': 'foo',
+            utils.SYSMETA_VERSIONS_LOC: 'bar',
+            utils.SYSMETA_VERSIONS_MODE: 'baz',
+            'boogaloo': 'bangarang',
+            u'x-container-meta-test-\u062a': u'remote-\u062a-new',
+            u'x-container-meta-keep-\u062a': u'keepval-\u062a',
+            u'x-container-meta-test-new-\u062a': u'myval\u062a',
+        }
+        hdrs_local = {
+            'x-history-versions': 'foobar',
+            utils.SYSMETA_VERSIONS_LOC: 'bark',
+            utils.SYSMETA_VERSIONS_MODE: 'buzz',
+            'poohbear': 'eeyore',
+            'x-container-meta-test-\xd8\xaa': 'remote-\xd8\xaa',
+            'x-container-meta-keep-\xd8\xaa': 'keepval-\xd8\xaa',
+            'x-container-meta-test-old-\xd8\xaa': 'myval\xd8\xaa-oldval',
+        }
+        expected = {
+            'x-container-meta-test-\xd8\xaa': 'remote-\xd8\xaa-new',
+            'x-container-meta-test-new-\xd8\xaa': 'myval\xd8\xaa',
+            'x-container-meta-test-old-\xd8\xaa': '',
+        }
+        self.assertEqual(expected, utils.diff_container_headers(
+            hdrs_remote, hdrs_local))
+
 
 class FakeSwift(object):
     def __init__(self):

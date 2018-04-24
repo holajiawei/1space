@@ -594,7 +594,7 @@ class TestMigrator(unittest.TestCase):
     @mock.patch('s3_sync.migrator.create_provider')
     def test_all_buckets_next_pass_fails(self, create_provider_mock):
         self.migrator.config['aws_bucket'] = '/*'
-        self.migrator._find_missing_objects = mock.Mock(
+        self.migrator._process_container = mock.Mock(
             side_effect=Exception('kaboom'))
         create_provider_mock.return_value.list_buckets.side_effect = \
             [ProviderResponse(True, 200, [], [
@@ -1007,11 +1007,20 @@ class TestMigrator(unittest.TestCase):
                 resp.headers = container_headers
                 provider.head_bucket.return_value = resp
                 headers = resp.headers
+                swift_404_resp = mock.Mock()
+                swift_404_resp.status_int = 404
+
+                def fake_get_metadata(account, container):
+                    raise UnexpectedResponse('', swift_404_resp)
+
+                self.swift_client.get_container_metadata.side_effect = \
+                    fake_get_metadata
+                self.swift_client.container_exists.side_effect = (True,)
             else:
+                self.swift_client.container_exists.side_effect = (False, True)
                 headers = {}
 
             self.swift_client.iter_objects.return_value = iter([])
-            self.swift_client.container_exists.side_effect = (False, True)
             self.swift_client.make_path.return_value = '/'.join(
                 ['http://test/v1', self.migrator.config['account'],
                  self.migrator.config['container']])
@@ -1152,6 +1161,10 @@ class TestMigrator(unittest.TestCase):
         def container_exists(_, container):
             return containers[container]
 
+        def get_container_metadata(_, container):
+            if not containers[container]:
+                raise UnexpectedResponse('', swift_404_resp)
+
         def fake_app(env, func):
             containers[env['PATH_INFO'].split('/')[3]] = True
             return func(200, [])
@@ -1181,6 +1194,8 @@ class TestMigrator(unittest.TestCase):
                 raise UnexpectedResponse('', swift_404_resp)
 
         self.swift_client.container_exists.side_effect = container_exists
+        self.swift_client.get_container_metadata.side_effect = \
+            get_container_metadata
         self.swift_client.app.side_effect = fake_app
         self.swift_client.make_path.side_effect = _make_path
         self.swift_client.get_object_metadata.side_effect = UnexpectedResponse(
@@ -1333,6 +1348,10 @@ class TestMigrator(unittest.TestCase):
             containers[env['PATH_INFO'].split('/')[3]] = True
             return func(200, [])
 
+        def get_container_metadata(_, container):
+            if not containers[container]:
+                raise UnexpectedResponse('', swift_404_resp)
+
         def _make_path(account, container):
             return '/'.join(['http://test/v1', account, container])
 
@@ -1363,6 +1382,8 @@ class TestMigrator(unittest.TestCase):
             raise RuntimeError('Unknown container')
 
         self.swift_client.container_exists.side_effect = container_exists
+        self.swift_client.get_container_metadata.side_effect = \
+            get_container_metadata
         self.swift_client.app.side_effect = fake_app
         self.swift_client.make_path.side_effect = _make_path
         self.swift_client.upload_object.side_effect = upload_object
