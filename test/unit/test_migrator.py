@@ -701,7 +701,9 @@ class TestMigrator(unittest.TestCase):
                         'last-modified': create_timestamp(1.5e9)},
                     'expected_headers': {
                         'x-object-meta-custom': 'custom',
-                        'x-timestamp': Timestamp(1.5e9).internal},
+                        'x-timestamp': Timestamp(1.5e9).internal,
+                        s3_sync.utils.get_sys_migrator_header('object'): str(
+                            Timestamp(1.5e9).internal)},
                     'list-time': create_list_timestamp(1.5e9),
                     'hash': 'etag'
                 },
@@ -711,7 +713,9 @@ class TestMigrator(unittest.TestCase):
                         'last-modified': create_timestamp(1.4e9)},
                     'expected_headers': {
                         'x-object-meta-custom': 'custom',
-                        'x-timestamp': Timestamp(1.4e9).internal},
+                        'x-timestamp': Timestamp(1.4e9).internal,
+                        s3_sync.utils.get_sys_migrator_header('object'): str(
+                            Timestamp(1.4e9).internal)},
                     'list-time': create_list_timestamp(1.4e9),
                     'hash': 'etag'
                 }
@@ -724,7 +728,9 @@ class TestMigrator(unittest.TestCase):
                         'last-modified': create_timestamp(1.5e9)},
                     'expected_headers': {
                         'x-object-meta-custom': 'custom',
-                        'x-timestamp': Timestamp(1.5e9).internal},
+                        'x-timestamp': Timestamp(1.5e9).internal,
+                        s3_sync.utils.get_sys_migrator_header('object'): str(
+                            Timestamp(1.5e9).internal)},
                     'list-time': create_list_timestamp(1.5e9),
                     'hash': 'etag'
                 },
@@ -734,7 +740,9 @@ class TestMigrator(unittest.TestCase):
                         'last-modified': create_timestamp(1.4e9)},
                     'expected_headers': {
                         'x-object-meta-custom': 'custom',
-                        'x-timestamp': Timestamp(1.4e9).internal},
+                        'x-timestamp': Timestamp(1.4e9).internal,
+                        s3_sync.utils.get_sys_migrator_header('object'): str(
+                            Timestamp(1.4e9).internal)},
                     'list-time': create_list_timestamp(1.4e9),
                     'hash': 'etag'
                 }
@@ -751,7 +759,9 @@ class TestMigrator(unittest.TestCase):
                         'last-modified': create_timestamp(1.5e9)},
                     'expected_headers': {
                         'x-object-meta-custom': 'custom',
-                        'x-timestamp': Timestamp(1.5e9).internal},
+                        'x-timestamp': Timestamp(1.5e9).internal,
+                        s3_sync.utils.get_sys_migrator_header('object'): str(
+                            Timestamp(1.5e9).internal)},
                     'list-time': create_list_timestamp(1.5e9),
                     'hash': 'etag'
                 },
@@ -761,7 +771,9 @@ class TestMigrator(unittest.TestCase):
                         'last-modified': create_timestamp(1.4e9)},
                     'expected_headers': {
                         'x-object-meta-custom': 'custom',
-                        'x-timestamp': Timestamp(1.4e9).internal},
+                        'x-timestamp': Timestamp(1.4e9).internal,
+                        s3_sync.utils.get_sys_migrator_header('object'): str(
+                            Timestamp(1.4e9).internal)},
                     'list-time': create_list_timestamp(1.4e9),
                     'hash': 'etag'
                 }
@@ -787,7 +799,9 @@ class TestMigrator(unittest.TestCase):
                         'last-modified': create_timestamp(1.5e9)},
                     'expected_headers': {
                         'x-object-meta-custom': 'custom',
-                        'x-timestamp': Timestamp(1.5e9).internal},
+                        'x-timestamp': Timestamp(1.5e9).internal,
+                        s3_sync.utils.get_sys_migrator_header('object'): str(
+                            Timestamp(1.5e9).internal)},
                     'list-time': create_list_timestamp(1.5e9),
                     'hash': 'etag'
                 },
@@ -797,7 +811,9 @@ class TestMigrator(unittest.TestCase):
                         'last-modified': create_timestamp(1.4e9)},
                     'expected_headers': {
                         'x-object-meta-custom': 'custom',
-                        'x-timestamp': Timestamp(1.4e9).internal},
+                        'x-timestamp': Timestamp(1.4e9).internal,
+                        s3_sync.utils.get_sys_migrator_header('object'): str(
+                            Timestamp(1.4e9).internal)},
                     'list-time': create_list_timestamp(1.4e9),
                     'hash': 'etag'
                 }
@@ -1132,7 +1148,9 @@ class TestMigrator(unittest.TestCase):
                     'x-timestamp': Timestamp(1.5e9).internal,
                     'x-static-large-object': 'True',
                     'Content-Length': str(len(json.dumps(manifest))),
-                    'etag': manifest_etag}
+                    'etag': manifest_etag,
+                    s3_sync.utils.get_sys_migrator_header('object'): str(
+                        Timestamp(1.5e9).internal)}
             },
             'part1': {
                 'remote_headers': {
@@ -1140,7 +1158,9 @@ class TestMigrator(unittest.TestCase):
                     'last-modified': create_timestamp(1.4e9)},
                 'expected_headers': {
                     'x-object-meta-part': 'part-1',
-                    'x-timestamp': Timestamp(1.4e9).internal}
+                    'x-timestamp': Timestamp(1.4e9).internal,
+                    s3_sync.utils.get_sys_migrator_header('object'): str(
+                        Timestamp(1.4e9).internal)}
             },
             'part2': {
                 'remote_headers': {
@@ -1148,7 +1168,9 @@ class TestMigrator(unittest.TestCase):
                     'last-modified': create_timestamp(1.1e9)},
                 'expected_headers': {
                     'x-object-meta-part': 'part-2',
-                    'x-timestamp': Timestamp(1.1e9).internal}
+                    'x-timestamp': Timestamp(1.1e9).internal,
+                    s3_sync.utils.get_sys_migrator_header('object'): str(
+                        Timestamp(1.1e9).internal)}
             }
         }
 
@@ -1307,7 +1329,9 @@ class TestMigrator(unittest.TestCase):
                 'expected_headers': {
                     'x-object-meta-custom': 'dlo-meta',
                     'x-timestamp': Timestamp(1.5e9).internal,
-                    'x-object-manifest': '%s/' % segments_container}
+                    'x-object-manifest': '%s/' % segments_container,
+                    s3_sync.utils.get_sys_migrator_header('object'): str(
+                        Timestamp(1.5e9).internal)}
             },
             '1': {
                 'remote_headers': {
@@ -1315,7 +1339,9 @@ class TestMigrator(unittest.TestCase):
                     'last-modified': create_timestamp(1.4e9)},
                 'expected_headers': {
                     'x-object-meta-part': 'part-1',
-                    'x-timestamp': Timestamp(1.4e9).internal}
+                    'x-timestamp': Timestamp(1.4e9).internal,
+                    s3_sync.utils.get_sys_migrator_header('object'): str(
+                        Timestamp(1.4e9).internal)}
             },
             '2': {
                 'remote_headers': {
@@ -1323,7 +1349,9 @@ class TestMigrator(unittest.TestCase):
                     'last-modified': create_timestamp(1.1e9)},
                 'expected_headers': {
                     'x-object-meta-part': 'part-2',
-                    'x-timestamp': Timestamp(1.1e9).internal}
+                    'x-timestamp': Timestamp(1.1e9).internal,
+                    s3_sync.utils.get_sys_migrator_header('object'): str(
+                        Timestamp(1.1e9).internal)}
             },
             '3': {
                 'remote_headers': {
@@ -1331,7 +1359,9 @@ class TestMigrator(unittest.TestCase):
                     'last-modified': create_timestamp(1.2e9)},
                 'expected_headers': {
                     'x-object-meta-part': 'part-3',
-                    'x-timestamp': Timestamp(1.2e9).internal}
+                    'x-timestamp': Timestamp(1.2e9).internal,
+                    s3_sync.utils.get_sys_migrator_header('object'): str(
+                        Timestamp(1.2e9).internal)}
             }
         }
 
