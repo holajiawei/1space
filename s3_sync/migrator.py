@@ -34,7 +34,7 @@ from .daemon_utils import load_swift, setup_context, setup_logger
 from .provider_factory import create_provider
 from .utils import (convert_to_local_headers, convert_to_swift_headers,
                     get_container_headers, iter_listing, RemoteHTTPError,
-                    SWIFT_TIME_FMT)
+                    SWIFT_TIME_FMT, diff_container_headers)
 from swift.common.internal_client import UnexpectedResponse
 from swift.common import swob
 from swift.common.utils import FileLikeIter, Timestamp
@@ -281,10 +281,10 @@ class Migrator(object):
         is_reset = False
         self._manifests = set()
         try:
-            marker, scanned, copied = self._find_missing_objects()
+            marker, scanned, copied = self._process_container()
             if scanned == 0 and marker:
                 is_reset = True
-                marker, scanned, copied = self._find_missing_objects(marker='')
+                marker, scanned, copied = self._process_container(marker='')
         except ContainerNotFound as e:
             scanned = 0
             self.logger.error(unicode(e))
@@ -321,6 +321,23 @@ class Migrator(object):
         for _ in range(self.workers):
             q.put(None)
         q.join()
+
+    def _update_container_headers(self, container, internal_client, headers):
+        # This explicitly does not use update_container_metadata because it
+        # needs to be able to update the acls (swift_owner: True).
+        req = swob.Request.blank(
+            internal_client.make_path(self.config['account'], container),
+            environ={'REQUEST_METHOD': 'POST',
+                     'swift_owner': True},
+            headers=headers)
+
+        resp = req.get_response(internal_client.app)
+        if resp.status_int // 100 != 2:
+            raise UnexpectedResponse('Failed to update container headers for '
+                                     '"%s": %d' % (container, resp.status_int),
+                                     resp)
+
+        self.logger.debug('Updated headers for container "%s"' % container)
 
     def _create_container(self, container, internal_client, aws_bucket,
                           timeout=1):
@@ -416,7 +433,16 @@ class Migrator(object):
             aws_bucket, key,
             'Mismatching ETag for regular objects with the same date'))
 
-    def _find_missing_objects(
+    def _create_x_time_from_hdrs(self, hdrs):
+        if 'x-timestamp' in hdrs:
+            return float(hdrs['x-timestamp'])
+        if 'last-modified' in hdrs:
+            ts = datetime.datetime.strptime(hdrs['last-modified'],
+                                            LAST_MODIFIED_FMT)
+            return (ts - EPOCH).total_seconds()
+        return None
+
+    def _process_container(
             self, container=None, aws_bucket=None, marker=None, prefix=None,
             list_all=False):
         if aws_bucket is None:
@@ -428,7 +454,6 @@ class Migrator(object):
             marker = state.get('marker', '')
         if prefix is None:
             prefix = self.config.get('prefix', '')
-
         # If a container has versioning enabled (either x-versions-location or
         # x-history-location is configured), we should migrate the versions
         # before migrating the container itself.
@@ -437,22 +462,54 @@ class Migrator(object):
             if resp.status == 404:
                 raise ContainerNotFound(aws_bucket)
             if resp.status != 200:
-                raise MigrationError('Failed to HEAD bucket/container "%s"' %
-                                     container)
+                raise MigrationError(
+                    'Failed to HEAD bucket/container "%s"' % container)
             if 'x-versions-location' in resp.headers or\
                     'x-history-location' in resp.headers:
-                versioned_container = resp.headers.get('x-versions-location')
+                versioned_container = resp.headers.get(
+                    'x-versions-location')
                 if not versioned_container:
                     versioned_container = resp.headers.get(
                         'x-history-location')
                 if versioned_container:
-                    # This diverts from our usual strategy of splitting up the
-                    # work, but we cannot migrate the main container until the
-                    # versions container is migrated.
-                    self._find_missing_objects(
+                    # This diverts from our usual strategy of splitting up
+                    # the work, but we cannot migrate the main container
+                    # until the versions container is migrated.
+                    self._process_container(
                         container=versioned_container,
                         aws_bucket=versioned_container, marker='',
                         list_all=True)
+
+            local_headers = None
+            with self.ic_pool.item() as ic:
+                try:
+                    local_headers = ic.get_container_metadata(
+                        self.config['account'], container)
+                except UnexpectedResponse as e:
+                    if e.resp.status_int == 404:
+                        self._create_container(container, ic, aws_bucket)
+                    else:
+                        raise
+                if resp.headers and local_headers:
+                    local_ts = self._create_x_time_from_hdrs(local_headers)
+                    remote_ts = self._create_x_time_from_hdrs(resp.headers)
+                    if local_ts is not None and remote_ts is not None and \
+                            local_ts < remote_ts:
+                        header_changes = diff_container_headers(
+                            resp.headers, local_headers)
+                        if header_changes:
+                            self._update_container_headers(
+                                container, ic, header_changes)
+        else:  # Not swift
+            with self.ic_pool.item() as ic:
+                if not ic.container_exists(self.config['account'], container):
+                    self._create_container(container, ic, aws_bucket)
+
+        return self._find_missing_objects(container, aws_bucket, marker,
+                                          prefix, list_all)
+
+    def _find_missing_objects(
+            self, container, aws_bucket, marker, prefix, list_all):
 
         try:
             source_iter = self._iter_source_container(
@@ -468,11 +525,6 @@ class Migrator(object):
                                          marker=marker,
                                          prefix=prefix)
             local = next(local_iter, None)
-            if not local:
-                if not ic.container_exists(self.config['account'],
-                                           container):
-                    self._create_container(container, ic, aws_bucket)
-
             remote = next(source_iter, None)
             if remote:
                 marker = remote['name']
@@ -560,7 +612,7 @@ class Migrator(object):
     def _migrate_dlo(self, aws_bucket, container, key, headers):
         dlo_container, prefix = headers['x-object-manifest'].split('/', 1)
         self._manifests.add((container, key))
-        self._find_missing_objects(
+        self._process_container(
             container=dlo_container, aws_bucket=dlo_container, marker='',
             prefix=prefix, list_all=True)
         if dlo_container != container or not key.startswith(prefix):
@@ -619,14 +671,8 @@ class Migrator(object):
 
     def _upload_object(self, work):
         container, key, content, headers, aws_bucket = work
-        if 'x-timestamp' in headers:
-            headers['x-timestamp'] = Timestamp(
-                float(headers['x-timestamp'])).internal
-        else:
-            ts = datetime.datetime.strptime(headers['last-modified'],
-                                            LAST_MODIFIED_FMT)
-            ts = Timestamp((ts - EPOCH).total_seconds()).internal
-            headers['x-timestamp'] = ts
+        headers['x-timestamp'] = Timestamp(
+            self._create_x_time_from_hdrs(headers)).internal
         del headers['last-modified']
         with self.ic_pool.item() as ic:
             try:

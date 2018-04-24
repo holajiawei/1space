@@ -587,6 +587,96 @@ class TestMigrator(TestCloudSyncBase):
             'head_container', migration['container'])
         self.assertNotIn(u'x-container-meta-migrated-\u062a', new_hdrs)
 
+    def test_migrate_correct_metadata_changes(self):
+        migration = self._find_migration(
+            lambda cont: cont['aws_bucket'] == '/*')
+
+        acl = 'AUTH_' + self.SWIFT_CREDS['dst']['user'].split(':')[0]
+
+        key1 = u'x-container-meta-migrated-\u062a'
+        key2 = u'x-container-meta-migrated-2-\u062a'
+        key3 = u'x-container-meta-migrated-3-\u062a'
+        val1 = u'new-meta \u062a'
+        val2 = u'changed-meta \u062a'
+        val3 = u'new-meta2 \u062a'
+
+        init_local_headers = {
+            key2: val2,
+        }
+        init_remote_headers = {
+            'x-container-write': acl,
+            'x-container-read': acl,
+            key1: val1,
+        }
+
+        conn_local = self.conn_for_acct(migration['account'])
+        conn_remote = self.conn_for_acct(migration['aws_account'])
+        conn_noshunt = self.conn_for_acct_noshunt(migration['account'])
+
+        conn_local.put_container('metadata_test', headers=init_local_headers)
+        conn_remote.put_container('metadata_test',
+                                  headers=init_remote_headers)
+
+        # validate the acl exists on remote (sanity check)
+        scheme, rest = self.SWIFT_CREDS['authurl'].split(':', 1)
+        swift_host, _ = urllib.splithost(rest)
+
+        remote_swift = swiftclient.client.Connection(
+            authurl=self.SWIFT_CREDS['authurl'],
+            user=self.SWIFT_CREDS['dst']['user'],
+            key=self.SWIFT_CREDS['dst']['key'],
+            os_options={'object_storage_url': '%s://%s/v1/%s' % (
+                scheme, swift_host, migration['aws_account'].split(':')[0])})
+        remote_swift.put_object('metadata_test', 'test', 'test')
+        hdrs, body = remote_swift.get_object('metadata_test', 'test')
+        self.assertEqual(body, 'test')
+
+        def key_val_copied(k, v):
+            test_hdrs = conn_noshunt.head_container('metadata_test')
+            if k not in test_hdrs:
+                return False
+            if test_hdrs[k] == v:
+                return True
+            return False
+
+        key1_copied = partial(key_val_copied, key1, val1)
+        val2_copied = partial(key_val_copied, key1, val2)
+        val3_copied = partial(key_val_copied, key3, val3)
+
+        def key_gone(key):
+            test_hdrs = conn_noshunt.head_container('metadata_test')
+            if key not in test_hdrs:
+                return True
+            return False
+
+        # sanity check
+        self.assertTrue(key_val_copied(key2, val2))
+        self.assertTrue(key_gone(key1))
+
+        with self.migrator_running():
+            # verify really copied
+            wait_for_condition(5, key1_copied)
+            self.assertTrue(key_gone(key2))
+
+            # verify change value copied after a pass
+            conn_remote.post_container('metadata_test',
+                                       headers={
+                                           key1: val2,
+                                           key3: val3})
+            wait_for_condition(5, val2_copied)
+            self.assertTrue(val3_copied)
+
+        # validate the acl was copied
+        remote_swift = swiftclient.client.Connection(
+            authurl=self.SWIFT_CREDS['authurl'],
+            user=self.SWIFT_CREDS['dst']['user'],
+            key=self.SWIFT_CREDS['dst']['key'],
+            os_options={'object_storage_url': '%s://%s/v1/%s' % (
+                scheme, swift_host, migration['account'])})
+        remote_swift.put_object('metadata_test', 'test', 'test')
+        hdrs, body = remote_swift.get_object('metadata_test', 'test')
+        self.assertEqual(body, 'test')
+
     def test_propagate_object_meta(self):
         migration = self.swift_migration()
         key = u'test_object-\u062a'
