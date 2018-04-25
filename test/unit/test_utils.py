@@ -86,10 +86,12 @@ class TestUtilsFunctions(unittest.TestCase):
                 remove_timestamp=False))
 
     def test_diff_container_headers(self):
+        loc = utils.SYSMETA_VERSIONS_LOC or 'Not-Here-loc'
+        mode = utils.SYSMETA_VERSIONS_MODE or 'Not-Here-mode'
         hdrs_remote = {
             'x-history-location': 'foo',
-            utils.SYSMETA_VERSIONS_LOC: 'bar',
-            utils.SYSMETA_VERSIONS_MODE: 'baz',
+            loc: 'bar',
+            mode: 'baz',
             'boogaloo': 'bangarang',
             u'x-container-meta-test-\u062a': u'remote-\u062a-new',
             u'x-container-meta-keep-\u062a': u'keepval-\u062a',
@@ -97,8 +99,8 @@ class TestUtilsFunctions(unittest.TestCase):
         }
         hdrs_local = {
             'x-history-versions': 'foobar',
-            utils.SYSMETA_VERSIONS_LOC: 'bark',
-            utils.SYSMETA_VERSIONS_MODE: 'buzz',
+            loc: 'bark',
+            mode: 'buzz',
             'poohbear': 'eeyore',
             'x-container-meta-test-\xd8\xaa': 'remote-\xd8\xaa',
             'x-container-meta-keep-\xd8\xaa': 'keepval-\xd8\xaa',
