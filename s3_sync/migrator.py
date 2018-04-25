@@ -139,6 +139,16 @@ def _update_status_counts(status, moved_count, scanned_count, reset):
     status['finished'] = now
 
 
+def _create_x_timestamp_from_hdrs(hdrs):
+    if 'x-timestamp' in hdrs:
+        return float(hdrs['x-timestamp'])
+    if 'last-modified' in hdrs:
+        ts = datetime.datetime.strptime(hdrs['last-modified'],
+                                        LAST_MODIFIED_FMT)
+        return (ts - EPOCH).total_seconds()
+    return None
+
+
 class Status(object):
     def __init__(self, status_location):
         self.status_location = status_location
@@ -448,15 +458,6 @@ class Migrator(object):
             aws_bucket, key,
             'Mismatching ETag for regular objects with the same date'))
 
-    def _create_x_time_from_hdrs(self, hdrs):
-        if 'x-timestamp' in hdrs:
-            return float(hdrs['x-timestamp'])
-        if 'last-modified' in hdrs:
-            ts = datetime.datetime.strptime(hdrs['last-modified'],
-                                            LAST_MODIFIED_FMT)
-            return (ts - EPOCH).total_seconds()
-        return None
-
     def _process_container(
             self, container=None, aws_bucket=None, marker=None, prefix=None,
             list_all=False):
@@ -506,8 +507,8 @@ class Migrator(object):
                     else:
                         raise
                 if resp.headers and local_headers:
-                    local_ts = self._create_x_time_from_hdrs(local_headers)
-                    remote_ts = self._create_x_time_from_hdrs(resp.headers)
+                    local_ts = _create_x_timestamp_from_hdrs(local_headers)
+                    remote_ts = _create_x_timestamp_from_hdrs(resp.headers)
                     if local_ts is not None and remote_ts is not None and \
                             local_ts < remote_ts:
                         header_changes = diff_container_headers(
@@ -693,7 +694,7 @@ class Migrator(object):
     def _upload_object(self, work):
         container, key, content, headers, aws_bucket = work
         headers['x-timestamp'] = Timestamp(
-            self._create_x_time_from_hdrs(headers)).internal
+            _create_x_timestamp_from_hdrs(headers)).internal
         del headers['last-modified']
         headers[get_sys_migrator_header('object')] = headers['x-timestamp']
         with self.ic_pool.item() as ic:
