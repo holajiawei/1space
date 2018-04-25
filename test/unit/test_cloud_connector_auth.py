@@ -23,7 +23,7 @@ from swift.common import swob
 
 from s3_sync.cloud_connector import auth
 
-from .test_cloud_connector_app import TestCloudSyncBase
+from .test_cloud_connector_app import TestCloudConnectorBase
 
 
 class FakeApp(object):
@@ -51,9 +51,9 @@ def make_req(path='/s3-sync/some/obj', key_id='test:tester', key_val='testing',
     }, **req_kwargs)
 
 
-class TestCloudSyncAuth(TestCloudSyncBase):
+class TestCloudConnectorAuth(TestCloudConnectorBase):
     def setUp(self):
-        super(TestCloudSyncAuth, self).setUp()
+        super(TestCloudConnectorAuth, self).setUp()
 
         self.s3_passwd_path = os.path.join(self.tempdir, 's3_passwd.json')
         patcher = mock.patch('s3_sync.cloud_connector.auth.S3_PASSWD_PATH',
