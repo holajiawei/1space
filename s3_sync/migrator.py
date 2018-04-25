@@ -34,9 +34,10 @@ from .daemon_utils import load_swift, setup_context, setup_logger
 from .provider_factory import create_provider
 from .utils import (convert_to_local_headers, convert_to_swift_headers,
                     get_container_headers, iter_listing, RemoteHTTPError,
-                    SWIFT_TIME_FMT, diff_container_headers)
-from swift.common.internal_client import UnexpectedResponse
+                    SWIFT_TIME_FMT, diff_container_headers,
+                    get_sys_migrator_header)
 from swift.common import swob
+from swift.common.internal_client import UnexpectedResponse
 from swift.common.utils import FileLikeIter, Timestamp
 
 
@@ -136,6 +137,16 @@ def _update_status_counts(status, moved_count, scanned_count, reset):
             scanned_count
     # this is the end of this current pass
     status['finished'] = now
+
+
+def _create_x_timestamp_from_hdrs(hdrs):
+    if 'x-timestamp' in hdrs:
+        return float(hdrs['x-timestamp'])
+    if 'last-modified' in hdrs:
+        ts = datetime.datetime.strptime(hdrs['last-modified'],
+                                        LAST_MODIFIED_FMT)
+        return (ts - EPOCH).total_seconds()
+    return None
 
 
 class Status(object):
@@ -374,6 +385,20 @@ class Migrator(object):
         raise MigrationError('Timeout while creating container "%s"' %
                              container)
 
+    def _reconcile_deleted_objects(self, internal_client, container, key):
+        # NOTE: to handle the case of objects being deleted from the source
+        # cluster after they've been migrated, we have to HEAD the object to
+        # check for the migration header.
+
+        hdrs = internal_client.get_object_metadata(
+            self.config['account'], container, key)
+        if get_sys_migrator_header('object') in hdrs:
+            self.logger.info(
+                'Detected removed object %s. Removing from %s/%s' % (
+                    key, self.config['account'], container))
+            internal_client.delete_object(
+                self.config['account'], container, key)
+
     def _iter_source_container(
             self, container, marker, prefix, list_all):
         next_marker = marker
@@ -433,15 +458,6 @@ class Migrator(object):
             aws_bucket, key,
             'Mismatching ETag for regular objects with the same date'))
 
-    def _create_x_time_from_hdrs(self, hdrs):
-        if 'x-timestamp' in hdrs:
-            return float(hdrs['x-timestamp'])
-        if 'last-modified' in hdrs:
-            ts = datetime.datetime.strptime(hdrs['last-modified'],
-                                            LAST_MODIFIED_FMT)
-            return (ts - EPOCH).total_seconds()
-        return None
-
     def _process_container(
             self, container=None, aws_bucket=None, marker=None, prefix=None,
             list_all=False):
@@ -491,8 +507,8 @@ class Migrator(object):
                     else:
                         raise
                 if resp.headers and local_headers:
-                    local_ts = self._create_x_time_from_hdrs(local_headers)
-                    remote_ts = self._create_x_time_from_hdrs(resp.headers)
+                    local_ts = _create_x_timestamp_from_hdrs(local_headers)
+                    remote_ts = _create_x_timestamp_from_hdrs(resp.headers)
                     if local_ts is not None and remote_ts is not None and \
                             local_ts < remote_ts:
                         header_changes = diff_container_headers(
@@ -543,6 +559,8 @@ class Migrator(object):
                     if remote:
                         marker = remote['name']
                 elif local['name'] < remote['name']:
+                    self._reconcile_deleted_objects(
+                        ic, container, local['name'])
                     local = next(local_iter, None)
                 else:
                     try:
@@ -563,6 +581,10 @@ class Migrator(object):
                     scanned += 1
                     if remote:
                         marker = remote['name']
+            while local:
+                # We may have objects left behind that need to be removed
+                self._reconcile_deleted_objects(ic, container, local['name'])
+                local = next(local_iter, None)
         return marker, scanned, copied
 
     def _migrate_object(self, aws_bucket, container, key):
@@ -672,8 +694,9 @@ class Migrator(object):
     def _upload_object(self, work):
         container, key, content, headers, aws_bucket = work
         headers['x-timestamp'] = Timestamp(
-            self._create_x_time_from_hdrs(headers)).internal
+            _create_x_timestamp_from_hdrs(headers)).internal
         del headers['last-modified']
+        headers[get_sys_migrator_header('object')] = headers['x-timestamp']
         with self.ic_pool.item() as ic:
             try:
                 ic.upload_object(

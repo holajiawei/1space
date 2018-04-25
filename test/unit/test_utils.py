@@ -112,6 +112,17 @@ class TestUtilsFunctions(unittest.TestCase):
         self.assertEqual(expected, utils.diff_container_headers(
             hdrs_remote, hdrs_local))
 
+    def test_sys_migrator_header(self):
+        self.assertEqual(
+            'x-account-sysmeta-' + utils.MIGRATOR_HEADER,
+            utils.get_sys_migrator_header('account'))
+        self.assertEqual(
+            'x-container-sysmeta-' + utils.MIGRATOR_HEADER,
+            utils.get_sys_migrator_header('container'))
+        self.assertEqual(
+            'x-object-transient-sysmeta-' + utils.MIGRATOR_HEADER,
+            utils.get_sys_migrator_header('object'))
+
 
 class FakeSwift(object):
     def __init__(self):

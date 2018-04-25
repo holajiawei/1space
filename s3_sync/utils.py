@@ -22,6 +22,8 @@ import urllib
 
 from swift.common.middleware.versioned_writes import (
     SYSMETA_VERSIONS_LOC, SYSMETA_VERSIONS_MODE)
+from swift.common.request_helpers import (
+    get_sys_meta_prefix, get_object_transient_sysmeta)
 from swift.common.swob import Request
 from swift.common.utils import FileLikeIter, close_if_possible
 
@@ -45,6 +47,7 @@ HOP_BY_HOP_HEADERS = set([
     'upgrade',
 ])
 PROPAGATED_HDRS = ['x-container-read', 'x-container-write']
+MIGRATOR_HEADER = 'multi-cloud-internal-migrator'
 
 
 class RemoteHTTPError(Exception):
@@ -663,3 +666,9 @@ def iter_listing(list_func, logger, marker, limit, prefix, *args):
 
     resp = list_func(marker, limit, prefix, *args)
     return resp, _results_iterator(resp)
+
+
+def get_sys_migrator_header(path_type):
+    if path_type == 'object':
+        return get_object_transient_sysmeta(MIGRATOR_HEADER)
+    return '%s%s' % (get_sys_meta_prefix(path_type), MIGRATOR_HEADER)

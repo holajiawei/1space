@@ -867,3 +867,95 @@ class TestMigrator(TestCloudSyncBase):
             [obj['name'] for obj in listing])
         for entry in listing:
             self.assertNotIn('content_location', entry)
+
+    def test_deleted_source_objects(self):
+        migration = self.swift_migration()
+
+        objects = [
+            (u'test-blob-\u062a-1', 'blob content',
+             {u'x-object-meta-\u062a': u'\u062a'}),
+            (u'test-blob-\u062a-2', 'blob content',
+             {u'x-object-meta-\u062a': u'\u062a'})
+        ]
+        tests = [[u'test-blob-\u062a-1',
+                  u'test-blob-\u062a-2'],
+                 [u'test-blob-\u062a-2']]
+
+        conn_remote = self.conn_for_acct(migration['aws_account'])
+        conn_local = self.conn_for_acct(migration['account'])
+
+        def _check_objects_copied():
+            hdrs, listing = conn_local.get_container(migration['container'])
+            swift_names = [obj['name'] for obj in listing
+                           if 'swift' in obj.get('content_location', '')]
+            return set([obj[0] for obj in objects]) == set(swift_names)
+
+        def _check_unmodified_objects_removed(expected):
+            _, listing = conn_local.get_container(migration['container'])
+            local_objects = [obj['name'] for obj in listing
+                             if 'swift' in obj.get('content_location', '')]
+            return expected == local_objects
+
+        for test in tests:
+            for name, body, headers in objects:
+                conn_remote.put_object(migration['aws_bucket'], name,
+                                       StringIO.StringIO(body),
+                                       headers=headers)
+            self.assertFalse(_check_objects_copied())
+            with self.migrator_running():
+                wait_for_condition(5, _check_objects_copied)
+
+            for obj in test:
+                conn_remote.delete_object(migration['aws_bucket'], obj)
+
+            expected = [obj[0] for obj in objects if obj[0] not in test]
+
+            with self.migrator_running():
+                wait_for_condition(
+                    5, partial(_check_unmodified_objects_removed, expected))
+            clear_swift_container(conn_local, migration['container'])
+            clear_swift_container(conn_remote, migration['aws_bucket'])
+
+    def test_post_deleted_source_objects(self):
+        migration = self.swift_migration()
+
+        test_objects = [
+            (u'post-blob-\u062a', 'blob content',
+             {u'x-object-meta-\u062a': u'\u062a'}),
+            (u'removed-blob', 'deleted content',
+             {u'x-object-meta-\u062a-removed': u'\u062a'})]
+
+        conn_remote = self.conn_for_acct(migration['aws_account'])
+        conn_local = self.conn_for_acct(migration['account'])
+
+        def _check_objects_copied():
+            hdrs, listing = conn_local.get_container(migration['container'])
+            swift_names = [obj['name'] for obj in listing
+                           if 'swift' in obj.get('content_location', '')]
+            return set([obj[0] for obj in test_objects]) == set(swift_names)
+
+        for name, body, headers in test_objects:
+            conn_remote.put_object(migration['aws_bucket'], name,
+                                   StringIO.StringIO(body),
+                                   headers=headers)
+
+        self.assertFalse(_check_objects_copied())
+
+        with self.migrator_running():
+            wait_for_condition(5, _check_objects_copied)
+
+        conn_local.post_object(migration['container'], u'post-blob-\u062a',
+                               {'x-object-meta-foo': 'foo'})
+        for obj in test_objects:
+            conn_remote.delete_object(migration['aws_bucket'], obj[0])
+
+        def _check_unmodified_objects_removed():
+            _, listing = conn_local.get_container(migration['container'])
+            if len(listing) != 1:
+                return False
+            if 'content_location' in listing[0]:
+                return False
+            return listing[0]['name'] == u'post-blob-\u062a'
+
+        with self.migrator_running():
+            wait_for_condition(5, _check_unmodified_objects_removed)
