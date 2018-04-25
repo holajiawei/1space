@@ -23,8 +23,7 @@ from swift.common.utils import FileLikeIter
 import traceback
 import urllib
 
-from .base_sync import BaseSync
-from .base_sync import ProviderResponse
+from .base_sync import BaseSync, ProviderResponse
 from .utils import (FileWrapper, ClosingResourceIterable, check_slo,
                     SWIFT_USER_META_PREFIX, SWIFT_TIME_FMT)
 
@@ -70,6 +69,11 @@ class SyncSwift(BaseSync):
     def _close_conn(conn):
         if conn.http_conn:
             conn.http_conn[1].request_session.close()
+
+    def put_object(self, swift_key, headers, body_iter, query_string=None):
+        return self._call_swiftclient('put_object', self.container, swift_key,
+                                      contents=body_iter, headers=headers,
+                                      query_string=query_string)
 
     def upload_object(self, swift_key, policy, internal_client):
         if self._per_account and not self.verified_container:
@@ -301,9 +305,13 @@ class SyncSwift(BaseSync):
                 else:
                     headers = resp
                     body = ['']
-                status = 206 if 'content-range' in headers else 200
-                headers = dict([translate(header, value)
-                                for header, value in headers.items()])
+                if 'response_dict' in args:
+                    headers = args['response_dict']['headers']
+                    status = args['response_dict']['status']
+                else:
+                    status = 206 if 'content-range' in headers else 200
+                    headers = dict([translate(header, value)
+                                    for header, value in headers.items()])
                 return ProviderResponse(True, status, headers, body)
             except swiftclient.exceptions.ClientException as e:
                 headers = dict([translate(header, value)
@@ -315,6 +323,7 @@ class SyncSwift(BaseSync):
                 self.logger.exception('Error contacting remote swift cluster')
                 return ProviderResponse(False, 502, {}, iter('Bad Gateway'))
 
+        # TODO: always use `response_dict` biz
         if op == 'get_object' and 'resp_chunk_size' in args:
             entry = self.client_pool.get_client()
             resp = _perform_op(entry.client)
@@ -326,6 +335,9 @@ class SyncSwift(BaseSync):
                     entry, resp.body, lambda: None)
             return resp
         else:
+            if op == 'put_object':
+                response_dict = args.get('response_dict', {})
+                args['response_dict'] = response_dict
             with self.client_pool.get_client() as swift_client:
                 return _perform_op(swift_client)
 

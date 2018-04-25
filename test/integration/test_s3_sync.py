@@ -15,8 +15,10 @@ limitations under the License.
 """
 
 import hashlib
+from itertools import repeat
 import json
-import StringIO
+
+from s3_sync.provider_factory import create_provider
 
 from . import TestCloudSyncBase, clear_swift_container, wait_for_condition, \
     swift_content_location, s3_key_name, clear_s3_bucket, WaitTimedOut
@@ -168,21 +170,84 @@ class TestCloudSync(TestCloudSyncBase):
             self._test_archive(key, content, mapping, get_etag,
                                expected_location)
 
+    def test_provider_s3_put_object_defaults(self):
+        mapping = self.s3_sync_mapping()
+        provider = create_provider(mapping, 1)
+
+        # NOTE: as long as the response includes a Content-Length, the
+        # SeekableFileLikeIter will bound reads to the content-length, even if
+        # the iterable goes further
+        swift_key = u'a-\u062a-b-c'
+        content = 'this str has a length'
+        resp = provider.put_object(swift_key, {
+            'x-object-meta-foobie-bar': 'blam',
+        }, content)
+        self.assertTrue(resp.success)
+
+        s3_key = s3_key_name(mapping, swift_key)
+        resp = self.s3('get_object', Bucket=mapping['aws_bucket'], Key=s3_key)
+        self.assertEqual(len(content), resp['ContentLength'])
+        self.assertEqual('application/octet-stream', resp['ContentType'])
+        self.assertEqual(content, resp['Body'].read())
+        self.assertEqual('blam', resp['Metadata']['foobie-bar'])
+
+    def test_provider_s3_put_object(self):
+        mapping = self.s3_sync_mapping()
+        provider = create_provider(mapping, 1)
+
+        # NOTE: as long as the response includes a Content-Length, the
+        # SeekableFileLikeIter will bound reads to the content-length, even if
+        # the iterable goes further
+        swift_key = u'a-\u062a-b-c'
+        resp = provider.put_object(swift_key, {
+            'content-length': 88,  # take an int for convenience
+            'content-type': 'text/plain',
+            'x-object-meta-foobie-bar': 'bam',
+        }, repeat('a'))
+        self.assertTrue(resp.success)
+
+        s3_key = s3_key_name(mapping, swift_key)
+        resp = self.s3('get_object', Bucket=mapping['aws_bucket'], Key=s3_key)
+        self.assertEqual(88, resp['ContentLength'])
+        self.assertEqual('text/plain', resp['ContentType'])
+        self.assertEqual('a' * 88, resp['Body'].read())
+        self.assertEqual('bam', resp['Metadata']['foobie-bar'])
+
+    def test_provider_s3_put_object_no_prefix(self):
+        mapping = self.s3_sync_mapping()
+        mapping['custom_prefix'] = ''
+        provider = create_provider(mapping, 1)
+
+        # NOTE: as long as the response includes a Content-Length, the
+        # SeekableFileLikeIter will bound reads to the content-length, even if
+        # the iterable goes further
+        swift_key = u'a-\u062a-b-c'
+        resp = provider.put_object(swift_key, {
+            'content-length': 87,  # take an int for convenience
+            'content-type': 'text/plain',
+            'x-object-meta-foobie-bar': 'bam',
+        }, repeat('b'))
+        self.assertTrue(resp.success)
+
+        resp = self.s3('get_object', Bucket=mapping['aws_bucket'],
+                       Key=swift_key)
+        self.assertEqual(87, resp['ContentLength'])
+        self.assertEqual('text/plain', resp['ContentType'])
+        self.assertEqual('b' * 87, resp['Body'].read())
+        self.assertEqual('bam', resp['Metadata']['foobie-bar'])
+
     def test_s3_archive_get(self):
         tests = [{'content': 's3 archive and get',
                   'key': 'test_s3_archive'},
                  {'content': '',
                   'key': 'test-empty'}]
 
+        s3_mapping = self.s3_restore_mapping()
+        provider = create_provider(s3_mapping, 1)
         for test in tests:
             content = test['content']
             key = test['key']
-            s3_mapping = self.s3_restore_mapping()
-            s3_key = s3_key_name(s3_mapping, key)
-            self.s3('put_object',
-                    Bucket=s3_mapping['aws_bucket'],
-                    Key=s3_key,
-                    Body=StringIO.StringIO(content))
+            provider.put_object(key, {}, content)
 
             hdrs = self.local_swift(
                 'head_object', s3_mapping['container'], key)
@@ -210,11 +275,8 @@ class TestCloudSync(TestCloudSyncBase):
         content = 's3 archive and get'
         key = 'test_s3_archive'
         s3_mapping = self.s3_restore_mapping()
-        s3_key = s3_key_name(s3_mapping, key)
-        self.s3('put_object',
-                Bucket=s3_mapping['aws_bucket'],
-                Key=s3_key,
-                Body=StringIO.StringIO(content))
+        provider = create_provider(s3_mapping, 1)
+        provider.put_object(key, {}, content)
 
         hdrs = self.local_swift(
             'head_object', s3_mapping['container'], key)
@@ -242,6 +304,8 @@ class TestCloudSync(TestCloudSyncBase):
         content = 'A' * (6 * 1024 * 1024)
         key = 'test_swift_archive'
         mapping = self.s3_restore_mapping()
+        provider = create_provider(mapping, 1)
+        provider.put_object(key, {}, content)
         s3_key = s3_key_name(mapping, key)
         manifest_key = s3_key_name
         prefix, account, container, _ = s3_key.split('/', 3)
@@ -295,11 +359,11 @@ class TestCloudSync(TestCloudSyncBase):
             self.assertIn('content_location', entry)
 
         hdrs, body = self.local_swift(
-            'get_object', mapping['container'], key, content)
+            'get_object', mapping['container'], key)
         # NOTE: this is different from real S3 as all of the parts are merged
         # and this is the content ETag
         self.assertEqual(hashlib.md5(content).hexdigest(), hdrs['etag'])
-        swift_content = ''.join([chunk for chunk in body])
+        swift_content = ''.join(body)
         self.assertEqual(content, swift_content)
         self.assertEqual('True', hdrs['x-static-large-object'])
 

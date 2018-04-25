@@ -26,13 +26,13 @@ import traceback
 import urllib
 
 from swift.common.internal_client import UnexpectedResponse
-from swift.common.utils import FileLikeIter
 from .base_sync import BaseSync
 from .base_sync import ProviderResponse
 from .utils import (
     convert_to_s3_headers, convert_to_swift_headers, FileWrapper,
     SLOFileWrapper, ClosingResourceIterable, get_slo_etag, check_slo,
-    SLO_ETAG_FIELD, SLO_HEADER, SWIFT_USER_META_PREFIX, SWIFT_TIME_FMT)
+    SLO_ETAG_FIELD, SLO_HEADER, SWIFT_USER_META_PREFIX, SWIFT_TIME_FMT,
+    SeekableFileLikeIter)
 
 
 class SyncS3(BaseSync):
@@ -234,6 +234,34 @@ class SyncS3(BaseSync):
             bucket = self.aws_bucket
         return self._call_boto('head_bucket', bucket, None, **options)
 
+    def put_object(self, swift_key, headers, body_iter, query_string=None):
+        s3_key = self.get_s3_name(swift_key)
+        if isinstance(body_iter, (unicode, str)):
+            if isinstance(body_iter, unicode):
+                body_iter = body_iter.encode('utf8')
+            content_length = len(body_iter)
+            body = body_iter
+        elif headers.get('content-length'):
+            content_length = int(headers['content-length'])
+            # Boto seems to take a str okay, but docs indicate it wants an int
+            headers['content-length'] = content_length
+            body = SeekableFileLikeIter(body_iter, length=content_length)
+        else:
+            content_length = None
+            body = SeekableFileLikeIter(body_iter)
+        params = dict(
+            Bucket=self.aws_bucket,
+            Key=s3_key,
+            Body=body,
+            Metadata=convert_to_s3_headers(headers),
+            ContentLength=content_length,
+            ContentType=headers.get('content-type',
+                                    'application/octet-stream'),
+        )
+        if self._is_amazon() and self.encryption:
+            params['ServerSideEncryption'] = 'AES256'
+        return self._call_boto('put_object', **params)
+
     def list_buckets(self, marker, limit, prefix, parse_time=True):
         '''As S3 does not support prefix/delimiter/marker for LIST buckets,
            these options are NOOPs. Boto alreaded parses the time to datetime,
@@ -387,7 +415,7 @@ class SyncS3(BaseSync):
         if status != 200:
             body.close()
             raise RuntimeError('Failed to get the manifest')
-        manifest = json.load(FileLikeIter(body))
+        manifest = json.loads(''.join(body))
         body.close()
         self.logger.debug("JSON manifest: %s" % str(manifest))
         s3_key = self.get_s3_name(swift_key)

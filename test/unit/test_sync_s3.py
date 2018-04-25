@@ -51,6 +51,211 @@ class TestSyncS3(unittest.TestCase):
                                'container': 'container'},
                               max_conns=self.max_conns)
 
+    @mock.patch('s3_sync.sync_s3.SeekableFileLikeIter')
+    def test_put_object(self, mock_seekable):
+        key = 'key'
+        s3_key = self.sync_s3.get_s3_name(key)
+
+        body_iter = ['a', 'b', 'c']
+        self.mock_boto3_client.put_object.return_value = {
+            'ResponseMetadata': {
+                'HTTPStatusCode': 200,
+                'HTTPHeaders': {
+                    'x-amz-request-id': 'zzee',
+                    'x-amz-id-2': 'feefee',
+                    'x-amz-meta-joojoo': 'foofoo',
+                    'content-length': '0',
+                    'etag': '"feebie"',  # probably not realistic
+                    'shim': 'jim',
+                },
+            },
+            'Metadata': {},
+        }
+
+        resp = self.sync_s3.put_object(key, {'x-object-meta-jojo': 'b'},
+                                       body_iter,
+                                       # query_string is in the interface, but
+                                       # ignored by this provider.
+                                       query_string='zing=bing')
+
+        self.assertTrue(resp.success)
+        self.assertEqual(200, resp.status)
+        self.assertEqual({
+            'Remote-x-amz-request-id': 'zzee',
+            'Remote-x-amz-id-2': 'feefee',
+            'x-object-meta-joojoo': 'foofoo',
+            'Content-Length': '0',
+            'etag': 'feebie',
+            'shim': 'jim',
+        }, resp.headers)
+        self.assertEqual([
+            mock.call(body_iter),
+        ], mock_seekable.mock_calls)
+        self.assertEqual([
+            mock.call(Body=mock_seekable.return_value, Bucket=self.aws_bucket,
+                      ContentLength=None,
+                      ContentType='application/octet-stream',
+                      Key=s3_key, Metadata={'jojo': 'b'},
+                      ServerSideEncryption='AES256'),
+        ], self.mock_boto3_client.put_object.mock_calls)
+
+    @mock.patch('s3_sync.sync_s3.SeekableFileLikeIter')
+    def test_put_object_with_content_length(self, mock_seekable):
+        key = 'key'
+        s3_key = self.sync_s3.get_s3_name(key)
+
+        body_iter = ['a', 'b', 'c']
+        self.mock_boto3_client.put_object.return_value = {
+            'ResponseMetadata': {
+                'HTTPStatusCode': 200,
+                'HTTPHeaders': {
+                    'x-amz-request-id': 'zzee',
+                    'x-amz-id-2': 'feefee',
+                    'x-amz-meta-joojoo': 'foofoo',
+                    'content-length': '0',
+                    'etag': '"feebie"',  # probably not realistic
+                    'shim': 'jim',
+                },
+            },
+            'Metadata': {},
+        }
+
+        resp = self.sync_s3.put_object(key, {
+            'x-object-meta-jojo': 'b',
+            'content-length': '2',  # can totally be "short" of the iter
+            # query_string is in the interface, but ignored by this provider.
+        }, body_iter, query_string='zing=bing')
+
+        self.assertTrue(resp.success)
+        self.assertEqual(200, resp.status)
+        self.assertEqual({
+            'Remote-x-amz-request-id': 'zzee',
+            'Remote-x-amz-id-2': 'feefee',
+            'x-object-meta-joojoo': 'foofoo',
+            'Content-Length': '0',
+            'etag': 'feebie',
+            'shim': 'jim',
+        }, resp.headers)
+        self.assertEqual([
+            mock.call(body_iter, length=2),
+        ], mock_seekable.mock_calls)
+        self.assertEqual([
+            mock.call(Body=mock_seekable.return_value, Bucket=self.aws_bucket,
+                      ContentLength=2,
+                      ContentType='application/octet-stream',
+                      Key=s3_key, Metadata={'jojo': 'b'},
+                      ServerSideEncryption='AES256'),
+        ], self.mock_boto3_client.put_object.mock_calls)
+
+    @mock.patch('s3_sync.sync_s3.SeekableFileLikeIter')
+    def test_put_object_no_encryption(self, mock_seekable):
+        key = 'key'
+        s3_key = self.sync_s3.get_s3_name(key)
+
+        body_iter = 'sham jammer'
+        self.mock_boto3_client.put_object.return_value = {
+            'ResponseMetadata': {
+                'HTTPStatusCode': 200,
+                'HTTPHeaders': {
+                    'content-length': '0',
+                },
+            },
+            'Metadata': {},
+        }
+
+        self.sync_s3.encryption = False
+        resp = self.sync_s3.put_object(key, {
+            'x-object-meta-jojo': 'b',
+            'blah': 'blah',  # ignored
+            'content-type': 'text/plain',
+            # query_string is in the interface, but ignored by this provider.
+        }, body_iter, query_string='zing=bing')
+
+        self.assertTrue(resp.success)
+        self.assertEqual(200, resp.status)
+        self.assertEqual({
+            'Content-Length': '0',
+        }, resp.headers)
+        self.assertEqual([], mock_seekable.mock_calls)
+        self.assertEqual([
+            mock.call(Body=body_iter, Bucket=self.aws_bucket,
+                      ContentLength=len(body_iter),
+                      ContentType='text/plain', Key=s3_key,
+                      Metadata={'jojo': 'b'}),
+        ], self.mock_boto3_client.put_object.mock_calls)
+
+    @mock.patch('s3_sync.sync_s3.SeekableFileLikeIter')
+    def test_put_object_with_str(self, mock_seekable):
+        key = 'key'
+        s3_key = self.sync_s3.get_s3_name(key)
+
+        body_iter = 'sham jammer'
+        self.mock_boto3_client.put_object.return_value = {
+            'ResponseMetadata': {
+                'HTTPStatusCode': 200,
+                'HTTPHeaders': {
+                    'content-length': '0',
+                },
+            },
+            'Metadata': {},
+        }
+
+        resp = self.sync_s3.put_object(key, {
+            'x-object-meta-jojo': 'b',
+            'blah': 'blah',  # ignored
+            'content-type': 'text/plain',
+            # query_string is in the interface, but ignored by this provider.
+        }, body_iter, query_string='zing=bing')
+
+        self.assertTrue(resp.success)
+        self.assertEqual(200, resp.status)
+        self.assertEqual({
+            'Content-Length': '0',
+        }, resp.headers)
+        self.assertEqual([], mock_seekable.mock_calls)
+        self.assertEqual([
+            mock.call(Body=body_iter, Bucket=self.aws_bucket,
+                      ContentLength=len(body_iter),
+                      ContentType='text/plain', Key=s3_key,
+                      Metadata={'jojo': 'b'}, ServerSideEncryption='AES256'),
+        ], self.mock_boto3_client.put_object.mock_calls)
+
+    @mock.patch('s3_sync.sync_s3.SeekableFileLikeIter')
+    def test_put_object_with_unicode(self, mock_seekable):
+        key = 'key'
+        s3_key = self.sync_s3.get_s3_name(key)
+
+        body_iter = u'sham\u062ajammer'
+        self.mock_boto3_client.put_object.return_value = {
+            'ResponseMetadata': {
+                'HTTPStatusCode': 200,
+                'HTTPHeaders': {
+                    'content-length': '0',
+                },
+            },
+            'Metadata': {},
+        }
+
+        resp = self.sync_s3.put_object(key, {
+            'x-object-meta-jojo': 'b',
+            'blah': 'blah',  # ignored
+            'content-type': 'text/plain',
+            # query_string is in the interface, but ignored by this provider.
+        }, body_iter, query_string='zing=bing')
+
+        self.assertTrue(resp.success)
+        self.assertEqual(200, resp.status)
+        self.assertEqual({
+            'Content-Length': '0',
+        }, resp.headers)
+        self.assertEqual([], mock_seekable.mock_calls)
+        self.assertEqual([
+            mock.call(Body=body_iter.encode('utf8'), Bucket=self.aws_bucket,
+                      ContentLength=len(body_iter.encode('utf8')),
+                      ContentType='text/plain', Key=s3_key,
+                      Metadata={'jojo': 'b'}, ServerSideEncryption='AES256'),
+        ], self.mock_boto3_client.put_object.mock_calls)
+
     @mock.patch('s3_sync.sync_s3.FileWrapper')
     def test_upload_new_object(self, mock_file_wrapper):
         key = 'key'
@@ -744,8 +949,7 @@ class TestSyncS3(unittest.TestCase):
                       utils.SLO_HEADER: 'True'},
             ContentType='test/blob')
 
-    @mock.patch('s3_sync.sync_s3.FileWrapper')
-    def test_internal_slo_upload(self, mock_file_wrapper):
+    def test_internal_slo_upload(self):
         slo_key = 'slo-object'
         slo_meta = {'x-object-meta-foo': 'bar', 'content-type': 'test/blob'}
         s3_key = self.sync_s3.get_s3_name(slo_key)
@@ -758,7 +962,6 @@ class TestSyncS3(unittest.TestCase):
                     {'name': '/segment_container/slo-object/part2',
                      'hash': 'beefdead',
                      'bytes': 200}]
-        fake_body = FakeStream(5 * SyncS3.MB)
 
         self.mock_boto3_client.create_multipart_upload.return_value = {
             'UploadId': 'mpu-key-for-slo'}
@@ -772,9 +975,12 @@ class TestSyncS3(unittest.TestCase):
                 raise RuntimeError('Unknown call to upload part')
 
         self.mock_boto3_client.upload_part.side_effect = upload_part
-        mock_file_wrapper.return_value = fake_body
 
+        chunk_len = 5 * SyncS3.MB
+        fake_app_iter = FakeStream(chunk_len)
         mock_ic = mock.Mock()
+        mock_ic.get_object.return_value = (
+            200, {'Content-Length': chunk_len}, fake_app_iter)
         self.sync_s3._upload_slo(manifest, slo_meta, s3_key, swift_req_headers,
                                  mock_ic)
 
@@ -788,13 +994,13 @@ class TestSyncS3(unittest.TestCase):
             mock.call(Bucket=self.aws_bucket,
                       Key=self.sync_s3.get_s3_name(slo_key),
                       PartNumber=1,
-                      ContentLength=len(fake_body),
+                      ContentLength=chunk_len,
                       Body=mock.ANY,
                       UploadId='mpu-key-for-slo'),
             mock.call(Bucket=self.aws_bucket,
                       Key=self.sync_s3.get_s3_name(slo_key),
                       PartNumber=2,
-                      ContentLength=len(fake_body),
+                      ContentLength=chunk_len,
                       Body=mock.ANY,
                       UploadId='mpu-key-for-slo')
         ])
@@ -809,8 +1015,7 @@ class TestSyncS3(unittest.TestCase):
                 ]}
             )
 
-    @mock.patch('s3_sync.sync_s3.FileWrapper')
-    def test_internal_slo_upload_encryption(self, mock_file_wrapper):
+    def test_internal_slo_upload_encryption(self):
         slo_key = 'slo-object'
         slo_meta = {'x-object-meta-foo': 'bar', 'content-type': 'test/blob'}
         s3_key = self.sync_s3.get_s3_name(slo_key)
@@ -820,7 +1025,6 @@ class TestSyncS3(unittest.TestCase):
         manifest = [{'name': '/segment_container/slo-object/part1',
                      'hash': 'deadbeef',
                      'bytes': 100}]
-        fake_body = FakeStream(5 * SyncS3.MB)
 
         self.mock_boto3_client.create_multipart_upload.return_value = {
             'UploadId': 'mpu-key-for-slo'}
@@ -832,9 +1036,12 @@ class TestSyncS3(unittest.TestCase):
                 raise RuntimeError('Unknown call to upload part')
 
         self.mock_boto3_client.upload_part.side_effect = upload_part
-        mock_file_wrapper.return_value = fake_body
 
+        fake_app_iter = FakeStream(5 * SyncS3.MB)
         mock_ic = mock.Mock()
+        mock_ic.get_object.return_value = (
+            200, {'Content-Length': str(5 * SyncS3.MB)}, fake_app_iter)
+
         self.sync_s3.encryption = True
         self.sync_s3._upload_slo(manifest, slo_meta, s3_key, swift_req_headers,
                                  mock_ic)
