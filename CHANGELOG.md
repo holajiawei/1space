@@ -1,3 +1,17 @@
+## 0.1.31 (2018-04-25)
+
+Improvement:
+
+    - The swift-s3-sync migrator can migrate objects out of older (< 2.8) Swift
+      clusters. Previously, there would be an error reported about a missing
+      last-modified header.
+    - swift-s3-migrator will remove migrated objects if they have been deleted
+      from the source cluster. This is done by tagging every object with
+      internal metadata. If an object is mutated (via POST) or overwritten on
+      the destination cluster, it will not be removed.
+    - Container metadata changes are propagated from the source to destination
+      even after the initial creation of the container during a migration.
+
 ## 0.1.30 (2018-04-11)
 
 Bug fixes:
