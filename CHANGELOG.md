@@ -1,3 +1,11 @@
+## 0.1.32 (2018-04-26)
+
+Bug fixes:
+
+    - The swift-s3-sync shunt no longer fails to load on older Swift (< 2.9).
+    - The migrator propagates the versioning headers on container metadata
+      changes.
+
 ## 0.1.31 (2018-04-25)
 
 Improvement:
