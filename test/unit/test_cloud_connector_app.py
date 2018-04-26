@@ -305,17 +305,25 @@ class TestCloudConnectorAppConstruction(TestCloudConnectorBase):
         }, app_instance.sync_profiles)
         self.assertEqual('abbc', app_instance.swift_baseurl)
 
+    @mock.patch('s3_sync.cloud_connector.util.pwd.getpwnam')
     @mock.patch('s3_sync.cloud_connector.app.os.chown')
     @mock.patch('s3_sync.cloud_connector.app.CloudConnectorApplication')
     def test_app_factory_when_root_default_user(self, mock_app_klass,
-                                                mock_chown):
+                                                mock_chown, mock_getpwnam):
         global_conf = {'g1': 'g1v', 'a_key': 'a_g_val'}
         local_conf = {'l1': 'l1v', 'a_key': 'a_l_val'}
 
         mock_app_klass.return_value = 'stub_app_instance'
 
         # Chown user should default to "swift"
-        user_ent = pwd.getpwnam('swift')
+        user_ent = pwd.struct_passwd(
+            ('swift', 'pass', 42, 43, 'gecos', 'dir', 'shell'))
+
+        def _getpwnam(name):
+            self.assertEqual(name, 'swift')
+            return user_ent
+
+        mock_getpwnam.side_effect = _getpwnam
 
         got_app = app.app_factory(global_conf, **local_conf)
 
