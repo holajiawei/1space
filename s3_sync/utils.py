@@ -73,61 +73,173 @@ class RemoteHTTPError(Exception):
         return u'Error (%d): %s' % (self.resp.status, self.resp.body)
 
 
-class FileWrapper(object):
+class SeekableFileLikeIter(FileLikeIter):
+    """
+    Like Swift's FileLikeIter, with the following changes in/additions of
+    behavior:
+        * You can optionally specify a length, and reads past that length will
+          return data only up to that length, and EOF after that.
+        * If a length is specified, len() will work on this object, otherwise
+          it will raise a TypeError.
+        * If you specify a `seek_zero_cb`, it will be called when a seek to
+          position zero (regardless of args), if any data has already been
+          read.  The callback must return a new iterator, which will be
+          used for subsequent reads.  In other words, the callback must
+          actually take some action that allows the data coming out to be
+          correct for an actual offset of zero.  Also, without a callback
+          specified, any attempt to seek after any data has been read will
+          result in a RuntimeError.
+    """
+    def __init__(self, iterable, length=None, seek_zero_cb=None):
+        super(SeekableFileLikeIter, self).__init__(iterable)
+        self.length = length
+        self.seek_zero_cb = seek_zero_cb
+        self._bytes_delivered = 0  # capped by length, if given
+
+    def tell(self):
+        return self._bytes_delivered
+
+    def _length_exceeded(self):
+        if self.length is None:
+            return False
+        bytes_we_can_return = self.length - self.tell()
+        return not bytes_we_can_return
+
+    def seek(self, pos, flag=0):
+        if pos != 0:
+            raise RuntimeError('%s: arbitrary seeks are not supported' %
+                               self.__class__.__name__)
+        if self._bytes_delivered == 0:
+            return
+        if self.seek_zero_cb:
+            self.iterator = self.seek_zero_cb()
+            self.buf = None
+            self._bytes_delivered = 0
+        else:
+            raise RuntimeError('%s: seeking after reading only '
+                               'supported if a callback is '
+                               'supplied' % self.__class__.__name__)
+
+    def reset(self, *args, **kwargs):
+        self.seek(0)
+
+    def _account_data_delivered(self, data):
+        if self.length is not None:
+            bytes_we_can_return = self.length - self.tell()
+            if len(data) > bytes_we_can_return:
+                self.buf = None
+                data = data[:bytes_we_can_return]
+        self._bytes_delivered += len(data)
+        return data
+
+    # This is hoisted in from base class and changed so we can get our
+    # bytes-delivered accounting correct in all cases.  Sigh.
+    def next(self, called_from_read=False):
+        """
+        next(x) -> the next value, or raise StopIteration
+        """
+        if self.closed:
+            raise ValueError('I/O operation on closed file')
+        if self._length_exceeded():
+            raise StopIteration
+        if self.buf:
+            rv = self.buf
+            self.buf = None
+        else:
+            rv = next(self.iterator)
+        if not called_from_read:
+            # If we *were* called from read(), then it will do the truncation,
+            # if necessary, and accounting.
+            rv = self._account_data_delivered(rv)
+        return rv
+    __next__ = next
+
+    # This is hoisted in from base class and changed so we can get our
+    # bytes-delivered accounting correct in all cases.  Sigh.
+    def read(self, size=-1):
+        """
+        read([size]) -> read at most size bytes, returned as a bytes string.
+
+        If the size argument is negative or omitted, read until EOF is reached.
+        Notice that when in non-blocking mode, less data than what was
+        requested may be returned, even if no size parameter was given.
+        """
+        if self.closed:
+            raise ValueError('I/O operation on closed file')
+        if self._length_exceeded():
+            return ''
+        if size < 0:
+            return b''.join(self)
+        elif not size:
+            chunk = b''
+        elif self.buf:
+            chunk = self.buf
+            self.buf = None
+        else:
+            try:
+                chunk = self.next(called_from_read=True)
+            except StopIteration:
+                return b''
+        if len(chunk) > size:
+            self.buf = chunk[size:]
+            chunk = chunk[:size]
+        return self._account_data_delivered(chunk)
+
+    def __len__(self):
+        if self.length is not None:
+            return self.length
+        raise TypeError("object of type '%s' has no len()" %
+                        self.__class__.__name__)
+
+
+class FileWrapper(SeekableFileLikeIter):
     def __init__(self, swift_client, account, container, key, headers={}):
         self._swift = swift_client
         self._account = account
         self._container = container
         self._key = key
         self.swift_req_hdrs = headers
-        self._bytes_read = 0
-        self.open_object_stream()
+
+        self.iterator = None
+        self._swift_stream = None
+        self.content_length = None
+
+        self.open_object_stream()  # sets self.content_length & .length
+
+        super(FileWrapper, self).__init__(self._swift_stream,
+                                          length=self.content_length,
+                                          seek_zero_cb=self.open_object_stream)
 
     def open_object_stream(self):
+        if self._swift_stream:
+            self._swift_stream.close()
+
         status, self._headers, body = self._swift.get_object(
             self._account, self._container, self._key,
             headers=self.swift_req_hdrs)
         if status != 200:
             raise RuntimeError('Failed to get the object')
-        self._bytes_read = 0
+
         self._swift_stream = body
-        self._iter = FileLikeIter(body)
         self._s3_headers = convert_to_s3_headers(self._headers)
+        if 'Content-Length' in self._headers:
+            self.content_length = self.length = int(
+                self._headers['Content-Length'])
+        else:
+            self.content_length = self.length = None
 
-    def tell(self):
-        return self._bytes_read
+        return iter(self._swift_stream)
 
-    def seek(self, pos, flag=0):
-        if pos != 0:
-            raise RuntimeError('Arbitrary seeks are not supported')
-        if self._bytes_read == 0:
-            return
-        self._swift_stream.close()
-        self.open_object_stream()
-
-    def reset(self, *args, **kwargs):
-        self.seek(0)
-
-    def read(self, size=-1):
-        if self._bytes_read == self.__len__():
-            return ''
-
-        data = self._iter.read(size)
-        self._bytes_read += len(data)
+    def next(self, *args, **kwargs):
+        the_data = super(FileWrapper, self).next(*args, **kwargs)
         # TODO: we do not need to read an extra byte after
         # https://review.openstack.org/#/c/363199/ is released
-        if self._bytes_read == self.__len__():
-            self._iter.read(1)
-            self._swift_stream.close()
-        return data
-
-    def __len__(self):
-        if 'Content-Length' not in self._headers:
-            raise RuntimeError('Length is not implemented')
-        return int(self._headers['Content-Length'])
-
-    def __iter__(self):
-        return self._iter
+        if self.length is not None and self.tell() == self.__len__():
+            try:
+                next(self.iterator)
+            except StopIteration:
+                pass
+        return the_data
 
     def get_s3_headers(self):
         return self._s3_headers
@@ -136,7 +248,10 @@ class FileWrapper(object):
         return self._headers
 
     def close(self):
-        self._swift_stream.close()
+        if self._swift_stream:
+            self._swift_stream.close()
+            self._swift_stream = None
+        return super(FileWrapper, self).close()
 
 
 class SLOFileWrapper(object):
@@ -185,6 +300,7 @@ class SLOFileWrapper(object):
             self._open_next_segment()
         data = self._segment.read(size)
         if not data:
+            self._segment.close()
             if self._segment_index < len(self._manifest):
                 self._open_next_segment()
                 data = self._segment.read(size)

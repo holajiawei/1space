@@ -25,42 +25,21 @@ class FakeStream(object):
             self.content = None
         self.current_pos = 0
         self.closed = False
-
-    def read(self, size=0):
-        if self.closed:
-            raise RuntimeError('The stream is closed')
-        if self.current_pos == self.size - 1:
-            return ''
-        if size == -1 or self.current_pos + size > self.size:
-            if self.content:
-                ret = self.content[self.current_pos:]
-            else:
-                ret = 'A' * (self.size - self.current_pos)
-            self.current_pos = self.size - 1
-            return ret
-
-        if self.content:
-            ret = self.content[self.current_pos:self.current_pos + size]
-        else:
-            ret = 'A' * size
-        self.current_pos += size
-        return ret
+        self.chunk_size = self.size / 10 or 1
 
     def next(self):
-        if self.current_pos == self.size:
+        want = min(self.size - self.current_pos, self.chunk_size)
+        if want <= 0:
             raise StopIteration()
         if self.content:
-            ret = self.content[self.current_pos]
+            ret = self.content[self.current_pos:self.current_pos + want]
         else:
-            ret = 'A'
-        self.current_pos += 1
+            ret = 'A' * want
+        self.current_pos += want
         return ret
 
     def __iter__(self):
         return self
-
-    def __len__(self):
-        return self.size
 
     def close(self):
         self.closed = True

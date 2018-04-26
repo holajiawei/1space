@@ -54,14 +54,53 @@ class TestSyncSwift(unittest.TestCase):
         self.aws_bucket = 'bucket'
         self.scratch_space = 'scratch'
         self.max_conns = 10
-        self.sync_swift = SyncSwift(
-            {'aws_bucket': self.aws_bucket,
-             'aws_identity': 'identity',
-             'aws_secret': 'credential',
-             'account': 'account',
-             'container': 'container',
-             'aws_endpoint': 'http://swift.url/auth/v1.0'},
-            max_conns=self.max_conns)
+        self.mapping = {
+            'aws_bucket': self.aws_bucket,
+            'aws_identity': 'identity',
+            'aws_secret': 'credential',
+            'account': 'account',
+            'container': 'container',
+            'aws_endpoint': 'http://swift.url/auth/v1.0',
+        }
+        self.sync_swift = SyncSwift(self.mapping, max_conns=self.max_conns)
+
+    @mock.patch('s3_sync.sync_swift.swiftclient.client.Connection')
+    def test_put_object(self, mock_swift):
+        key = 'key'
+        swift_client = mock_swift.return_value
+
+        response_dict_holder = []
+
+        def _stub_put_object(*args, **kwargs):
+            if 'response_dict' in kwargs:
+                response_dict_holder.append(kwargs['response_dict'])
+                kwargs['response_dict']['status'] = 200
+                kwargs['response_dict']['reason'] = 'OK'
+                kwargs['response_dict']['headers'] = {
+                    # swiftclent's `parse_headers()` gets used and that can
+                    # totally return unicode stuff
+                    u'\u062afun': u'times\u062a'
+                }
+            return 'an_etag'
+        swift_client.put_object.side_effect = _stub_put_object
+
+        body_iter = ['a', 'bb', 'c']
+        resp = self.sync_swift.put_object(key, {
+            'x-object-meta-jammy': 'hammy',
+        }, body_iter, query_string=u'q1=v%201&q2=v2')
+        self.assertTrue(resp.success)
+        self.assertEqual({u'\u062afun': u'times\u062a'}, resp.headers)
+
+        self.assertEqual([
+            mock.call(
+                authurl='http://swift.url/auth/v1.0', key='credential',
+                os_options={}, retries=3, user='identity'),
+            mock.call().put_object(self.mapping['container'], key,
+                                   contents=body_iter,
+                                   headers={'x-object-meta-jammy': 'hammy'},
+                                   query_string='q1=v%201&q2=v2',
+                                   response_dict=response_dict_holder[0]),
+        ], mock_swift.mock_calls)
 
     @mock.patch('s3_sync.sync_swift.swiftclient.client.Connection')
     @mock.patch('s3_sync.sync_swift.check_slo')
