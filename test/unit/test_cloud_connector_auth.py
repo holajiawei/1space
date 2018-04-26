@@ -32,6 +32,7 @@ class FakeApp(object):
         self.body = body
 
     def __call__(self, env, start_response):
+        assert auth.S3_IDENTITY_ENV_KEY in env
         return swob.status_map[self.status_int](body=self.body)(
             env, start_response)
 
@@ -201,8 +202,11 @@ class TestCloudConnectorAuth(TestCloudConnectorBase):
         with self.auth_mw() as mw:
             req = make_req(key_id=user_acct,
                            key_val=u"\u062apass".encode('utf-8'))
+            self.assertNotIn(auth.S3_IDENTITY_ENV_KEY, req.environ)
             resp = req.get_response(mw)
 
+            self.assertEqual(self.s3_passwd[3],
+                             req.environ[auth.S3_IDENTITY_ENV_KEY])
             self.assertEqual(200, resp.status_int)
             self.assertEqual('I am a meat popsicle', resp.body)
             self.assertEqual([

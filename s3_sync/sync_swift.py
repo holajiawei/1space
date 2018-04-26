@@ -29,8 +29,9 @@ from .utils import (FileWrapper, ClosingResourceIterable, check_slo,
 
 
 class SyncSwift(BaseSync):
-    def __init__(self, settings, max_conns=10, per_account=False):
-        super(SyncSwift, self).__init__(settings, max_conns, per_account)
+    def __init__(self, settings, max_conns=10, per_account=False, logger=None):
+        super(SyncSwift, self).__init__(settings, max_conns, per_account,
+                                        logger)
         # Used to verify the remote container in case of per_account uploads
         self.verified_container = False
 

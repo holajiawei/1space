@@ -89,6 +89,7 @@ class SyncS3(BaseSync):
                                              conditionally_calculate_md5)
             s3_client.meta.events.unregister('before-call.s3.UploadPart',
                                              conditionally_calculate_md5)
+
             if self._google():
                 s3_client.meta.events.unregister(
                     'before-parameter-build.s3.ListObjects',
