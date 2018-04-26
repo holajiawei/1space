@@ -86,33 +86,53 @@ class TestUtilsFunctions(unittest.TestCase):
                 remove_timestamp=False))
 
     def test_diff_container_headers(self):
-        loc = utils.SYSMETA_VERSIONS_LOC or 'Not-Here-loc'
-        mode = utils.SYSMETA_VERSIONS_MODE or 'Not-Here-mode'
-        hdrs_remote = {
-            'x-history-location': 'foo',
-            loc: 'bar',
-            mode: 'baz',
-            'boogaloo': 'bangarang',
-            u'x-container-meta-test-\u062a': u'remote-\u062a-new',
-            u'x-container-meta-keep-\u062a': u'keepval-\u062a',
-            u'x-container-meta-test-new-\u062a': u'myval\u062a',
-        }
-        hdrs_local = {
-            'x-history-versions': 'foobar',
-            loc: 'bark',
-            mode: 'buzz',
-            'poohbear': 'eeyore',
-            'x-container-meta-test-\xd8\xaa': 'remote-\xd8\xaa',
-            'x-container-meta-keep-\xd8\xaa': 'keepval-\xd8\xaa',
-            'x-container-meta-test-old-\xd8\xaa': 'myval\xd8\xaa-oldval',
-        }
-        expected = {
-            'x-container-meta-test-\xd8\xaa': 'remote-\xd8\xaa-new',
-            'x-container-meta-test-new-\xd8\xaa': 'myval\xd8\xaa',
-            'x-container-meta-test-old-\xd8\xaa': '',
-        }
-        self.assertEqual(expected, utils.diff_container_headers(
-            hdrs_remote, hdrs_local))
+        # old swifts don't have the versioning constants defined
+        internal_location = 'x-container-sysmeta-versions-location'
+        internal_mode = 'x-container-sysmeta-versions-mode'
+        tests = [
+            ({'x-history-location': u'fo\u00f3',
+              'boogaloo': 'bangarang',
+              u'x-container-meta-test-\u062a': u'remote-\u062a-new',
+              u'x-container-meta-keep-\u062a': u'keepval-\u062a',
+              u'x-container-meta-test-new-\u062a': u'myval\u062a'},
+             {'poohbear': 'eeyore',
+              'x-container-meta-test-\xd8\xaa': 'remote-\xd8\xaa',
+              'x-container-meta-keep-\xd8\xaa': 'keepval-\xd8\xaa',
+              'x-container-meta-test-old-\xd8\xaa': 'myval\xd8\xaa-oldval'},
+             {'x-container-meta-test-\xd8\xaa': 'remote-\xd8\xaa-new',
+              'x-container-meta-test-new-\xd8\xaa': 'myval\xd8\xaa',
+              'x-container-meta-test-old-\xd8\xaa': ''},
+             {internal_location: 'fo\xc3\xb3',
+              internal_mode: 'history'}),
+            ({'x-versions-location': u'version\u00e9d'},
+             {},
+             {},
+             {internal_location: 'version\xc3\xa9d',
+              internal_mode: 'stack'}),
+            ({},
+             {internal_location: 'foo',
+              internal_mode: 'history'},
+             {},
+             {internal_location: '',
+              internal_mode: ''}),
+            ({'x-versions-location': u'version\u00e9d'},
+             {internal_location: 'fo\xc3\b3',
+              internal_mode: 'history'},
+             {},
+             {internal_location: 'version\xc3\xa9d',
+              internal_mode: 'stack'}),
+            ({'x-history-location': 'history'},
+             {internal_location: 'other',
+              internal_mode: 'stack'},
+             {},
+             {internal_location: 'history',
+              internal_mode: 'history'})]
+
+        for remote, local, expected, expected_versioning in tests:
+            if utils.SYSMETA_VERSIONS_LOC and utils.SYSMETA_VERSIONS_MODE:
+                expected.update(expected_versioning)
+            self.assertEqual(expected, utils.diff_container_headers(
+                remote, local))
 
     def test_sys_migrator_header(self):
         self.assertEqual(
