@@ -20,8 +20,22 @@ import json
 import StringIO
 import urllib
 
-from swift.common.middleware.versioned_writes import (
-    SYSMETA_VERSIONS_LOC, SYSMETA_VERSIONS_MODE)
+# Old (prior to 2.11) versions of swift cannot import this, but cloud sync
+# cannot be set up for such old clusters. This just allows the cloud shunt to
+# do nothing quietly.
+try:
+    from swift.common.middleware.versioned_writes import (
+        SYSMETA_VERSIONS_LOC, SYSMETA_VERSIONS_MODE)
+except ImportError:
+    try:
+        from swift.common.middleware.versioned_writes import (
+            VERSIONS_LOC_SYSMETA, VERSIONS_MODE_SYSMETA)
+        SYSMETA_VERSIONS_LOC = VERSIONS_LOC_SYSMETA
+        SYSMETA_VERSIONS_MODE = VERSIONS_MODE_SYSMETA
+    except ImportError:
+        SYSMETA_VERSIONS_LOC = None
+        SYSMETA_VERSIONS_MODE = None
+
 from swift.common.request_helpers import (
     get_sys_meta_prefix, get_object_transient_sysmeta)
 from swift.common.swob import Request
@@ -508,17 +522,18 @@ def get_container_headers(provider, aws_bucket=None):
 
     headers = {}
     for hdr in resp.headers:
-        if hdr == 'x-history-location':
-            headers[SYSMETA_VERSIONS_LOC] = \
-                resp.headers[hdr].encode('utf8')
-            headers[SYSMETA_VERSIONS_MODE] = 'history'
-            continue
+        if SYSMETA_VERSIONS_LOC and SYSMETA_VERSIONS_MODE:
+            if hdr == 'x-history-location':
+                headers[SYSMETA_VERSIONS_LOC] = \
+                    resp.headers[hdr].encode('utf8')
+                headers[SYSMETA_VERSIONS_MODE] = 'history'
+                continue
 
-        if hdr == 'x-versions-location':
-            headers[SYSMETA_VERSIONS_LOC] = \
-                resp.headers[hdr].encode('utf8')
-            headers[SYSMETA_VERSIONS_MODE] = 'stack'
-            continue
+            if hdr == 'x-versions-location':
+                headers[SYSMETA_VERSIONS_LOC] = \
+                    resp.headers[hdr].encode('utf8')
+                headers[SYSMETA_VERSIONS_MODE] = 'stack'
+                continue
 
         if _propagated_hdr(hdr):
             # Dunno why, really, but the internal client app will 503
@@ -531,10 +546,28 @@ def get_container_headers(provider, aws_bucket=None):
     return headers
 
 
+def get_local_versioning_headers(headers):
+    if not SYSMETA_VERSIONS_LOC or not SYSMETA_VERSIONS_MODE:
+        return {}
+
+    ret = {}
+    if 'x-history-location' in headers:
+        ret[SYSMETA_VERSIONS_LOC] = \
+            headers['x-history-location'].encode('utf8')
+        ret[SYSMETA_VERSIONS_MODE] = 'history'
+
+    if 'x-versions-location' in headers:
+        ret[SYSMETA_VERSIONS_LOC] = \
+            headers['x-versions-location'].encode('utf8')
+        ret[SYSMETA_VERSIONS_MODE] = 'stack'
+    return ret
+
+
 def diff_container_headers(remote_headers, local_headers):
     # remote_headers are unicode, local are str returns str
     rem_headers = dict([(k.encode('utf8'), v.encode('utf8')) for k, v in
                         remote_headers.items() if _propagated_hdr(k)])
+    rem_headers.update(get_local_versioning_headers(remote_headers))
 
     matching_keys = set(rem_headers.keys()).intersection(local_headers.keys())
     missing_remote_keys = set(
@@ -543,11 +576,15 @@ def diff_container_headers(remote_headers, local_headers):
     missing_local_keys = set(
         rem_headers.keys()).difference(local_headers.keys())
 
+    # TODO: we can probably sink some of these checks into the
+    # _propagated_hdr() function.
+    versioning_headers = [SYSMETA_VERSIONS_LOC, SYSMETA_VERSIONS_MODE]
     return dict([(k, rem_headers[k])
                  for k in matching_keys if
                  rem_headers[k] != local_headers.get(k)] +
                 [(k, rem_headers[k]) for k in missing_local_keys] +
-                [(k, '') for k in missing_remote_keys if _propagated_hdr(k)])
+                [(k, '') for k in missing_remote_keys
+                 if _propagated_hdr(k) or k in versioning_headers])
 
 
 def filter_hop_by_hop_headers(headers):
