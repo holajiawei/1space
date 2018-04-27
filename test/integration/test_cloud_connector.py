@@ -14,6 +14,8 @@ See the License for the specific language governing permissions and
 limitations under the License.
 """
 
+from swiftclient import ClientException
+
 from . import TestCloudSyncBase
 
 from s3_sync.provider_factory import create_provider
@@ -96,3 +98,31 @@ class TestCloudConnector(TestCloudSyncBase):
         self.assertEqual(200, resp.status)
         self.assertEqual('def', ''.join(resp.body))
         self.assertEqual('bamm', resp.headers['x-object-meta-jamm'])
+
+    def test_obj_put(self):
+        # Not there yet...
+        obj_name = u'flimm\u062aflamm'
+
+        resp = self.cc_provider.get_object(obj_name)
+
+        self.assertEqual(404, resp.status)
+        self.assertEqual('The specified key does not exist.',
+                         ''.join(resp.body))
+
+        # PUT it through the cloud-connector
+        resp = self.cc_provider.put_object(
+            obj_name, {'x-object-meta-jam': 'bamm',
+                       'content-length': '3'}, ['a', 'bc'])
+        self.assertEqual(200, resp.status)  # S3 sez 200
+        self.assertEqual('', ''.join(resp.body))
+
+        resp = self.cc_provider.get_object(obj_name)
+
+        self.assertEqual(200, resp.status)
+        self.assertEqual('abc', ''.join(resp.body))
+        self.assertEqual('bamm', resp.headers['x-object-meta-jam'])
+
+        # It doesn't actually get streamed into the Swift cluster
+        with self.assertRaises(ClientException) as cm:
+            self.conn_noshunt.head_object(self.mapping['container'], obj_name)
+        self.assertEqual(404, cm.exception.http_status)

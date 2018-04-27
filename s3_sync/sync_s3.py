@@ -235,21 +235,21 @@ class SyncS3(BaseSync):
             bucket = self.aws_bucket
         return self._call_boto('head_bucket', bucket, None, **options)
 
-    def put_object(self, swift_key, headers, body_iter, query_string=None):
+    def put_object(self, swift_key, headers, body, query_string=None):
         s3_key = self.get_s3_name(swift_key)
-        if isinstance(body_iter, (unicode, str)):
-            if isinstance(body_iter, unicode):
-                body_iter = body_iter.encode('utf8')
-            content_length = len(body_iter)
-            body = body_iter
+        content_length = None
+        if isinstance(body, (unicode, str)):
+            if isinstance(body, unicode):
+                body = body.encode('utf8')
+            content_length = len(body)
+            body = body
         elif headers.get('content-length'):
             content_length = int(headers['content-length'])
             # Boto seems to take a str okay, but docs indicate it wants an int
             headers['content-length'] = content_length
-            body = SeekableFileLikeIter(body_iter, length=content_length)
+            body = SeekableFileLikeIter(body, length=content_length)
         else:
-            content_length = None
-            body = SeekableFileLikeIter(body_iter)
+            body = SeekableFileLikeIter(body)
         params = dict(
             Bucket=self.aws_bucket,
             Key=s3_key,

@@ -157,7 +157,7 @@ class BaseSync(object):
             self.aws_bucket,
         )
 
-    def put_object(self, swift_key, headers, body_iter, query_string=None):
+    def put_object(self, swift_key, headers, body, query_string=None):
         """
         Uploads a single object to the provider's object store, as configured
         (container name, object name namespacing/prefixing, etc.).
@@ -165,8 +165,9 @@ class BaseSync(object):
         The headers provided are assumed to be in Swift parlance, and will be
         converted to S3-style headers if necessary.
 
-        The contents of the object will be the concatenation of everything
-        yielded by `body_iter` before it raises StopIteration.
+        The `body` argument can be a string or unicode instance, a file-like
+        object (like a wsgi.input stream wrapped by an InputProxy instance), or
+        an iterable.
 
         The optional query_string is used only for the Swift provider and is
         sent on, verbatim, to the underlying swiftclient put_object() call.
