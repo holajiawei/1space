@@ -26,6 +26,7 @@ from s3_sync.cloud_connector.util import (
 
 S3_PASSWD_PATH = os.path.sep + os.path.join(
     'tmp', 's3-passwd.json')
+S3_IDENTITY_ENV_KEY = 'cloud-connector.auth.s3-identity'
 
 
 class CloudConnectAuth(object):
@@ -119,6 +120,9 @@ class CloudConnectAuth(object):
         env['PATH_INFO'] = env['PATH_INFO'].replace(key_id, acct, 1)
         self.logger.debug('key id %r authorized for acct %r: %r', key_id,
                           acct, env['PATH_INFO'])
+
+        # Store the matching identity from the DB for the application to use
+        env[S3_IDENTITY_ENV_KEY] = db_entry
         return True
 
 

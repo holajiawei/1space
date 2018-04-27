@@ -14,6 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 """
 
+from itertools import cycle
 import json
 import mock
 import os
@@ -26,6 +27,7 @@ import urllib
 
 from swift.common import swob, utils as swift_utils, wsgi
 
+from s3_sync.base_sync import ProviderResponse
 from s3_sync.cloud_connector import app
 
 
@@ -97,10 +99,26 @@ class TestCloudConnectorBase(unittest.TestCase):
 
 
 class TestCloudConnectorApp(TestCloudConnectorBase):
+    maxDiff = None
+
     def setUp(self):
         super(TestCloudConnectorApp, self).setUp()
 
         self.swift_baseurl = 'http://1.2.3.4:5678'
+        self.s3_identity = {
+            'access_key': u'\u062akey id',
+            'secret_key': u'\u062akey val',
+        }
+
+        patcher = mock.patch('s3_sync.cloud_connector.app.create_provider')
+        self.mock_create_provider = patcher.start()
+        self.addCleanup(patcher.stop)
+
+        self.mock_ltm_provider = mock.Mock()
+        self.mock_rtm_provider = mock.Mock()
+        # We happen to know the local-to-me provider is created first.
+        self.mock_create_provider.side_effect = cycle([
+            self.mock_ltm_provider, self.mock_rtm_provider])
 
         # Get ourselves an Application instance to play with
         patcher = mock.patch('s3_sync.cloud_connector.app.get_env_options')
@@ -120,14 +138,19 @@ class TestCloudConnectorApp(TestCloudConnectorBase):
         mock_get_and_write.side_effect = _config_writer
 
         conf = {'swift_baseurl': self.swift_baseurl}
-        self.app = app.CloudConnectorApplication(conf, logger=mock.MagicMock())
+        self.mock_logger = mock.MagicMock()
+        self.app = app.CloudConnectorApplication(conf, logger=self.mock_logger)
 
-    def controller_for(self, account, container, obj, verb):
-        req = swob.Request.blank('http://a.b.c:123/v1/%s/%s/%s' % (
+    def controller_for(self, account, container, obj=None, verb='GET'):
+        uri = 'http://a.b.c:123/v1/%s/%s' % (
             urllib.quote(account.encode('utf8')),
-            urllib.quote(container.encode('utf8')),
-            urllib.quote(obj.encode('utf8'))),
-            environ={'REQUEST_METHOD': verb})
+            urllib.quote(container.encode('utf8')))
+        if obj is not None:
+            uri += '/' + urllib.quote(obj.encode('utf8'))
+        req = swob.Request.blank(uri, environ={
+            'REQUEST_METHOD': verb,
+            app.S3_IDENTITY_ENV_KEY: self.s3_identity,
+        })
         klass, kwargs = self.app.get_controller(req)
         return klass(self.app, **kwargs), req
 
@@ -142,12 +165,96 @@ class TestCloudConnectorApp(TestCloudConnectorBase):
         self.assertEqual('oo', controller.object_name)
         exp_profile = self.sync_conf['containers'][2].copy()
         exp_profile['container'] = 'jojo'
-        self.assertEqual(exp_profile, controller.sync_profile)
-        provider = controller.provider
-        self.assertTrue(provider._per_account)
+        self.assertEqual(exp_profile, controller.local_to_me_profile)
+        self.assertEqual([
+            mock.call(controller.local_to_me_profile, max_conns=1,
+                      per_account=True, logger=self.app.logger),
+            mock.call(controller.remote_to_me_profile, max_conns=1,
+                      per_account=False, logger=self.app.logger),
+        ], self.mock_create_provider.mock_calls)
+        self.assertEqual([
+            mock.call.debug(
+                'For %s using local_to_me profile %r',
+                urllib.quote(u'AUTH_b\u062a/jojo/oo'.encode('utf8')),
+                {k: v for k, v in exp_profile.items() if 'secret' not in k}),
+            mock.call.debug(
+                'For %s using remote_to_me profile %r',
+                urllib.quote(u'AUTH_b\u062a/jojo/oo'.encode('utf8')),
+                {k: v for k, v in controller.remote_to_me_profile.items()
+                 if 'secret' not in k}),
+        ], self.mock_logger.mock_calls)
 
-    def test_not_implemented_yet(self):
-        for verb in ('GET', 'HEAD', 'PUT', 'POST', 'OPTIONS', 'DELETE'):
+    def test_container_get(self):
+        # Not currently implemented, but it will be.  Flesh this out then
+        controller, req = self.controller_for(u'AUTH_b\u062a', 'jojo')
+        got = controller.HEAD(req)
+        self.assertEqual('501 Not Implemented', got.status)
+
+    def test_get_and_head_hits_local_first_succeeds(self):
+        obj_name = u'\u062aoo'
+        for verb, fn_name in (('HEAD', 'head_object'), ('GET', 'get_object')):
+            mock_provider = getattr(self.mock_ltm_provider, fn_name)
+            mock_provider.return_value = ProviderResponse(
+                success=True, status=200, headers={'Content-Length': '88'},
+                body=iter(['']) if verb == 'HEAD' else iter('A' * 88))
+            controller, req = self.controller_for(u'AUTH_b\u062a', 'jojo',
+                                                  obj_name, verb)
+            fn = getattr(controller, verb)
+            got = fn(req)
+            self.assertEqual(200, got.status_int)
+            self.assertEqual('88', got.headers['Content-Length'])
+            if verb == 'HEAD':
+                self.assertEqual('', ''.join(got.body))
+            else:
+                self.assertEqual('A' * 88, ''.join(got.body))
+
+    def test_get_and_head_fall_back_to_remote_succeeds(self):
+        obj_name = u'\u062aoo'
+        for verb, fn_name in (('HEAD', 'head_object'), ('GET', 'get_object')):
+            mock_provider = getattr(self.mock_ltm_provider, fn_name)
+            mock_provider.return_value = ProviderResponse(
+                success=False, status=404, headers={'Content-Length': '88'},
+                body=iter(['']) if verb == 'HEAD' else iter('A' * 88))
+            mock_provider = getattr(self.mock_rtm_provider, fn_name)
+            mock_provider.return_value = ProviderResponse(
+                success=True, status=200, headers={'Content-Length': '87'},
+                body=iter(['']) if verb == 'HEAD' else iter('A' * 87))
+            controller, req = self.controller_for(u'AUTH_b\u062a', 'jojo',
+                                                  obj_name, verb)
+            fn = getattr(controller, verb)
+            got = fn(req)
+            self.assertEqual(200, got.status_int)
+            self.assertEqual('87', got.headers['Content-Length'])
+            if verb == 'HEAD':
+                self.assertEqual('', ''.join(got.body))
+            else:
+                self.assertEqual('A' * 87, ''.join(got.body))
+
+    def test_get_and_head_fall_back_to_remote_fails(self):
+        obj_name = u'\u062aoo'
+        for verb, fn_name in (('HEAD', 'head_object'), ('GET', 'get_object')):
+            mock_provider = getattr(self.mock_ltm_provider, fn_name)
+            mock_provider.return_value = ProviderResponse(
+                success=False, status=404, headers={'Content-Length': '88'},
+                body=iter(['']) if verb == 'HEAD' else iter('A' * 88))
+            mock_provider = getattr(self.mock_rtm_provider, fn_name)
+            mock_provider.return_value = ProviderResponse(
+                success=False, status=403, headers={'Content-Length': '86'},
+                body=iter(['']) if verb == 'HEAD' else iter('A' * 86))
+            controller, req = self.controller_for(u'AUTH_b\u062a', 'jojo',
+                                                  obj_name, verb)
+            fn = getattr(controller, verb)
+            got = fn(req)
+            self.assertEqual(403, got.status_int)
+            self.assertEqual('86', got.headers['Content-Length'])
+            if verb == 'HEAD':
+                self.assertEqual('', ''.join(got.body))
+            else:
+                self.assertEqual('A' * 86, ''.join(got.body))
+
+    def test_obj_not_implemented_yet(self):
+        # Remove these as object verb support is added (where applicable)
+        for verb in ('PUT', 'POST', 'OPTIONS', 'DELETE'):
             controller, req = self.controller_for(u'AUTH_b\u062a', 'jojo',
                                                   'oo', verb)
             fn = getattr(controller, verb)
@@ -155,9 +262,11 @@ class TestCloudConnectorApp(TestCloudConnectorBase):
             self.assertEqual('501 Not Implemented', got.status)
 
     def test_get_controller_no_acct_actions_allowed(self):
-        for verb in ('GET', 'HEAD', 'PUT', 'POST', 'OPTIONS', 'DELETE'):
-            req = swob.Request.blank('http://a.b.c:123/v1/AUTH_jojo',
-                                     environ={'REQUEST_METHOD': verb})
+        for verb in ('GET', 'GET', 'HEAD', 'PUT', 'POST', 'OPTIONS', 'DELETE'):
+            req = swob.Request.blank(
+                'http://a.b.c:123/v1/AUTH_jojo',
+                environ={'REQUEST_METHOD': verb,
+                         app.S3_IDENTITY_ENV_KEY: self.s3_identity})
             with self.assertRaises(swob.HTTPException) as cm:
                 self.app.get_controller(req)
             self.assertEqual('403 Forbidden', cm.exception.status)
@@ -166,8 +275,10 @@ class TestCloudConnectorApp(TestCloudConnectorBase):
 
     def test_get_controller_no_non_get_container_actions_allowed(self):
         for verb in ('HEAD', 'PUT', 'POST', 'OPTIONS', 'DELETE'):
-            req = swob.Request.blank('http://a.b.c:123/v1/AUTH_jojo/c',
-                                     environ={'REQUEST_METHOD': verb})
+            req = swob.Request.blank(
+                'http://a.b.c:123/v1/AUTH_jojo/c',
+                environ={'REQUEST_METHOD': verb,
+                         app.S3_IDENTITY_ENV_KEY: self.s3_identity})
             with self.assertRaises(swob.HTTPException) as cm:
                 self.app.get_controller(req)
             self.assertEqual('403 Forbidden', cm.exception.status)
@@ -175,39 +286,73 @@ class TestCloudConnectorApp(TestCloudConnectorBase):
                              'GET (listing).', cm.exception.body)
 
     def test_get_controller_no_sync_profile_match(self):
-        req = swob.Request.blank('http://a.b.c:123/v1/AUTH_jojo/c',
-                                 environ={'REQUEST_METHOD': 'GET'})
+        req = swob.Request.blank(
+            'http://a.b.c:123/v1/AUTH_jojo/c',
+            environ={'REQUEST_METHOD': 'GET',
+                     app.S3_IDENTITY_ENV_KEY: self.s3_identity})
         with self.assertRaises(swob.HTTPException) as cm:
             self.app.get_controller(req)
         self.assertEqual('403 Forbidden', cm.exception.status)
         self.assertEqual('No matching sync profile.', cm.exception.body)
 
-        for verb in ('HEAD', 'PUT', 'POST', 'OPTIONS', 'DELETE'):
-            req = swob.Request.blank('http://a.b.c:123/v1/AUTH_jojo/c/o',
-                                     environ={'REQUEST_METHOD': verb})
+        for verb in ('HEAD', 'GET', 'PUT', 'POST', 'OPTIONS', 'DELETE'):
+            req = swob.Request.blank(
+                'http://a.b.c:123/v1/AUTH_jojo/c/o',
+                environ={'REQUEST_METHOD': verb,
+                         app.S3_IDENTITY_ENV_KEY: self.s3_identity})
             with self.assertRaises(swob.HTTPException) as cm:
                 self.app.get_controller(req)
             self.assertEqual('403 Forbidden', cm.exception.status)
             self.assertEqual('No matching sync profile.', cm.exception.body)
 
+    def test_get_controller_not_s3_api(self):
+        # For now, only S3 API access is supported
+        for verb in ('HEAD', 'GET', 'PUT', 'POST', 'OPTIONS', 'DELETE'):
+            for a, c, profile in [(u'AUTH_\u062aa', u'sw\u00e9ft',
+                                   self.sync_conf['containers'][0]),
+                                  ('AUTH_a', 's3',
+                                   self.sync_conf['containers'][1]),
+                                  (u'AUTH_b\u062a', 'crazy1',
+                                   self.sync_conf['containers'][2])]:
+                req = swob.Request.blank('http://a.b.c:123/v1/%s/%s/o' % (
+                    urllib.quote(a.encode('utf8')),
+                    urllib.quote(c.encode('utf8'))),
+                    environ={'REQUEST_METHOD': verb})
+                with self.assertRaises(swob.HTTPException) as cm:
+                    self.app.get_controller(req)
+                self.assertEqual('501 Not Implemented', cm.exception.status)
+
     def test_get_controller_ok(self):
-        for verb in ('HEAD', 'PUT', 'POST', 'OPTIONS', 'DELETE'):
+        for verb in ('HEAD', 'GET', 'PUT', 'POST', 'OPTIONS', 'DELETE'):
             for a, c, profile in [(u'AUTH_\u062aa', u'sw\u00e9ft',
                                    self.sync_conf['containers'][0]),
                                   ('AUTH_a', 's3',
                                    self.sync_conf['containers'][1]),
                                   (u'AUTH_b\u062a', 'crazy1',
                                    self.sync_conf['containers'][2]),
-                                  (u'AUTH_b\u062a', u'cr\u062azy2',
-                                   self.sync_conf['containers'][2])]:
+                                  # NOTE: for S3 API access, containers can't
+                                  # ever be invalid S3 bucket names (i.e. no
+                                  # Unicode, etc.).
+                                  ]:
                 req = swob.Request.blank('http://a.b.c:123/v1/%s/%s/o' % (
                     urllib.quote(a.encode('utf8')),
                     urllib.quote(c.encode('utf8'))),
-                    environ={'REQUEST_METHOD': verb})
+                    environ={'REQUEST_METHOD': verb,
+                             app.S3_IDENTITY_ENV_KEY: self.s3_identity})
                 klass, kwargs = self.app.get_controller(req)
                 self.assertEqual(app.CloudConnectorController, klass)
                 self.assertEqual({
-                    'sync_profile': profile,
+                    'local_to_me_profile': profile,
+                    'remote_to_me_profile': {
+                        "account": profile['account'],
+                        "container": profile['container'],
+                        "aws_bucket": profile['container'],
+                        "aws_endpoint": self.swift_baseurl,
+                        "aws_identity": self.s3_identity['access_key'],
+                        "aws_secret": self.s3_identity['secret_key'],
+                        "protocol": "s3",
+                        "custom_prefix": "",  # "native" access
+                    },
                     'version': 'v1',
                     'account_name': a.encode('utf8'),
                     'container_name': c.encode('utf8'),

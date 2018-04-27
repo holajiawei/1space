@@ -108,7 +108,7 @@ class BaseSync(object):
         def free_count(self):
             return self.get_semaphore.balance
 
-    def __init__(self, settings, max_conns=10, per_account=False):
+    def __init__(self, settings, max_conns=10, per_account=False, logger=None):
         """Base class that every Cloud Sync provider implementation should
         derive from. Sets up the client pool for the provider and the common
         settings.
@@ -128,7 +128,7 @@ class BaseSync(object):
         self.settings = settings
         self.account = settings['account']
         self.container = settings['container']
-        self.logger = logging.getLogger('s3-sync')
+        self.logger = logger or logging.getLogger('s3-sync')
         self._per_account = per_account
         if '/' in self.container:
             raise ValueError('Invalid container name %r' % self.container)

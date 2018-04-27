@@ -24,10 +24,12 @@ from swift.common import swob, utils, wsgi
 from swift.proxy.controllers.base import Controller
 from swift.proxy.server import Application as ProxyApplication
 
+from s3_sync.cloud_connector.auth import S3_IDENTITY_ENV_KEY
 from s3_sync.cloud_connector.util import (
     get_and_write_conf_file_from_s3, get_env_options)
 from s3_sync.provider_factory import create_provider
 from s3_sync.shunt import maybe_munge_profile_for_all_containers
+from s3_sync.utils import filter_hop_by_hop_headers
 
 
 CLOUD_CONNECTOR_CONF_PATH = os.path.sep + os.path.join(
@@ -37,41 +39,95 @@ CLOUD_CONNECTOR_SYNC_CONF_PATH = os.path.sep + os.path.join(
 ROOT_UID = 0
 
 
+def safe_profile_config(profile):
+    return {
+        k: v for k, v in profile.items()
+        if 'secret' not in k
+    }
+
+
 class CloudConnectorController(Controller):
     server_type = 'cloud-connector'
 
-    def __init__(self, app, sync_profile, version, account_name,
-                 container_name, object_name):
+    def __init__(self, app, local_to_me_profile, remote_to_me_profile, version,
+                 account_name, container_name, object_name):
         super(CloudConnectorController, self).__init__(app)
 
         self.version = version
         self.account_name = account_name  # UTF8-encoded string
         self.container_name = container_name  # UTF8-encoded string
         self.object_name = object_name  # UTF8-encoded string
-        self.sync_profile, per_account = \
-            maybe_munge_profile_for_all_containers(sync_profile,
+        self.local_to_me_profile, per_account = \
+            maybe_munge_profile_for_all_containers(local_to_me_profile,
                                                    container_name)
-        self.provider = create_provider(self.sync_profile, max_conns=5,
-                                        per_account=per_account)
+        self.local_to_me_provider = create_provider(
+            self.local_to_me_profile, max_conns=1, per_account=per_account,
+            logger=self.app.logger)
+        self.remote_to_me_profile, per_account = \
+            maybe_munge_profile_for_all_containers(remote_to_me_profile,
+                                                   container_name)
+        self.remote_to_me_provider = create_provider(
+            self.remote_to_me_profile, max_conns=1, per_account=per_account,
+            logger=self.app.logger)
 
         aco_str = urllib.quote('/'.join(filter(None, (
             account_name, container_name, object_name))))
-        self.app.logger.debug('For %s using profile %r', aco_str,
-                              self.sync_profile)
+        self.app.logger.debug('For %s using local_to_me profile %r', aco_str,
+                              safe_profile_config(self.local_to_me_profile))
+        self.app.logger.debug('For %s using remote_to_me profile %r', aco_str,
+                              safe_profile_config(self.remote_to_me_profile))
 
     def GETorHEAD(self, req):
         # Note: account operations were already filtered out in
-        # get_controller()
+        # get_controller(), and the only allowed container operation was GET.
         #
-        # TODO: implement this
-        return swob.HTTPNotImplemented()
+        if not self.object_name:
+            # container listing; we'll list the local-to-me store first, then
+            # overlay any listing results from the onprem Swift cluster
+            # (remote-to-me).
+            # Should be able to leverage sync/migrator shunt listing logic,
+            # with the caveat that in our case, "local" is an S3 store and
+            # "remote" is the Swift store.
+            #
+            # TODO: implement this
+            return swob.HTTPNotImplemented()
+
+        # Try local-to-me first, then fall back to remote-to-me on any
+        # non-success.
+        provider_fn_name = 'get_object' if req.method == 'GET' else \
+            'head_object'
+        for provider_name in ('local_to_me_provider', 'remote_to_me_provider'):
+            provider = getattr(self, provider_name)
+            provider_fn = getattr(provider, provider_fn_name)
+            self.app.logger.debug('Calling %s(%s) on %s', provider_fn_name,
+                                  self.object_name, provider_name)
+            provider_resp = provider_fn(
+                self.object_name.decode('utf8'),  # boto wants Unicode?
+            )
+            self.app.logger.debug('Got %s for %s(%s) on %s',
+                                  provider_resp.status, provider_fn_name,
+                                  self.object_name, provider_name)
+            if provider_resp.status // 100 == 2:
+                break
+
+        # Note convert_to_swift_headers() will have already been called on
+        # the returned S3 headers.
+        # ...but we should still call filter_hop_by_hop_headers()
+        headers = dict(filter_hop_by_hop_headers(
+            provider_resp.headers.items()))
+        return swob.Response(app_iter=iter(provider_resp.body),
+                             status=provider_resp.status,
+                             headers=headers, request=req)
 
     @utils.public
     def GET(self, req):
+        # Note: account HEADs were already filtered out in get_controller()
         return self.GETorHEAD(req)
 
     @utils.public
     def HEAD(self, req):
+        # Note: account and container HEADs were already filtered out in
+        # get_controller()
         return self.GETorHEAD(req)
 
     @utils.public
@@ -180,7 +236,34 @@ class CloudConnectorApplication(ProxyApplication):
                               profile_key1, profile_key2)
             raise swob.HTTPForbidden(body="No matching sync profile.")
 
-        d = dict(sync_profile=profile,
+        # Cook up a Provider "profile" here that can talk to the onprem Swift
+        # cluster (the "profile" details will depend on whether or not this
+        # request came into cloud-connector via S3 API or Swift API because of
+        # the differences in authentication between the two APIs.
+        # For now, only S3 API access is supported.
+        if S3_IDENTITY_ENV_KEY in req.environ:
+            # We got a S3 API request
+            s3_identity = req.environ[S3_IDENTITY_ENV_KEY]
+            onprem_swift_profile = {
+                # Other code will expect Unicode strings in here
+                "account": acct.decode('utf8'),
+                "container": profile['container'],
+                # All the "aws_*" stuff will be pointing to the onprem Swift
+                # cluster
+                "aws_bucket": profile['container'],
+                "aws_endpoint": self.swift_baseurl,
+                "aws_identity": s3_identity['access_key'],  # already Unicode
+                "aws_secret": s3_identity['secret_key'],  # already Unicode
+                "protocol": "s3",
+                "custom_prefix": "",  # "native" access
+            }
+        else:
+            raise swob.HTTPNotImplemented(
+                'UNEXPECTED: only S3 access supported, but '
+                'S3_IDENTITY_ENV_KEY missing??')
+
+        d = dict(local_to_me_profile=profile,
+                 remote_to_me_profile=onprem_swift_profile,
                  version=ver,
                  account_name=acct,
                  container_name=cont,
