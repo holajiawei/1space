@@ -14,6 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 """
 
+from datetime import datetime
 from itertools import cycle
 import json
 import mock
@@ -26,6 +27,10 @@ import unittest
 import urllib
 
 from swift.common import swob, utils as swift_utils, wsgi
+
+from swift3.etree import fromstring
+from swift3 import request as swift3_request
+from swift3.controllers import ObjectController
 
 from s3_sync.base_sync import ProviderResponse
 from s3_sync.cloud_connector import app
@@ -143,20 +148,130 @@ class TestCloudConnectorApp(TestCloudConnectorBase):
 
     def controller_for(self, account, container, obj=None, verb='GET',
                        query_string=None, req_kwargs=None):
-        query_string = '?' + query_string if query_string else ''
-        uri = 'http://a.b.c:123/v1/%s/%s%s' % (
+        uri = 'http://a.b.c:123/v1/%s/%s' % (
             urllib.quote(account.encode('utf8')),
-            urllib.quote(container.encode('utf8')),
-            query_string)
+            urllib.quote(container.encode('utf8')))
         if obj is not None:
             uri += '/' + urllib.quote(obj.encode('utf8'))
+        if query_string is not None:
+            uri += '?' + query_string
         req_kwargs = req_kwargs or {}
         req = swob.Request.blank(uri, environ={
             'REQUEST_METHOD': verb,
+            # Emulate what boto can do with V4 sig & non-default port
+            # See https://github.com/boto/boto/pull/3513
+            'HTTP_HOST': 'a.b.c:123:123',
             app.S3_IDENTITY_ENV_KEY: self.s3_identity,
         }, **req_kwargs)
         klass, kwargs = self.app.get_controller(req)
         return klass(self.app, **kwargs), req
+
+    def test__cc_get_request_class(self):
+        _, req = self.controller_for(u'AUTH_b\u062a', 'b')
+        self.assertEqual(app.CCRequest, app._cc_get_request_class(req.environ))
+
+        _, req = self.controller_for(u'AUTH_b\u062a', 'v',
+                                     query_string='X-Amz-Credential=fe')
+        self.assertEqual(app.CCSigV4Request,
+                         app._cc_get_request_class(req.environ))
+
+        _, req = self.controller_for(u'AUTH_b\u062a', 'v', req_kwargs={
+            'headers': {'Authorization': 'AWS4-HMAC-SHA256 '}})
+        self.assertEqual(app.CCSigV4Request,
+                         app._cc_get_request_class(req.environ))
+
+        try:
+            swift3_request.CONF.s3_acl = True
+            _, req = self.controller_for(u'AUTH_b\u062a', 'b')
+            self.assertEqual(app.CCS3AclRequest,
+                             app._cc_get_request_class(req.environ))
+
+            _, req = self.controller_for(u'AUTH_b\u062a', 'v',
+                                         query_string='X-Amz-Credential=fe')
+            self.assertEqual(app.CCSigV4S3AclRequest,
+                             app._cc_get_request_class(req.environ))
+
+            _, req = self.controller_for(u'AUTH_b\u062a', 'v', req_kwargs={
+                'headers': {'Authorization': 'AWS4-HMAC-SHA256 '}})
+            self.assertEqual(app.CCSigV4S3AclRequest,
+                             app._cc_get_request_class(req.environ))
+        finally:
+            swift3_request.CONF.s3_acl = False
+
+    def test_req_mixin(self):
+        controller, req = self.controller_for(u'AUTH_b\u062a', 'b')
+        # Fake out enough environ stuff so the swift3 request code doesn't flip
+        # out.
+        req.environ['HTTP_AUTHORIZATION'] = \
+            'AWS test:tester:+zix+sRyI0WougBI22CEKGLufwc='
+        req.environ['PATH_INFO'] = '/s3-restore/shimmy\xd8\xaajimmy'
+        req.environ['HTTP_DATE'] = datetime.now().strftime(
+            "%a, %d %b %Y %H:%M:%S GMT")
+
+        cc_req = app.CCRequest(req.environ, controller.app)
+        self.assertEqual(ObjectController, cc_req.controller)
+
+        cc_req.params = {'uploads': ''}
+        self.assertEqual(app.PassThroughController, cc_req.controller)
+
+        cc_req.params = {'partNumber': ''}
+        self.assertEqual(app.PassThroughController, cc_req.controller)
+
+        cc_req.params = {'uploadId': ''}
+        self.assertEqual(app.PassThroughController, cc_req.controller)
+
+    def test_passthrough_controller(self):
+        controller, req = self.controller_for(u'AUTH_b\u062a', 'b')
+        # Fake out enough environ stuff so the swift3 request code doesn't flip
+        # out.
+        req.environ['HTTP_AUTHORIZATION'] = \
+            'AWS test:tester:+zix+sRyI0WougBI22CEKGLufwc='
+        req.environ['PATH_INFO'] = '/s3-restore/shimmy\xd8\xaajimmy'
+        req.environ['HTTP_DATE'] = datetime.now().strftime(
+            "%a, %d %b %Y %H:%M:%S GMT")
+
+        cc_req = app.CCRequest(req.environ, controller.app)
+        cc_req.params = {'pass_me': 'through'}
+        stub_resp = mock.Mock()
+
+        self.assertNotIn(app.CC_SWIFT_REQ_KEY, cc_req.environ)
+        stub_app = 'mucky-muck'
+
+        def _respy(*args, **kwargs):
+            self.assertEqual(stub_app, args[0])
+            self.assertEqual({'pass_me': 'through'}, kwargs['query'])
+            self.assertEqual(cc_req, cc_req.environ[app.CC_SWIFT_REQ_KEY])
+            return stub_resp
+
+        cc_req.get_response = mock.Mock(side_effect=_respy)
+
+        cont = app.PassThroughController(stub_app)
+
+        self.assertEqual(stub_resp, cont.GET(cc_req))
+        self.assertNotIn(app.CC_SWIFT_REQ_KEY, cc_req.environ)
+
+        self.assertEqual(stub_resp, cont.POST(cc_req))
+        self.assertNotIn(app.CC_SWIFT_REQ_KEY, cc_req.environ)
+
+        self.assertEqual(stub_resp, cont.DELETE(cc_req))
+        self.assertNotIn(app.CC_SWIFT_REQ_KEY, cc_req.environ)
+
+        # PUT has special handling for copy request dudes
+        self.assertEqual(stub_resp, cont.PUT(cc_req))
+        self.assertEqual(200, stub_resp.status)
+        self.assertNotIn(app.CC_SWIFT_REQ_KEY, cc_req.environ)
+        self.assertEqual([], stub_resp.mock_calls)
+
+        delattr(stub_resp, 'status')
+        stub_resp.headers = {'Last-Modified': 'lahbblah'}
+
+        cc_req.headers['X-Amz-Copy-Source'] = 'FREAKOUT!!'
+        self.assertEqual(stub_resp, cont.PUT(cc_req))
+        self.assertEqual(200, stub_resp.status)
+        self.assertNotIn(app.CC_SWIFT_REQ_KEY, cc_req.environ)
+        self.assertEqual([
+            mock.call.append_copy_resp_body('Part', 'lahbblah'),
+        ], stub_resp.mock_calls)
 
     def test_controller_init(self):
         controller, _ = self.controller_for(u'AUTH_b\u062a', 'jojo', 'oo',
@@ -188,6 +303,21 @@ class TestCloudConnectorApp(TestCloudConnectorBase):
                 {k: v for k, v in controller.remote_to_me_profile.items()
                  if 'secret' not in k}),
         ], self.mock_logger.mock_calls)
+
+    def test_container_head_in_local(self):
+        controller, req = self.controller_for(u'AUTH_b\u062a', 'jojo',
+                                              verb='HEAD')
+        self.mock_ltm_provider.head_bucket.return_value = ProviderResponse(
+            True, 200, {'x-container-meta-shi': 'fi'}, '')
+        got = controller.HEAD(req)
+
+        self.assertEqual(200, got.status_int)
+        self.assertEqual('fi', got.headers['x-container-meta-shi'])
+        self.assertEqual('', got.body)
+        self.assertEqual([
+            mock.call.head_bucket(),
+        ], self.mock_ltm_provider.mock_calls)
+        self.assertEqual([], self.mock_rtm_provider.mock_calls)
 
     def test_container_get_only_remote_bucket_exists(self):
         controller, req = self.controller_for(
@@ -1026,6 +1156,271 @@ class TestCloudConnectorApp(TestCloudConnectorBase):
         self.assertEqual('63', got.headers['Content-Length'])
         self.assertEqual('B' * 63, ''.join(got.body))
 
+    def test_multipart_upload_start(self):
+        obj_name = u'\u062awo'
+        mock_provider_fn = self.mock_ltm_provider._create_multipart_upload
+        mock_provider_fn.return_value = {
+            'Bucket': 'a_bucket',
+            'Key': 'a_key',
+            'UploadId': 'stub_upload_eye_dee',
+        }
+        controller, req = self.controller_for(u'AUTH_b\u062a', 'jojo',
+                                              obj_name, 'POST',
+                                              query_string='uploads=')
+        got = controller.POST(req)
+        self.assertEqual(202, got.status_int)
+        xml = got.body
+        res_elem = fromstring(xml, 'InitiateMultipartUploadResult')
+        # Bucket & Key actually ignore the S3 API result
+        self.assertEqual('jojo', res_elem.find('./Bucket').text)
+        self.assertEqual(obj_name.encode('utf8'),
+                         res_elem.find('./Key').text)
+        self.assertEqual('stub_upload_eye_dee',
+                         res_elem.find('./UploadId').text)
+        self.assertEqual([
+            mock.call.get_s3_name(obj_name.encode('utf8')),
+            mock.call._create_multipart_upload(
+                req.headers, self.mock_ltm_provider.get_s3_name.return_value),
+        ], self.mock_ltm_provider.mock_calls)
+        self.assertEqual([], self.mock_rtm_provider.mock_calls)
+
+    def test_multipart_upload_complete(self):
+        obj_name = u'\u062abblo'
+        mock_provider_fn = self.mock_ltm_provider._complete_multipart_upload
+        mock_provider_fn.return_value = {
+            'Location': 'http',
+            'Bucket': 'a_bucket',
+            'Key': 'a_key',
+            'Expiration': 'an_expiration',
+            'ETag': 'an_ee_tagg',
+        }
+        body = """<CompleteMultipartUpload>
+  <Part>
+    <ETag>ETaggy1</ETag>
+    <PartNumber>1</PartNumber>
+  </Part>
+  <Part>
+    <ETag>ETaggy2</ETag>
+    <PartNumber>2</PartNumber>
+  </Part>
+</CompleteMultipartUpload>"""
+        controller, req = self.controller_for(
+            u'AUTH_b\u062a', 'jojo', obj_name, 'POST',
+            query_string='uploadId=an_idee',
+            req_kwargs={
+                'headers': {'Content-Length': str(len(body))},
+                'body': body,
+            })
+
+        class StubSwift3Req(object):
+            # Just need something that has an xml() method that returns the
+            # input body
+            def xml(something_other_than_self, max_size):
+                self.assertEqual(app.MAX_COMPLETE_UPLOAD_BODY_SIZE, max_size)
+                return body
+
+        # Emulate what PassThroughController does (the code to handle this case
+        # needs access to the s3 request object's fancy-pants `xml` method to
+        # be all safe and stuff.
+        req.environ[app.CC_SWIFT_REQ_KEY] = StubSwift3Req()
+
+        # Emulate what V4 signer thing in swift3 can do to env
+        self.assertEqual('http://a.b.c:123:123', req.host_url)  # sanity check
+
+        got = controller.POST(req)
+        self.assertEqual(202, got.status_int)
+        xml = got.body
+        res_elem = fromstring(xml, 'CompleteMultipartUploadResult')
+        self.assertEqual('http://a.b.c:123/v1/%s/%s/%s' % (
+            urllib.quote(controller.account_name),
+            'jojo',
+            urllib.quote(obj_name.encode('utf8'))),
+            res_elem.find('./Location').text)
+        # Bucket & Key actually ignore the S3 API result
+        self.assertEqual('jojo', res_elem.find('./Bucket').text)
+        self.assertEqual(obj_name.encode('utf8'),
+                         res_elem.find('./Key').text)
+        self.assertEqual('an_ee_tagg',
+                         res_elem.find('./ETag').text)
+        self.assertEqual([
+            mock.call.get_s3_name(obj_name.encode('utf8')),
+            mock.call._complete_multipart_upload(
+                self.mock_ltm_provider.get_s3_name.return_value,
+                'an_idee', [{
+                    'ETag': 'ETaggy1',
+                    'PartNumber': 1,
+                }, {
+                    'ETag': 'ETaggy2',
+                    'PartNumber': 2,
+                }]),
+        ], self.mock_ltm_provider.mock_calls)
+        self.assertEqual([], self.mock_rtm_provider.mock_calls)
+
+    def test_multipart_upload_complete_default_port(self):
+        obj_name = u'\u062abblo'
+        mock_provider_fn = self.mock_ltm_provider._complete_multipart_upload
+        mock_provider_fn.return_value = {
+            'Location': 'http',
+            'Bucket': 'a_bucket',
+            'Key': 'a_key',
+            'Expiration': 'an_expiration',
+            'ETag': 'an_ee_tagg',
+        }
+        body = """<CompleteMultipartUpload>
+  <Part>
+    <ETag>ETaggy1</ETag>
+    <PartNumber>1</PartNumber>
+  </Part>
+</CompleteMultipartUpload>"""
+        controller, req = self.controller_for(
+            u'AUTH_b\u062a', 'jojo', obj_name, 'POST',
+            query_string='uploadId=an_idee',
+            req_kwargs={
+                'headers': {'Content-Length': str(len(body))},
+                'body': body,
+                'host': 'a.b.c',
+            })
+        req.environ['SERVER_PORT'] = '80'
+
+        class StubSwift3Req(object):
+            # Just need something that has an xml() method that returns the
+            # input body
+            def xml(something_other_than_self, max_size):
+                self.assertEqual(app.MAX_COMPLETE_UPLOAD_BODY_SIZE, max_size)
+                return body
+
+        # Emulate what PassThroughController does (the code to handle this case
+        # needs access to the s3 request object's fancy-pants `xml` method to
+        # be all safe and stuff.
+        req.environ[app.CC_SWIFT_REQ_KEY] = StubSwift3Req()
+
+        # Emulate what V4 signer thing in swift3 can do to env
+        self.assertEqual('http://a.b.c', req.host_url)  # sanity check
+
+        got = controller.POST(req)
+        self.assertEqual(202, got.status_int)
+        xml = got.body
+        res_elem = fromstring(xml, 'CompleteMultipartUploadResult')
+        self.assertEqual('http://a.b.c/v1/%s/%s/%s' % (
+            urllib.quote(controller.account_name),
+            'jojo',
+            urllib.quote(obj_name.encode('utf8'))),
+            res_elem.find('./Location').text)
+        # Bucket & Key actually ignore the S3 API result
+        self.assertEqual('jojo', res_elem.find('./Bucket').text)
+        self.assertEqual(obj_name.encode('utf8'),
+                         res_elem.find('./Key').text)
+        self.assertEqual('an_ee_tagg',
+                         res_elem.find('./ETag').text)
+        self.assertEqual([
+            mock.call.get_s3_name(obj_name.encode('utf8')),
+            mock.call._complete_multipart_upload(
+                self.mock_ltm_provider.get_s3_name.return_value,
+                'an_idee', [{
+                    'ETag': 'ETaggy1',
+                    'PartNumber': 1,
+                }]),
+        ], self.mock_ltm_provider.mock_calls)
+        self.assertEqual([], self.mock_rtm_provider.mock_calls)
+
+    def test_multipart_upload_part(self):
+        obj_name = u'\u062avoj'
+        mock_provider_fn = self.mock_ltm_provider._upload_part
+        mock_provider_fn.return_value = {
+            'ETag': 'an_etag',
+        }
+        body = 'a party part'
+        controller, req = self.controller_for(
+            u'AUTH_b\u062a', 'jojo', obj_name, 'PUT',
+            query_string='uploadId=stub_upload_eye_dee&'
+            'partNumber=22',
+            req_kwargs={
+                'body': body,
+                'headers': {'Content-Length': str(len(body))}})
+        got = controller.PUT(req)
+        self.assertEqual(201, got.status_int)
+        self.assertEqual('', got.body)
+        self.assertEqual('an_etag', got.headers['etag'])
+        self.assertEqual([
+            mock.call.get_s3_name(obj_name.encode('utf8')),
+            mock.call._upload_part(
+                self.mock_ltm_provider.get_s3_name.return_value,
+                body=mock.ANY, content_length=len(body),
+                upload_id='stub_upload_eye_dee', part_number='22'),
+        ], self.mock_ltm_provider.mock_calls)
+        self.assertEqual([], self.mock_rtm_provider.mock_calls)
+
+    def test_multipart_upload_part_copy_no_range(self):
+        obj_name = u'\u062avoj'
+        mock_provider_fn = self.mock_ltm_provider._upload_part_copy
+        stub_last_modified = datetime.now()
+        mock_provider_fn.return_value = {
+            'CopyPartResult': {
+                'ETag': 'an_eTaG',
+                'LastModified': stub_last_modified,
+            },
+        }
+        controller, req = self.controller_for(
+            u'AUTH_b\u062a', 'jojo', obj_name, 'PUT',
+            query_string='uploadId=stub_upload_eye_dee&'
+            'partNumber=23',
+            req_kwargs={'headers': {
+                'Content-Length': '0',
+                'X-Copy-From': 'shim/my%2Fjimm',
+            }})
+        got = controller.PUT(req)
+        self.assertEqual(201, got.status_int)
+        self.assertEqual('', got.body)
+        self.assertEqual('an_eTaG', got.headers['etag'])
+        self.assertEqual(str(stub_last_modified),
+                         got.headers['last-modified'])
+        self.assertEqual([
+            mock.call.get_s3_name(obj_name.encode('utf8')),
+            mock.call.get_s3_name('my/jimm'),
+            mock.call._upload_part_copy(
+                self.mock_ltm_provider.get_s3_name.return_value,
+                self.mock_ltm_provider.aws_bucket,
+                self.mock_ltm_provider.get_s3_name.return_value,
+                'stub_upload_eye_dee', '23', None),
+        ], self.mock_ltm_provider.mock_calls)
+        self.assertEqual([], self.mock_rtm_provider.mock_calls)
+
+    def test_multipart_upload_part_copy_with_range(self):
+        obj_name = u'\u062avoj'
+        mock_provider_fn = self.mock_ltm_provider._upload_part_copy
+        stub_last_modified = datetime.now()
+        mock_provider_fn.return_value = {
+            'CopyPartResult': {
+                'ETag': 'an_eTaG',
+                'LastModified': stub_last_modified,
+            },
+        }
+        controller, req = self.controller_for(
+            u'AUTH_b\u062a', 'jojo', obj_name, 'PUT',
+            query_string='uploadId=stub_upload_eye_dee&'
+            'partNumber=23',
+            req_kwargs={'headers': {
+                'Content-Length': '0',
+                'X-Copy-From': 'shim/my%2Fjimm',
+                'X-Amz-Copy-Source-Range': 'bytes=2-3',
+            }})
+        got = controller.PUT(req)
+        self.assertEqual(201, got.status_int)
+        self.assertEqual('', got.body)
+        self.assertEqual('an_eTaG', got.headers['etag'])
+        self.assertEqual(str(stub_last_modified),
+                         got.headers['last-modified'])
+        self.assertEqual([
+            mock.call.get_s3_name(obj_name.encode('utf8')),
+            mock.call.get_s3_name('my/jimm'),
+            mock.call._upload_part_copy(
+                self.mock_ltm_provider.get_s3_name.return_value,
+                self.mock_ltm_provider.aws_bucket,
+                self.mock_ltm_provider.get_s3_name.return_value,
+                'stub_upload_eye_dee', '23', 'bytes=2-3'),
+        ], self.mock_ltm_provider.mock_calls)
+        self.assertEqual([], self.mock_rtm_provider.mock_calls)
+
     def test_obj_not_implemented_yet(self):
         # Remove these as object verb support is added (where applicable)
         # NOTE: metadata update (a swift POST) is implemented in S3 API as a
@@ -1049,8 +1444,8 @@ class TestCloudConnectorApp(TestCloudConnectorBase):
             self.assertEqual('Account operations are not supported.',
                              cm.exception.body)
 
-    def test_get_controller_no_non_get_container_actions_allowed(self):
-        for verb in ('HEAD', 'PUT', 'POST', 'OPTIONS', 'DELETE'):
+    def test_get_controller_no_non_get_or_head_container_actions(self):
+        for verb in ('PUT', 'POST', 'OPTIONS', 'DELETE'):
             req = swob.Request.blank(
                 'http://a.b.c:123/v1/AUTH_jojo/c',
                 environ={'REQUEST_METHOD': verb,
@@ -1058,8 +1453,8 @@ class TestCloudConnectorApp(TestCloudConnectorBase):
             with self.assertRaises(swob.HTTPException) as cm:
                 self.app.get_controller(req)
             self.assertEqual('403 Forbidden', cm.exception.status)
-            self.assertEqual('The only supported container operation is '
-                             'GET (listing).', cm.exception.body)
+            self.assertEqual('The only supported container operations are '
+                             'GET and HEAD.', cm.exception.body)
 
     def test_get_controller_no_sync_profile_match(self):
         req = swob.Request.blank(
@@ -1309,6 +1704,9 @@ class TestCloudConnectorAppConstruction(TestCloudConnectorBase):
         orig_wsgi_validate = wsgi.validate_configuration
         self.assertEqual(orig_utils_validate, orig_wsgi_validate)
 
+        orig_get_req_class = swift3_request.get_request_class
+        self.assertNotEqual(orig_get_req_class, app._cc_get_request_class)
+
         # The real validate_configuration chokes on InvalidHashPathConfigError
         # Later, we'll make sure the monkey-patched ones don't
         with mock.patch('swift.common.utils.validate_hash_conf',
@@ -1343,6 +1741,11 @@ class TestCloudConnectorAppConstruction(TestCloudConnectorBase):
             swift_utils.validate_configuration()
             wsgi.validate_configuration()
 
+        # We've successfully monkeypatched the real get_request_class
+        self.assertEqual(swift3_request.get_request_class,
+                         app._cc_get_request_class)
+
         # Restore monkeypatched functions
         swift_utils.validate_configuration = orig_utils_validate
         wsgi.validate_configuration = orig_wsgi_validate
+        swift3_request.get_request_class = orig_get_req_class

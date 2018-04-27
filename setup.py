@@ -25,6 +25,8 @@ setup(name='swift-s3-sync',
               'cloud-shunt = s3_sync.shunt:filter_factory',
               'cloud-connector-auth = '
               's3_sync.cloud_connector.auth:filter_factory',
+              'cloud-connector-slo = '
+              's3_sync.cloud_connector.slo_cc:filter_factory',
           ],
           'paste.app_factory': [
               'cloud-connector = s3_sync.cloud_connector.app:app_factory',

@@ -16,7 +16,10 @@ limitations under the License.
 
 import eventlet
 import logging
-from swift.common.swob import RESPONSE_REASONS
+
+from s3_sync.utils import filter_hop_by_hop_headers
+
+from swift.common import swob
 
 
 class ProviderResponse(object):
@@ -32,8 +35,15 @@ class ProviderResponse(object):
 
     def to_wsgi(self):
         # WSGI expects an HTTP status + reason string
-        wsgi_status = '%d %s' % (self.status, RESPONSE_REASONS[self.status][0])
+        wsgi_status = '%d %s' % (
+            self.status, swob.RESPONSE_REASONS[self.status][0])
         return wsgi_status, self.headers.items(), self.body
+
+    def to_swob_response(self, req=None):
+        headers = dict(filter_hop_by_hop_headers(self.headers.items()))
+        return swob.Response(app_iter=iter(self.body),
+                             status=self.status,
+                             headers=headers, request=req)
 
     def reraise(self):
         if self.exc_info:
