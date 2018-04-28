@@ -30,4 +30,8 @@ COPY swiftclient.patch /tmp/
 RUN bash -c "cd /usr/local/src \
     && patch -p0 < /tmp/swiftclient.patch \
     && rm -f /tmp/swiftclient.patch"
+COPY swift3-unicode-fix.patch /tmp/
+RUN bash -c "cd /usr/local/src \
+    && patch -p0 < /tmp/swift3-unicode-fix.patch \
+    && rm -f /tmp/swift3-unicode-fix.patch"
 CMD ["/bin/bash", "/swift-s3-sync/test/container/launch.sh"]

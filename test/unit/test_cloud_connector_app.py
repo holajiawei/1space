@@ -141,16 +141,20 @@ class TestCloudConnectorApp(TestCloudConnectorBase):
         self.mock_logger = mock.MagicMock()
         self.app = app.CloudConnectorApplication(conf, logger=self.mock_logger)
 
-    def controller_for(self, account, container, obj=None, verb='GET'):
-        uri = 'http://a.b.c:123/v1/%s/%s' % (
+    def controller_for(self, account, container, obj=None, verb='GET',
+                       query_string=None, req_kwargs=None):
+        query_string = '?' + query_string if query_string else ''
+        uri = 'http://a.b.c:123/v1/%s/%s%s' % (
             urllib.quote(account.encode('utf8')),
-            urllib.quote(container.encode('utf8')))
+            urllib.quote(container.encode('utf8')),
+            query_string)
         if obj is not None:
             uri += '/' + urllib.quote(obj.encode('utf8'))
+        req_kwargs = req_kwargs or {}
         req = swob.Request.blank(uri, environ={
             'REQUEST_METHOD': verb,
             app.S3_IDENTITY_ENV_KEY: self.s3_identity,
-        })
+        }, **req_kwargs)
         klass, kwargs = self.app.get_controller(req)
         return klass(self.app, **kwargs), req
 
@@ -170,7 +174,8 @@ class TestCloudConnectorApp(TestCloudConnectorBase):
             mock.call(controller.local_to_me_profile, max_conns=1,
                       per_account=True, logger=self.app.logger),
             mock.call(controller.remote_to_me_profile, max_conns=1,
-                      per_account=False, logger=self.app.logger),
+                      per_account=False, logger=self.app.logger,
+                      extra_headers={'x-cloud-sync-shunt-bypass': 'true'}),
         ], self.mock_create_provider.mock_calls)
         self.assertEqual([
             mock.call.debug(
@@ -184,11 +189,528 @@ class TestCloudConnectorApp(TestCloudConnectorBase):
                  if 'secret' not in k}),
         ], self.mock_logger.mock_calls)
 
+    def test_container_get_only_remote_bucket_exists(self):
+        controller, req = self.controller_for(
+            u'AUTH_b\u062a', 'jojo',
+            query_string='limit=10&marker=a%20b&prefix=abc&delimiter=def',
+            req_kwargs={'headers': {'Accept': 'application/json'}})
+        self.mock_ltm_provider.list_objects.side_effect = [
+            ProviderResponse(False, 404, {}, ''),
+        ]
+        self.mock_rtm_provider.list_objects.side_effect = [
+            ProviderResponse(True, 200, {}, [{
+                'hash': 'fjoEtagggg',
+                'name': u'b\u062ac',
+                'last_modified': '2018-02-01T22:21:57Z',
+                'bytes': 90,
+                'content_location': 'a;loc3',
+                'content_type': 'application/octet-stream',
+            }, {
+                'subdir': u'd\u062ae',
+                'content_location': 'another;loc3',
+            }]),
+            ProviderResponse(True, 200, {}, [{
+                'subdir': u'f\u062ag',
+                'content_location': 'another;loc4',
+            }, {
+                'hash': 'abcEtagdef',
+                'name': u'h\u062ai',
+                'last_modified': '2018-03-01T22:21:57Z',
+                'bytes': 91,
+                'content_location': 'a;loc4',
+                'content_type': 'application/octet-stream',
+            }]),
+            ProviderResponse(True, 200, {}, []),
+        ]
+        got = controller.GET(req)
+
+        self.assertEqual([{
+            'hash': 'fjoEtagggg',
+            'name': u'b\u062ac',
+            'last_modified': '2018-02-01T22:21:57Z',
+            'bytes': 90,
+            'content_location': ['a;loc3'],
+            'content_type': 'application/octet-stream',
+        }, {
+            'subdir': u'd\u062ae',
+            'content_location': ['another;loc3'],
+        }, {
+            'subdir': u'f\u062ag',
+            'content_location': ['another;loc4'],
+        }, {
+            'hash': 'abcEtagdef',
+            'name': u'h\u062ai',
+            'last_modified': '2018-03-01T22:21:57Z',
+            'bytes': 91,
+            'content_location': ['a;loc4'],
+            'content_type': 'application/octet-stream',
+        }], json.loads(got.body))
+        self.assertEqual([
+            # marker, limit, prefix, delimiter
+            mock.call.list_objects('a b', 10, 'abc', 'def'),
+        ], self.mock_ltm_provider.mock_calls)
+        self.assertEqual([
+            mock.call.list_objects('a b', 10, 'abc', 'def'),
+            mock.call.list_objects('d\xd8\xaae', 10, 'abc', 'def'),
+            mock.call.list_objects('h\xd8\xaai', 10, 'abc', 'def')
+        ], self.mock_rtm_provider.mock_calls)
+
+    def test_container_get_local_has_non_404_error(self):
+        controller, req = self.controller_for(
+            u'AUTH_b\u062a', 'jojo',
+            query_string='limit=10&marker=a%20b&prefix=abc&delimiter=def',
+            req_kwargs={'headers': {'Accept': 'application/json'}})
+        self.mock_ltm_provider.list_objects.side_effect = [
+            ProviderResponse(False, 400, {}, ''),
+        ]
+        got = controller.GET(req)
+
+        self.assertEqual(400, got.status_int)
+        self.assertEqual([
+            # marker, limit, prefix, delimiter
+            mock.call.list_objects('a b', 10, 'abc', 'def'),
+        ], self.mock_ltm_provider.mock_calls)
+        self.assertEqual([], self.mock_rtm_provider.mock_calls)
+
+    def test_container_get_local_404_remote_non_404_error(self):
+        controller, req = self.controller_for(
+            u'AUTH_b\u062a', 'jojo',
+            query_string='limit=10&marker=a%20b&prefix=abc&delimiter=def',
+            req_kwargs={'headers': {'Accept': 'application/json'}})
+        self.mock_ltm_provider.list_objects.side_effect = [
+            ProviderResponse(False, 404, {}, ''),
+        ]
+        self.mock_rtm_provider.list_objects.side_effect = [
+            ProviderResponse(False, 400, {}, ''),
+        ]
+        got = controller.GET(req)
+
+        self.assertEqual(400, got.status_int)
+        self.assertEqual([
+            # marker, limit, prefix, delimiter
+            mock.call.list_objects('a b', 10, 'abc', 'def'),
+        ], self.mock_ltm_provider.mock_calls)
+        self.assertEqual([
+            mock.call.list_objects('a b', 10, 'abc', 'def'),
+        ], self.mock_rtm_provider.mock_calls)
+
+    def test_container_get_local_and_remote_buckets_404(self):
+        controller, req = self.controller_for(
+            u'AUTH_b\u062a', 'jojo',
+            query_string='limit=10&marker=a%20b&prefix=abc&delimiter=def',
+            req_kwargs={'headers': {'Accept': 'application/json'}})
+        self.mock_ltm_provider.list_objects.side_effect = [
+            ProviderResponse(False, 404, {}, ''),
+        ]
+        self.mock_rtm_provider.list_objects.side_effect = [
+            ProviderResponse(False, 404, {}, ''),
+        ]
+        got = controller.GET(req)
+
+        self.assertEqual(404, got.status_int)
+        self.assertEqual([
+            # marker, limit, prefix, delimiter
+            mock.call.list_objects('a b', 10, 'abc', 'def'),
+        ], self.mock_ltm_provider.mock_calls)
+        self.assertEqual([
+            mock.call.list_objects('a b', 10, 'abc', 'def'),
+        ], self.mock_rtm_provider.mock_calls)
+
+    def test_container_get_only_local_bucket_exists(self):
+        controller, req = self.controller_for(
+            u'AUTH_b\u062a', 'jojo',
+            query_string='limit=10&marker=a%20b&prefix=abc&delimiter=def',
+            req_kwargs={'headers': {'Accept': 'application/json'}})
+        self.mock_ltm_provider.list_objects.side_effect = [
+            ProviderResponse(True, 200, {}, [{
+                'hash': 'abcEtagdef',
+                'name': u'a\u062ab',
+                'last_modified': '2018-05-01T22:21:57Z',
+                'bytes': 88,
+                'content_location': 'a;loc',
+                'content_type': 'application/octet-stream',
+            }, {
+                'subdir': u'c\u062ad',
+                'content_location': 'another;loc',
+            }]),
+            ProviderResponse(True, 200, {}, [{
+                'subdir': u'e\u062af',
+                'content_location': 'another;loc2',
+            }, {
+                'hash': 'ijkEtaglmn',
+                'name': u'g\u062ah',
+                'last_modified': '2018-04-01T22:21:57Z',
+                'bytes': 89,
+                'content_location': 'a;loc2',
+                'content_type': 'application/octet-stream',
+            }]),
+            ProviderResponse(True, 200, {}, []),
+        ]
+        self.mock_rtm_provider.list_objects.side_effect = [
+            ProviderResponse(False, 404, {}, ''),
+        ]
+        got = controller.GET(req)
+
+        self.assertEqual([{
+            'hash': 'abcEtagdef',
+            'name': u'a\u062ab',
+            'last_modified': '2018-05-01T22:21:57Z',
+            'bytes': 88,
+            'content_location': ['a;loc'],
+            'content_type': 'application/octet-stream',
+        }, {
+            'subdir': u'c\u062ad',
+            'content_location': ['another;loc'],
+        }, {
+            'subdir': u'e\u062af',
+            'content_location': ['another;loc2'],
+        }, {
+            'hash': 'ijkEtaglmn',
+            'name': u'g\u062ah',
+            'last_modified': '2018-04-01T22:21:57Z',
+            'bytes': 89,
+            'content_location': ['a;loc2'],
+            'content_type': 'application/octet-stream',
+        }], json.loads(got.body))
+        self.assertEqual([
+            # marker, limit, prefix, delimiter
+            mock.call.list_objects('a b', 10, 'abc', 'def'),
+            mock.call.list_objects('c\xd8\xaad', 10, 'abc', 'def'),
+            mock.call.list_objects('g\xd8\xaah', 10, 'abc', 'def'),
+        ], self.mock_ltm_provider.mock_calls)
+        self.assertEqual([
+            mock.call.list_objects('a b', 10, 'abc', 'def'),
+        ], self.mock_rtm_provider.mock_calls)
+
+    def test_container_get_remote_non_404_errors(self):
+        # Is this wise? Or should the non-404 error from the remote be what we
+        # return??
+        controller, req = self.controller_for(
+            u'AUTH_b\u062a', 'jojo',
+            query_string='limit=10&marker=a%20b&prefix=abc&delimiter=def',
+            req_kwargs={'headers': {'Accept': 'application/json'}})
+        self.mock_ltm_provider.list_objects.side_effect = [
+            ProviderResponse(True, 200, {}, [{
+                'hash': 'abcEtagdef',
+                'name': u'a\u062ab',
+                'last_modified': '2018-05-01T22:21:57Z',
+                'bytes': 88,
+                'content_location': 'a;loc',
+                'content_type': 'application/octet-stream',
+            }, {
+                'subdir': u'c\u062ad',
+                'content_location': 'another;loc',
+            }]),
+            ProviderResponse(True, 200, {}, [{
+                'subdir': u'e\u062af',
+                'content_location': 'another;loc2',
+            }, {
+                'hash': 'ijkEtaglmn',
+                'name': u'g\u062ah',
+                'last_modified': '2018-04-01T22:21:57Z',
+                'bytes': 89,
+                'content_location': 'a;loc2',
+                'content_type': 'application/octet-stream',
+            }]),
+            ProviderResponse(True, 200, {}, []),
+        ]
+        self.mock_rtm_provider.list_objects.side_effect = [
+            ProviderResponse(False, 400, {}, ''),
+        ]
+        got = controller.GET(req)
+
+        self.assertEqual([{
+            'hash': 'abcEtagdef',
+            'name': u'a\u062ab',
+            'last_modified': '2018-05-01T22:21:57Z',
+            'bytes': 88,
+            'content_location': ['a;loc'],
+            'content_type': 'application/octet-stream',
+        }, {
+            'subdir': u'c\u062ad',
+            'content_location': ['another;loc'],
+        }, {
+            'subdir': u'e\u062af',
+            'content_location': ['another;loc2'],
+        }, {
+            'hash': 'ijkEtaglmn',
+            'name': u'g\u062ah',
+            'last_modified': '2018-04-01T22:21:57Z',
+            'bytes': 89,
+            'content_location': ['a;loc2'],
+            'content_type': 'application/octet-stream',
+        }], json.loads(got.body))
+        self.assertEqual([
+            # marker, limit, prefix, delimiter
+            mock.call.list_objects('a b', 10, 'abc', 'def'),
+            mock.call.list_objects('c\xd8\xaad', 10, 'abc', 'def'),
+            mock.call.list_objects('g\xd8\xaah', 10, 'abc', 'def'),
+        ], self.mock_ltm_provider.mock_calls)
+        self.assertEqual([
+            mock.call.list_objects('a b', 10, 'abc', 'def'),
+        ], self.mock_rtm_provider.mock_calls)
+
+    def test_container_get_limited_only_local(self):
+        controller, req = self.controller_for(
+            u'AUTH_b\u062a', 'jojo',
+            query_string='limit=3&marker=a%20b&prefix=abc&delimiter=def',
+            req_kwargs={'headers': {'Accept': 'application/json'}})
+        self.mock_ltm_provider.list_objects.side_effect = [
+            ProviderResponse(True, 200, {}, [{
+                'hash': 'abcEtagdef',
+                'name': u'a\u062ab',
+                'last_modified': '2018-05-01T22:21:57Z',
+                'bytes': 88,
+                'content_location': 'a;loc',
+                'content_type': 'application/octet-stream',
+            }, {
+                'subdir': u'c\u062ad',
+                'content_location': 'another;loc',
+            }]),
+            ProviderResponse(True, 200, {}, [{
+                'subdir': u'e\u062af',
+                'content_location': 'another;loc2',
+            }, {
+                'hash': 'ijkEtaglmn',
+                'name': u'g\u062ah',
+                'last_modified': '2018-04-01T22:21:57Z',
+                'bytes': 89,
+                'content_location': 'a;loc2',
+                'content_type': 'application/octet-stream',
+            }]),
+            ProviderResponse(True, 200, {}, []),
+        ]
+        self.mock_rtm_provider.list_objects.side_effect = [
+            ProviderResponse(True, 200, {}, []),
+        ]
+        got = controller.GET(req)
+
+        self.assertEqual([{
+            'hash': 'abcEtagdef',
+            'name': u'a\u062ab',
+            'last_modified': '2018-05-01T22:21:57Z',
+            'bytes': 88,
+            'content_location': ['a;loc'],
+            'content_type': 'application/octet-stream',
+        }, {
+            'subdir': u'c\u062ad',
+            'content_location': ['another;loc'],
+        }, {
+            'subdir': u'e\u062af',
+            'content_location': ['another;loc2'],
+        }], json.loads(got.body))
+        self.assertEqual([
+            # marker, limit, prefix, delimiter
+            mock.call.list_objects('a b', 3, 'abc', 'def'),
+            mock.call.list_objects('c\xd8\xaad', 3, 'abc', 'def'),
+        ], self.mock_ltm_provider.mock_calls)
+        self.assertEqual([
+            mock.call.list_objects('a b', 3, 'abc', 'def'),
+        ], self.mock_rtm_provider.mock_calls)
+
+    def test_container_get_limited(self):
+        controller, req = self.controller_for(
+            u'AUTH_b\u062a', 'jojo',
+            query_string='limit=6&marker=a%20b&prefix=abc&delimiter=def',
+            req_kwargs={'headers': {'Accept': 'application/json'}})
+        self.mock_ltm_provider.list_objects.side_effect = [
+            ProviderResponse(True, 200, {}, [{
+                'hash': 'abcEtagdef',
+                'name': u'a\u062ab',
+                'last_modified': '2018-05-01T22:21:57Z',
+                'bytes': 88,
+                'content_location': 'a;loc',
+                'content_type': 'application/octet-stream',
+            }, {
+                'subdir': u'c\u062ad',
+                'content_location': 'another;loc',
+            }]),
+            ProviderResponse(True, 200, {}, [{
+                'subdir': u'e\u062af',
+                'content_location': 'another;loc2',
+            }, {
+                'hash': 'ijkEtaglmn',
+                'name': u'g\u062ah',
+                'last_modified': '2018-04-01T22:21:57Z',
+                'bytes': 89,
+                'content_location': 'a;loc2',
+                'content_type': 'application/octet-stream',
+            }]),
+            ProviderResponse(True, 200, {}, []),
+        ]
+        self.mock_rtm_provider.list_objects.side_effect = [
+            ProviderResponse(True, 200, {}, [{
+                'hash': 'fjoEtagggg',
+                'name': u'b\u062ac',
+                'last_modified': '2018-02-01T22:21:57Z',
+                'bytes': 90,
+                'content_location': 'a;loc3',
+                'content_type': 'application/octet-stream',
+            }, {
+                'subdir': u'd\u062ae',
+                'content_location': 'another;loc3',
+            }]),
+            ProviderResponse(True, 200, {}, [{
+                'subdir': u'f\u062ag',
+                'content_location': 'another;loc4',
+            }, {
+                'hash': 'abcEtagdef',
+                'name': u'h\u062ai',
+                'last_modified': '2018-03-01T22:21:57Z',
+                'bytes': 91,
+                'content_location': 'a;loc4',
+                'content_type': 'application/octet-stream',
+            }]),
+            ProviderResponse(True, 200, {}, []),
+        ]
+        got = controller.GET(req)
+
+        self.assertEqual([{
+            'hash': 'abcEtagdef',
+            'name': u'a\u062ab',
+            'last_modified': '2018-05-01T22:21:57Z',
+            'bytes': 88,
+            'content_location': ['a;loc'],
+            'content_type': 'application/octet-stream',
+        }, {
+            'hash': 'fjoEtagggg',
+            'name': u'b\u062ac',
+            'last_modified': '2018-02-01T22:21:57Z',
+            'bytes': 90,
+            'content_location': ['a;loc3'],
+            'content_type': 'application/octet-stream',
+        }, {
+            'subdir': u'c\u062ad',
+            'content_location': ['another;loc'],
+        }, {
+            'subdir': u'd\u062ae',
+            'content_location': ['another;loc3'],
+        }, {
+            'subdir': u'e\u062af',
+            'content_location': ['another;loc2'],
+        }, {
+            'subdir': u'f\u062ag',
+            'content_location': ['another;loc4'],
+        }], json.loads(got.body))
+        self.assertEqual([
+            # marker, limit, prefix, delimiter
+            mock.call.list_objects('a b', 6, 'abc', 'def'),
+            mock.call.list_objects('c\xd8\xaad', 6, 'abc', 'def'),
+        ], self.mock_ltm_provider.mock_calls)
+        self.assertEqual([
+            mock.call.list_objects('a b', 6, 'abc', 'def'),
+            mock.call.list_objects('d\xd8\xaae', 6, 'abc', 'def'),
+        ], self.mock_rtm_provider.mock_calls)
+
     def test_container_get(self):
-        # Not currently implemented, but it will be.  Flesh this out then
-        controller, req = self.controller_for(u'AUTH_b\u062a', 'jojo')
-        got = controller.HEAD(req)
-        self.assertEqual('501 Not Implemented', got.status)
+        controller, req = self.controller_for(
+            u'AUTH_b\u062a', 'jojo',
+            query_string='limit=10&marker=a%20b&prefix=abc&delimiter=def',
+            req_kwargs={'headers': {'Accept': 'application/json'}})
+        self.mock_ltm_provider.list_objects.side_effect = [
+            ProviderResponse(True, 200, {}, [{
+                'hash': 'abcEtagdef',
+                'name': u'a\u062ab',
+                'last_modified': '2018-05-01T22:21:57Z',
+                'bytes': 88,
+                'content_location': 'a;loc',
+                'content_type': 'application/octet-stream',
+            }, {
+                'subdir': u'c\u062ad',
+                'content_location': 'another;loc',
+            }]),
+            ProviderResponse(True, 200, {}, [{
+                'subdir': u'e\u062af',
+                'content_location': 'another;loc2',
+            }, {
+                'hash': 'ijkEtaglmn',
+                'name': u'g\u062ah',
+                'last_modified': '2018-04-01T22:21:57Z',
+                'bytes': 89,
+                'content_location': 'a;loc2',
+                'content_type': 'application/octet-stream',
+            }]),
+            ProviderResponse(True, 200, {}, []),
+        ]
+        self.mock_rtm_provider.list_objects.side_effect = [
+            ProviderResponse(True, 200, {}, [{
+                'hash': 'fjoEtagggg',
+                'name': u'b\u062ac',
+                'last_modified': '2018-02-01T22:21:57Z',
+                'bytes': 90,
+                'content_location': 'a;loc3',
+                'content_type': 'application/octet-stream',
+            }, {
+                'subdir': u'd\u062ae',
+                'content_location': 'another;loc3',
+            }]),
+            ProviderResponse(True, 200, {}, [{
+                'subdir': u'f\u062ag',
+                'content_location': 'another;loc4',
+            }, {
+                'hash': 'abcEtagdef',
+                'name': u'h\u062ai',
+                'last_modified': '2018-03-01T22:21:57Z',
+                'bytes': 91,
+                'content_location': 'a;loc4',
+                'content_type': 'application/octet-stream',
+            }]),
+            ProviderResponse(True, 200, {}, []),
+        ]
+        got = controller.GET(req)
+
+        self.assertEqual([{
+            'hash': 'abcEtagdef',
+            'name': u'a\u062ab',
+            'last_modified': '2018-05-01T22:21:57Z',
+            'bytes': 88,
+            'content_location': ['a;loc'],
+            'content_type': 'application/octet-stream',
+        }, {
+            'hash': 'fjoEtagggg',
+            'name': u'b\u062ac',
+            'last_modified': '2018-02-01T22:21:57Z',
+            'bytes': 90,
+            'content_location': ['a;loc3'],
+            'content_type': 'application/octet-stream',
+        }, {
+            'subdir': u'c\u062ad',
+            'content_location': ['another;loc'],
+        }, {
+            'subdir': u'd\u062ae',
+            'content_location': ['another;loc3'],
+        }, {
+            'subdir': u'e\u062af',
+            'content_location': ['another;loc2'],
+        }, {
+            'subdir': u'f\u062ag',
+            'content_location': ['another;loc4'],
+        }, {
+            'hash': 'ijkEtaglmn',
+            'name': u'g\u062ah',
+            'last_modified': '2018-04-01T22:21:57Z',
+            'bytes': 89,
+            'content_location': ['a;loc2'],
+            'content_type': 'application/octet-stream',
+        }, {
+            'hash': 'abcEtagdef',
+            'name': u'h\u062ai',
+            'last_modified': '2018-03-01T22:21:57Z',
+            'bytes': 91,
+            'content_location': ['a;loc4'],
+            'content_type': 'application/octet-stream',
+        }], json.loads(got.body))
+        self.assertEqual([
+            # marker, limit, prefix, delimiter
+            mock.call.list_objects('a b', 10, 'abc', 'def'),
+            mock.call.list_objects('c\xd8\xaad', 10, 'abc', 'def'),
+            mock.call.list_objects('g\xd8\xaah', 10, 'abc', 'def'),
+        ], self.mock_ltm_provider.mock_calls)
+        self.assertEqual([
+            mock.call.list_objects('a b', 10, 'abc', 'def'),
+            mock.call.list_objects('d\xd8\xaae', 10, 'abc', 'def'),
+            mock.call.list_objects('h\xd8\xaai', 10, 'abc', 'def')
+        ], self.mock_rtm_provider.mock_calls)
 
     def test_get_and_head_hits_local_first_succeeds(self):
         obj_name = u'\u062aoo'

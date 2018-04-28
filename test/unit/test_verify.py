@@ -372,7 +372,8 @@ class TestMainTrackClientCalls(unittest.TestCase):
         ])
         self.assertEqual(exit_arg, 0)
         self.assertEqual(mock_client.mock_calls, [
-            mock.call.head_object('some-bucket', 'cloud_sync_test_object'),
+            mock.call.head_object('some-bucket', 'cloud_sync_test_object',
+                                  headers={}),
             mock.call.put_object(
                 'some-bucket', 'cloud_sync_test_object', mock.ANY,
                 content_length=15, etag=mock.ANY,
@@ -381,9 +382,12 @@ class TestMainTrackClientCalls(unittest.TestCase):
                 'some-bucket', 'cloud_sync_test_object',
                 {'content-type': 'text/plain',
                  'X-Object-Meta-Cloud-Sync': 'fabcab'}),
-            mock.call.head_object('some-bucket', 'cloud_sync_test_object'),
+            mock.call.head_object('some-bucket', 'cloud_sync_test_object',
+                                  headers={}),
             mock.call.get_container('some-bucket', delimiter='', limit=1,
-                                    marker='', prefix=''),
-            mock.call.head_object('some-bucket', 'cloud_sync_test_object'),
-            mock.call.delete_object('some-bucket', 'cloud_sync_test_object'),
+                                    marker='', prefix='', headers={}),
+            mock.call.head_object('some-bucket', 'cloud_sync_test_object',
+                                  headers={}),
+            mock.call.delete_object('some-bucket', 'cloud_sync_test_object',
+                                    headers={}),
         ])
