@@ -174,10 +174,51 @@ class FakeSwift(object):
         return (self.status, headers, self.fake_stream)
 
 
+class JustLikeAFile(object):
+    def __init__(self):
+        self.buffer = 'ABCD' * 2**16
+
+    def read(self, size=-1):
+        size = min(size, 2**16 - 12)
+        chunk = self.buffer[:size]
+        self.buffer = self.buffer[size:]
+        return chunk
+
+
 class TestSeekableFileLikeIter(unittest.TestCase):
     def setUp(self):
         self.mock_swift = FakeSwift()
         self.seeker = utils.SeekableFileLikeIter(['abc', 'def', 'ijk'])
+
+    def test_body_not_iter_str_unicode_or_filelike(self):
+        with self.assertRaises(TypeError) as cm:
+            self.seeker = utils.SeekableFileLikeIter(None)
+            self.assertEqual("'NoneType' object is not iterable",
+                             cm.exception.message)
+
+    def test_takes_a_filelike(self):
+        filelike = JustLikeAFile()
+        self.seeker = utils.SeekableFileLikeIter(filelike)
+
+        self.assertEqual('ABCD' * 2**16, ''.join(self.seeker))
+        self.assertEqual(2**16 * 4, self.seeker.tell())
+        self.assertEqual('', self.seeker.read())
+        self.assertEqual('', self.seeker.read(1))
+        self.assertRaises(StopIteration, self.seeker.next)
+        with self.assertRaises(StopIteration):
+            next(self.seeker)
+
+    def test_takes_a_filelike_with_shorter_length(self):
+        filelike = JustLikeAFile()
+        self.seeker = utils.SeekableFileLikeIter(filelike, length=2**16 + 48)
+
+        self.assertEqual('ABCD' * ((2**16 + 48) / 4), ''.join(self.seeker))
+        self.assertEqual(2**16 + 48, self.seeker.tell())
+        self.assertEqual('', self.seeker.read())
+        self.assertEqual('', self.seeker.read(1))
+        self.assertRaises(StopIteration, self.seeker.next)
+        with self.assertRaises(StopIteration):
+            next(self.seeker)
 
     def test_bounded_reading(self):
         # Pete and Repete were in a boat; Pete fell out.  Who was left??

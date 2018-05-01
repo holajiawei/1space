@@ -121,7 +121,7 @@ class CloudConnectorController(Controller):
 
     @utils.public
     def GET(self, req):
-        # Note: account HEADs were already filtered out in get_controller()
+        # Note: account GETs were already filtered out in get_controller()
         return self.GETorHEAD(req)
 
     @utils.public
@@ -132,11 +132,31 @@ class CloudConnectorController(Controller):
 
     @utils.public
     def PUT(self, req):
-        # Note: account operations were already filtered out in
+        # Note: account and controller operations were already filtered out in
         # get_controller()
-        #
-        # TODO: implement this
-        return swob.HTTPNotImplemented()
+
+        # For PUTs, cloud-connector only writes to the local-to-me object
+        # store.
+        self.app.logger.debug('Calling %s(%s) on %s', 'put_object',
+                              self.object_name, 'local_to_me_provider')
+        provider_resp = self.local_to_me_provider.put_object(
+            self.object_name.decode('utf8'),  # boto wants Unicode?
+            req.headers, req.body_file,
+        )
+        self.app.logger.debug('Got %s for %s(%s) on %s',
+                              provider_resp.status, 'put_object',
+                              self.object_name, 'local_to_me_provider')
+        if provider_resp.status == 200:
+            # S3 returns 200 but `swift3` expects what Swift returns, which is
+            # 201.  So we catch the 200, turn it into 201, then swift3 will
+            # like that 201 and return 200 to the actual S3 client.
+            provider_resp.status = 201
+
+        headers = dict(filter_hop_by_hop_headers(
+            provider_resp.headers.items()))
+        return swob.Response(app_iter=iter(provider_resp.body),
+                             status=provider_resp.status,
+                             headers=headers, request=req)
 
     @utils.public
     def POST(self, req):

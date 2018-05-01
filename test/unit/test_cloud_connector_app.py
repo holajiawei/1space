@@ -193,8 +193,8 @@ class TestCloudConnectorApp(TestCloudConnectorBase):
     def test_get_and_head_hits_local_first_succeeds(self):
         obj_name = u'\u062aoo'
         for verb, fn_name in (('HEAD', 'head_object'), ('GET', 'get_object')):
-            mock_provider = getattr(self.mock_ltm_provider, fn_name)
-            mock_provider.return_value = ProviderResponse(
+            mock_provider_fn = getattr(self.mock_ltm_provider, fn_name)
+            mock_provider_fn.return_value = ProviderResponse(
                 success=True, status=200, headers={'Content-Length': '88'},
                 body=iter(['']) if verb == 'HEAD' else iter('A' * 88))
             controller, req = self.controller_for(u'AUTH_b\u062a', 'jojo',
@@ -211,12 +211,12 @@ class TestCloudConnectorApp(TestCloudConnectorBase):
     def test_get_and_head_fall_back_to_remote_succeeds(self):
         obj_name = u'\u062aoo'
         for verb, fn_name in (('HEAD', 'head_object'), ('GET', 'get_object')):
-            mock_provider = getattr(self.mock_ltm_provider, fn_name)
-            mock_provider.return_value = ProviderResponse(
+            mock_provider_fn = getattr(self.mock_ltm_provider, fn_name)
+            mock_provider_fn.return_value = ProviderResponse(
                 success=False, status=404, headers={'Content-Length': '88'},
                 body=iter(['']) if verb == 'HEAD' else iter('A' * 88))
-            mock_provider = getattr(self.mock_rtm_provider, fn_name)
-            mock_provider.return_value = ProviderResponse(
+            mock_provider_fn = getattr(self.mock_rtm_provider, fn_name)
+            mock_provider_fn.return_value = ProviderResponse(
                 success=True, status=200, headers={'Content-Length': '87'},
                 body=iter(['']) if verb == 'HEAD' else iter('A' * 87))
             controller, req = self.controller_for(u'AUTH_b\u062a', 'jojo',
@@ -233,12 +233,12 @@ class TestCloudConnectorApp(TestCloudConnectorBase):
     def test_get_and_head_fall_back_to_remote_fails(self):
         obj_name = u'\u062aoo'
         for verb, fn_name in (('HEAD', 'head_object'), ('GET', 'get_object')):
-            mock_provider = getattr(self.mock_ltm_provider, fn_name)
-            mock_provider.return_value = ProviderResponse(
+            mock_provider_fn = getattr(self.mock_ltm_provider, fn_name)
+            mock_provider_fn.return_value = ProviderResponse(
                 success=False, status=404, headers={'Content-Length': '88'},
                 body=iter(['']) if verb == 'HEAD' else iter('A' * 88))
-            mock_provider = getattr(self.mock_rtm_provider, fn_name)
-            mock_provider.return_value = ProviderResponse(
+            mock_provider_fn = getattr(self.mock_rtm_provider, fn_name)
+            mock_provider_fn.return_value = ProviderResponse(
                 success=False, status=403, headers={'Content-Length': '86'},
                 body=iter(['']) if verb == 'HEAD' else iter('A' * 86))
             controller, req = self.controller_for(u'AUTH_b\u062a', 'jojo',
@@ -252,9 +252,37 @@ class TestCloudConnectorApp(TestCloudConnectorBase):
             else:
                 self.assertEqual('A' * 86, ''.join(got.body))
 
+    def test_put_success(self):
+        obj_name = u'\u062aoo'
+        mock_provider_fn = self.mock_ltm_provider.put_object
+        mock_provider_fn.return_value = ProviderResponse(
+            success=True, status=200, headers={'Content-Length': '68'},
+            body=iter('B' * 68))
+
+        controller, req = self.controller_for(u'AUTH_b\u062a', 'jojo',
+                                              obj_name, 'PUT')
+        got = controller.PUT(req)
+        self.assertEqual(201, got.status_int)  # swift3 mw will expect 201
+        self.assertEqual('68', got.headers['Content-Length'])
+        self.assertEqual('B' * 68, ''.join(got.body))
+
+    def test_put_failure(self):
+        obj_name = u'\u062aoo'
+        mock_provider_fn = self.mock_ltm_provider.put_object
+        mock_provider_fn.return_value = ProviderResponse(
+            success=False, status=400, headers={'Content-Length': '63'},
+            body=iter('B' * 63))
+
+        controller, req = self.controller_for(u'AUTH_b\u062a', 'jojo',
+                                              obj_name, 'PUT')
+        got = controller.PUT(req)
+        self.assertEqual(400, got.status_int)
+        self.assertEqual('63', got.headers['Content-Length'])
+        self.assertEqual('B' * 63, ''.join(got.body))
+
     def test_obj_not_implemented_yet(self):
         # Remove these as object verb support is added (where applicable)
-        for verb in ('PUT', 'POST', 'OPTIONS', 'DELETE'):
+        for verb in ('POST', 'OPTIONS', 'DELETE'):
             controller, req = self.controller_for(u'AUTH_b\u062a', 'jojo',
                                                   'oo', verb)
             fn = getattr(controller, verb)

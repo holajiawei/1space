@@ -73,10 +73,29 @@ class RemoteHTTPError(Exception):
         return u'Error (%d): %s' % (self.resp.status, self.resp.body)
 
 
+class IterableFromFileLike(object):
+    def __init__(self, filelike):
+        self.filelike = filelike
+        self.chunksize = 2**16
+
+    def next(self):
+        got = self.filelike.read(self.chunksize)
+        if got:
+            return got
+        raise StopIteration
+    __next__ = next
+
+    def __iter__(self):
+        return self
+
+
 class SeekableFileLikeIter(FileLikeIter):
     """
     Like Swift's FileLikeIter, with the following changes in/additions of
     behavior:
+        * You can give it an existing file-like object (like Swift's
+          InputProxy) and iteration will just successively call that object's
+          read() method with some reasonable chunk size.
         * You can optionally specify a length, and reads past that length will
           return data only up to that length, and EOF after that.
         * If a length is specified, len() will work on this object, otherwise
@@ -90,8 +109,20 @@ class SeekableFileLikeIter(FileLikeIter):
           specified, any attempt to seek after any data has been read will
           result in a RuntimeError.
     """
-    def __init__(self, iterable, length=None, seek_zero_cb=None):
-        super(SeekableFileLikeIter, self).__init__(iterable)
+    def __init__(self, iterable_or_filelike, length=None, seek_zero_cb=None):
+        try:
+            super(SeekableFileLikeIter, self).__init__(iterable_or_filelike)
+        except TypeError as e:
+            if 'is not iterable' in e.message and hasattr(iterable_or_filelike,
+                                                          'read'):
+                # It's wrappers all the way down!  Wrap the given file-like so
+                # it behaves like an iterable so we can make it behave like a
+                # file-like according to _our_ interface and extra semantics.
+                iterable = IterableFromFileLike(iterable_or_filelike)
+                super(SeekableFileLikeIter, self).__init__(iterable)
+            else:
+                raise
+
         self.length = length
         self.seek_zero_cb = seek_zero_cb
         self._bytes_delivered = 0  # capped by length, if given
