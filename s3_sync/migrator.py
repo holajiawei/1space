@@ -36,9 +36,10 @@ from .utils import (convert_to_local_headers, convert_to_swift_headers,
                     get_container_headers, iter_listing, RemoteHTTPError,
                     SWIFT_TIME_FMT, diff_container_headers,
                     get_sys_migrator_header)
+from swift.common.http import HTTP_NOT_FOUND
 from swift.common import swob
 from swift.common.internal_client import UnexpectedResponse
-from swift.common.utils import FileLikeIter, Timestamp
+from swift.common.utils import FileLikeIter, Timestamp, quote
 
 
 EQUAL = 0
@@ -383,6 +384,38 @@ class Migrator(object):
         raise MigrationError('Timeout while creating container "%s"' %
                              container)
 
+    def _iterate_local_listing(self, container=None, prefix=None):
+        '''Calls GET on the specified path to list items.
+
+        Useful in case we cannot use the InternalClient.iter_{containers,
+        objects}(). The InternalClient generators make multiple calls to the
+        object store and require holding the client out of the InternalClient
+        pool.
+        '''
+        marker = ''
+        while True:
+            with self.ic_pool.item() as ic:
+                path = ic.make_path(self.config['account'], container)
+                query_string = 'format=json&marker=%s' % quote(marker)
+                if prefix:
+                    query_string += '&prefix=%s' % quote(prefix)
+                resp = ic.make_request(
+                    'GET', '%s?%s' % (path, query_string), {},
+                    (2, HTTP_NOT_FOUND))
+            if resp.status_int != 200:
+                break
+            if not resp.body:
+                break
+
+            listing = json.loads(resp.body)
+            if not listing:
+                break
+            for entry in listing:
+                yield entry
+            marker = listing[-1]['name'].encode('utf-8')
+        # Simplifies the bookkeeping
+        yield None
+
     def _reconcile_deleted_objects(self, internal_client, container, key):
         # NOTE: to handle the case of objects being deleted from the source
         # cluster after they've been migrated, we have to HEAD the object to
@@ -411,7 +444,7 @@ class Migrator(object):
                     'Failed to list source bucket/container "%s"' %
                     self.config['aws_bucket'])
             if not resp.body and marker and marker == next_marker:
-                raise StopIteration
+                yield None
             for entry in resp.body:
                 yield entry
             if not list_all or not resp.body:
@@ -533,56 +566,55 @@ class Migrator(object):
 
         copied = 0
         scanned = 0
-        with self.ic_pool.item() as ic:
-            local_iter = ic.iter_objects(self.config['account'],
-                                         container,
-                                         marker=marker,
-                                         prefix=prefix)
-            local = next(local_iter, None)
-            remote = next(source_iter, None)
-            if remote:
-                marker = remote['name']
-            while remote:
-                # NOTE: the listing from the given marker may return fewer than
-                # the number of items we should process. We will process all of
-                # the keys that were returned in the listing and restart on the
-                # following iteration.
-                if not local or local['name'] > remote['name']:
-                    work = MigrateObjectWork(aws_bucket, container,
-                                             remote['name'])
-                    self.object_queue.put(work)
-                    copied += 1
-                    scanned += 1
-                    remote = next(source_iter, None)
-                    if remote:
-                        marker = remote['name']
-                elif local['name'] < remote['name']:
+        local_iter = self._iterate_local_listing(container, prefix)
+        local = next(local_iter)
+        remote = next(source_iter)
+        if remote:
+            marker = remote['name']
+        while remote:
+            # NOTE: the listing from the given marker may return fewer than
+            # the number of items we should process. We will process all of
+            # the keys that were returned in the listing and restart on the
+            # following iteration.
+            if not local or local['name'] > remote['name']:
+                work = MigrateObjectWork(aws_bucket, container,
+                                         remote['name'])
+                self.object_queue.put(work)
+                copied += 1
+                scanned += 1
+                remote = next(source_iter)
+                if remote:
+                    marker = remote['name']
+            elif local['name'] < remote['name']:
+                with self.ic_pool.item() as ic:
                     self._reconcile_deleted_objects(
                         ic, container, local['name'])
-                    local = next(local_iter, None)
-                else:
-                    try:
-                        cmp_ret = cmp_object_entries(local, remote)
-                    except MigrationError:
-                        # This should only happen if we are comparing large
-                        # objects: there will be an ETag mismatch.
+                local = next(local_iter)
+            else:
+                try:
+                    cmp_ret = cmp_object_entries(local, remote)
+                except MigrationError:
+                    # This should only happen if we are comparing large
+                    # objects: there will be an ETag mismatch.
+                    with self.ic_pool.item() as ic:
                         self._check_large_objects(
                             aws_bucket, container, remote['name'], ic)
-                    else:
-                        if cmp_ret < 0:
-                            work = MigrateObjectWork(aws_bucket, container,
-                                                     remote['name'])
-                            self.object_queue.put(work)
-                            copied += 1
-                    remote = next(source_iter, None)
-                    local = next(local_iter, None)
-                    scanned += 1
-                    if remote:
-                        marker = remote['name']
-            while local:
-                # We may have objects left behind that need to be removed
+                else:
+                    if cmp_ret < 0:
+                        work = MigrateObjectWork(aws_bucket, container,
+                                                 remote['name'])
+                        self.object_queue.put(work)
+                        copied += 1
+                remote = next(source_iter)
+                local = next(local_iter)
+                scanned += 1
+                if remote:
+                    marker = remote['name']
+        while local:
+            # We may have objects left behind that need to be removed
+            with self.ic_pool.item() as ic:
                 self._reconcile_deleted_objects(ic, container, local['name'])
-                local = next(local_iter, None)
+            local = next(local_iter)
         return marker, scanned, copied
 
     def _migrate_object(self, aws_bucket, container, key):

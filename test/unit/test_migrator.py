@@ -988,7 +988,8 @@ class TestMigrator(unittest.TestCase):
         self.migrator.status.get_migration.return_value = {'marker': 'zzz'}
         provider.list_objects.return_value = ProviderResponse(
             True, 200, {}, [])
-        self.swift_client.iter_objects.return_value = iter([])
+        self.swift_client.make_request.return_value = mock.Mock(
+            body=json.dumps([]), status_int=200)
 
         self.migrator.next_pass()
         provider.list_objects.assert_has_calls(
@@ -1057,9 +1058,9 @@ class TestMigrator(unittest.TestCase):
             else:
                 provider.list_objects.assert_called_once_with(
                     '', self.migrator.work_chunk, '', bucket='bucket')
-            self.swift_client.make_path.assert_called_once_with(
-                self.migrator.config['account'],
-                self.migrator.config['container'])
+            self.swift_client.make_path.has_calls(
+                [mock.call(self.migrator.config['account'],
+                           self.migrator.config['container'])] * 2)
             called_env = self.swift_client.app.mock_calls[0][1][0]
             for k, v in headers.items():
                 self.assertEqual(
@@ -1494,14 +1495,16 @@ class TestMigrator(unittest.TestCase):
             }
         }
 
-        self.swift_client.iter_objects.return_value = iter([
-            {'name': 'dlo',
-             'last_modified': create_list_timestamp(1.5e9),
-             'hash': 'other'},
-            {'name': 'slo',
-             'last_modified': create_list_timestamp(1.4e9),
-             'hash': 'other-still'}
-        ])
+        self.swift_client.make_request.side_effect = (
+            mock.Mock(body=json.dumps([
+                {'name': 'dlo',
+                 'last_modified': create_list_timestamp(1.5e9),
+                 'hash': 'other'},
+                {'name': 'slo',
+                 'last_modified': create_list_timestamp(1.4e9),
+                 'hash': 'other-still'}]),
+                status_int=200),
+            mock.Mock(body=json.dumps([]), status_int=200))
 
         def _head_object(key):
             resp = mock.Mock()
