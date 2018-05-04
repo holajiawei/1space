@@ -1090,3 +1090,44 @@ class TestMigrator(TestCloudSyncBase):
 
         with self.migrator_running():
             wait_for_condition(5, _check_deleted_migrated_objects)
+
+    def test_deleted_object_pagination(self):
+        '''Make sure objects are not removed if they're not yet listed.'''
+        migration = self.swift_migration()
+
+        conn_source = self.conn_for_acct(migration['aws_account'])
+        conn_destination = self.conn_for_acct(migration['account'])
+
+        container = migration['aws_bucket']
+        test_objects = [(str(i), 'test-%s' % i, {}) for i in range(10)]
+
+        # Upload the second half of the objects first and migrate them.
+        conn_source.put_container(container)
+        for i in range(5, 10):
+            conn_source.put_object(container, *test_objects[i])
+
+        def _check_migrated_objects(expected_count):
+            _, listing = conn_destination.get_container(container)
+            local = [entry for entry in listing
+                     if 'swift' in entry.get('content_location', [])]
+            if len(local) != expected_count:
+                return False
+            return local
+
+        with self.migrator_running():
+            first_migrated = wait_for_condition(
+                5, partial(_check_migrated_objects, 5))
+
+        # Upload the first 5 objects. The migrator runs with a 5 object limit
+        # and we rely on that in this test.
+        for i in range(0, 5):
+            conn_source.put_object(container, *test_objects[i])
+
+        with self.migrator_running():
+            new_migrated = wait_for_condition(
+                5, partial(_check_migrated_objects, 10))
+
+        # The older migrated objects should not have been changed by the
+        # migrator
+        for i in range(0, 5):
+            self.assertEqual(first_migrated[i], new_migrated[i + 5])
