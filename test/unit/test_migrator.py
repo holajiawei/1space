@@ -623,7 +623,7 @@ class TestMigrator(unittest.TestCase):
             return provider_mock
 
         create_provider_mock.side_effect = check_provider
-        self.migrator.config = {'aws_bucket': '/*'}
+        self.migrator.config = {'aws_bucket': '/*', 'account': 'AUTH_migrator'}
         self.migrator._next_pass = mock.Mock()
         self.migrator.next_pass()
         self.assertEqual(buckets[0]['name'], self.migrator.config['container'])
@@ -663,7 +663,7 @@ class TestMigrator(unittest.TestCase):
             next_pass_call[0] += 1
 
         create_provider_mock.side_effect = check_provider
-        self.migrator.config = {'aws_bucket': '/*'}
+        self.migrator.config = {'aws_bucket': '/*', 'account': 'AUTH_migrator'}
         self.migrator._next_pass = mock.Mock(side_effect=check_pass_provider)
         self.migrator.next_pass()
         self.assertTrue(self.migrator.config['all_buckets'])

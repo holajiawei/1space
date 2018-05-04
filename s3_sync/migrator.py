@@ -35,8 +35,8 @@ from .provider_factory import create_provider
 from .utils import (convert_to_local_headers, convert_to_swift_headers,
                     get_container_headers, iter_listing, RemoteHTTPError,
                     SWIFT_TIME_FMT, diff_container_headers,
-                    get_sys_migrator_header)
-from swift.common.http import HTTP_NOT_FOUND
+                    get_sys_migrator_header, MigrationContainerStates)
+from swift.common.http import HTTP_NOT_FOUND, HTTP_CONFLICT
 from swift.common import swob
 from swift.common.internal_client import UnexpectedResponse
 from swift.common.utils import FileLikeIter, Timestamp, quote
@@ -256,33 +256,53 @@ class Migrator(object):
         self.config['container'] = '.'
         self.provider = create_provider(
             self.config, self.max_conns, False)
-
         try:
-            resp, iterator = iter_listing(
-                self.provider.list_buckets,
-                self.logger, None, 10000, None)
-
-            if not resp.success:
-                self.logger.error(
-                    'Failed to list source buckets/containers: "%s"' %
-                    ''.join(resp.body))
-                return
-
-            for index, entry in enumerate(iterator):
-                container, _ = entry
-                if not container:
-                    break
-                if index % self.nodes == self.node_id:
-                    # NOTE: we cannot remap container names when migrating all
-                    # containers
-                    self.config['aws_bucket'] = container['name']
-                    self.config['container'] = container['name']
-                    self.provider.aws_bucket = container['name']
-                    self._next_pass()
+            self._reconcile_containers()
         except Exception:
-            self.logger.error('Failed to list source buckets/containers')
-            self.logger.error(traceback.format_exc())
+            self.logger.error('Failed to list containers for "%s"' %
+                              (self.config['account']))
+            self.logger.error(''.join(traceback.format_exc()))
+
+    def _reconcile_containers(self):
+        resp, iterator = iter_listing(
+            self.provider.list_buckets,
+            self.logger, None, 10000, None)
+
+        if not resp.success:
+            self.logger.error(
+                'Failed to list source buckets/containers: "%s"' %
+                ''.join(resp.body))
             return
+
+        # TODO: this is very similar to the code in _splice_listing() and
+        # _find_missing_objects(). We might be able to provide a utility
+        # function that accepts callables to operate on the streams.
+        local_iterator = self._iterate_internal_listing()
+        local_container = next(local_iterator)
+        for index, entry in enumerate(iterator):
+            remote_container, _ = entry
+            if not remote_container:
+                break
+            remote_container = remote_container['name']
+
+            while local_container and\
+                    local_container['name'] < remote_container:
+                self._maybe_delete_internal_container(local_container['name'])
+                local_container = next(local_iterator)
+
+            if index % self.nodes == self.node_id:
+                # NOTE: we cannot remap container names when migrating the
+                # entire account
+                self.config['aws_bucket'] = remote_container
+                self.config['container'] = remote_container
+                self.provider.aws_bucket = remote_container
+                self._next_pass()
+            if local_container and local_container['name'] == remote_container:
+                local_container = next(local_iterator)
+
+        while local_container:
+            self._maybe_delete_internal_container(local_container['name'])
+            local_container = next(local_iterator)
 
     def _next_pass(self):
         worker_pool = eventlet.GreenPool(self.workers)
@@ -362,6 +382,9 @@ class Migrator(object):
         else:
             headers = {}
 
+        headers[get_sys_migrator_header('container')] =\
+            MigrationContainerStates.MIGRATING
+
         req = swob.Request.blank(
             internal_client.make_path(self.config['account'], container),
             environ={'REQUEST_METHOD': 'PUT',
@@ -384,7 +407,7 @@ class Migrator(object):
         raise MigrationError('Timeout while creating container "%s"' %
                              container)
 
-    def _iterate_local_listing(self, container=None, prefix=None):
+    def _iterate_internal_listing(self, container=None, prefix=None):
         '''Calls GET on the specified path to list items.
 
         Useful in case we cannot use the InternalClient.iter_{containers,
@@ -429,6 +452,64 @@ class Migrator(object):
                     key, self.config['account'], container))
             internal_client.delete_object(
                 self.config['account'], container, key)
+
+    def _maybe_delete_internal_container(self, container):
+        '''Delete a specified internal container.
+
+        Unfortunately, we cannot simply DELETE every object in the container,
+        but have to issue a HEAD request to make sure the migrator header is
+        not set. This makes clearing containers expensive and we hope that this
+        is not a common operation.
+        '''
+
+        try:
+            with self.ic_pool.item() as ic:
+                headers = ic.get_container_metadata(
+                    self.config['account'], container)
+        except UnexpectedResponse as e:
+            if e.resp.status_int == HTTP_NOT_FOUND:
+                self.logger.info('Container %s/%s already removed' %
+                                 (self.config['account'], container))
+                return
+
+            self.logger.error('Failed to delete container "%s/%s"' %
+                              (self.config['account'], container))
+            self.logger.error(''.join(traceback.format_exc()))
+            return
+
+        state = headers.get(get_sys_migrator_header('container'))
+        if not state:
+            self.logger.debug(
+                'Not removing container %s/%s: created by a client.' %
+                (self.config['account'], container))
+            return
+
+        if state == MigrationContainerStates.SRC_DELETED:
+            return
+
+        listing = self._iterate_internal_listing(container)
+        for obj in listing:
+            if not obj:
+                break
+            with self.ic_pool.item() as ic:
+                self._reconcile_deleted_objects(ic, container, obj['name'])
+
+        state_meta = {get_sys_migrator_header('container'):
+                      MigrationContainerStates.SRC_DELETED}
+        with self.ic_pool.item() as ic:
+            if state == MigrationContainerStates.MIGRATING:
+                try:
+                    ic.delete_container(self.config['account'], container)
+                except UnexpectedResponse as e:
+                    if e.resp.status_int == HTTP_CONFLICT:
+                        # NOTE: failing to DELETE the container is OK if there
+                        # are objects in it. It means that there were write
+                        # operations outside of the migrator.
+                        ic.set_container_metadata(
+                            self.config['account'], container, state_meta)
+            else:
+                ic.set_container_metadata(
+                    self.config['account'], container, state_meta)
 
     def _iter_source_container(
             self, container, marker, prefix, list_all):
@@ -533,20 +614,32 @@ class Migrator(object):
                     local_headers = ic.get_container_metadata(
                         self.config['account'], container)
                 except UnexpectedResponse as e:
-                    if e.resp.status_int == 404:
+                    if e.resp.status_int == HTTP_NOT_FOUND:
+                        # TODO: this makes one more HEAD request to fetch
+                        # headers. We should re-use resp.headers here
+                        # (appropriately converted to handle versioning)
                         self._create_container(container, ic, aws_bucket)
                     else:
                         raise
                 if resp.headers and local_headers:
                     local_ts = _create_x_timestamp_from_hdrs(local_headers)
                     remote_ts = _create_x_timestamp_from_hdrs(resp.headers)
+                    header_changes = {}
+
                     if local_ts is not None and remote_ts is not None and \
                             local_ts < remote_ts:
                         header_changes = diff_container_headers(
                             resp.headers, local_headers)
-                        if header_changes:
-                            self._update_container_headers(
-                                container, ic, header_changes)
+
+                    migrator_header = get_sys_migrator_header('container')
+                    if local_headers.get(migrator_header) ==\
+                            MigrationContainerStates.SRC_DELETED:
+                        header_changes[migrator_header] =\
+                            MigrationContainerStates.MODIFIED
+
+                    if header_changes:
+                        self._update_container_headers(
+                            container, ic, header_changes)
         else:  # Not swift
             with self.ic_pool.item() as ic:
                 if not ic.container_exists(self.config['account'], container):
@@ -566,7 +659,7 @@ class Migrator(object):
 
         copied = 0
         scanned = 0
-        local_iter = self._iterate_local_listing(container, prefix)
+        local_iter = self._iterate_internal_listing(container, prefix)
         local = next(local_iter)
         remote = next(source_iter)
         if remote:

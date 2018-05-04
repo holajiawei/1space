@@ -64,6 +64,46 @@ PROPAGATED_HDRS = ['x-container-read', 'x-container-write']
 MIGRATOR_HEADER = 'multi-cloud-internal-migrator'
 
 
+class MigrationContainerStates(object):
+    '''Possible states of the migrated containers.
+
+    When a container is migrated, we have to handle the possible state
+    transitions it could go through. Initially, a container only exists in the
+    source cluster.  Once we create it in the destination cluster, we tag it to
+    be in the MIGRATING state. In this state, we process any new objects or
+    updated metadata. When an object is removed, we will also remove it from
+    the destination container.
+
+    When a container is removed on the source and the destination container is
+    in the MIGRATING state, it will be removed.
+
+    When the metadata of the destination container is changed, we will tag the
+    container as MODIFIED. When the source container is removed, we will not
+    remove the destination container. We will remove any object that still has
+    the transient migrator system metadata tag. In the end, we may end up with
+    an empty container, but one we will not attempt to remove from the system.
+
+    When an object is PUT on the destination side, it implicitly means the
+    container will not be removed when the source container is removed. Our
+    attempt to remove the container after clearing all objects with the
+    transient metadata will result in a 409, as there will still be objects in
+    the container. We do not consider this an error.
+
+    Once we have processed the removal of the source container, we will tag the
+    destination container as "SRC_DELETED". This is a flag that informs us that
+    we do not need to scan the objects in the container again.
+
+    If the source container exists, but the destination container is in the
+    SRC_DELETED state, we will update our system metadata tag to be in the
+    MODIFIED state, meaning the container will not be removed (but we will
+    rescan the container and remove objects if the source container is
+    removed).
+    '''
+    MIGRATING = 'migrating'
+    MODIFIED = 'modified'
+    SRC_DELETED = 'src_deleted'
+
+
 class RemoteHTTPError(Exception):
     def __init__(self, resp, *args, **kwargs):
         self.resp = resp
