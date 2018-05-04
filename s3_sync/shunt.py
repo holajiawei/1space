@@ -31,7 +31,8 @@ from .provider_factory import create_provider
 from .utils import (check_slo, SwiftPutWrapper, SwiftSloPutWrapper,
                     RemoteHTTPError, convert_to_local_headers,
                     response_is_complete, filter_hop_by_hop_headers,
-                    iter_listing, get_container_headers)
+                    iter_listing, get_container_headers,
+                    MigrationContainerStates, get_sys_migrator_header)
 
 
 class S3SyncProxyFSSwitch(object):
@@ -528,6 +529,9 @@ class S3SyncShunt(object):
 
     def handle_post(
             self, req, start_response, sync_profile, obj, per_account):
+        if not obj and sync_profile.get('migration'):
+            req.headers[get_sys_migrator_header('container')] =\
+                MigrationContainerStates.MODIFIED
         status, headers, app_iter = req.call_application(self.app)
 
         if not status.startswith('404'):

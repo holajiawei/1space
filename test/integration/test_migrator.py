@@ -988,3 +988,105 @@ class TestMigrator(TestCloudSyncBase):
 
         with self.migrator_running():
             wait_for_condition(5, _check_unmodified_objects_removed)
+
+    def _setup_deleted_container_test(self):
+        '''Common code for the deleted origin container tests'''
+        migration = self._find_migration(
+            lambda cont: cont['aws_bucket'] == '/*')
+
+        conn_source = self.conn_for_acct(migration['aws_account'])
+        conn_destination = self.conn_for_acct(migration['account'])
+
+        conn_source.put_container('test-delete')
+        conn_source.put_object('test-delete', 'source_object', 'body')
+
+        def _check_object_copied():
+            hdrs, listing = conn_destination.get_container('test-delete')
+            if not listing:
+                return False
+            if listing[0]['name'] != 'source_object':
+                return False
+            if 'swift' not in listing[0]['content_location']:
+                return False
+            return True
+
+        with self.migrator_running():
+            wait_for_condition(5, _check_object_copied)
+
+    def test_deleted_source_container(self):
+        '''Delete the migrated container after it is erased from the source.'''
+        self._setup_deleted_container_test()
+
+        migration = self._find_migration(
+            lambda cont: cont['aws_bucket'] == '/*')
+
+        conn_source = self.conn_for_acct(migration['aws_account'])
+        conn_destination = self.conn_for_acct(migration['account'])
+
+        def _check_container_removed():
+            hdrs, listing = conn_destination.get_account()
+            if listing:
+                return False
+            return True
+
+        conn_source.delete_object('test-delete', 'source_object')
+        conn_source.delete_container('test-delete')
+        with self.migrator_running():
+            wait_for_condition(5, _check_container_removed)
+
+    def test_deleted_container_after_new_object(self):
+        '''Destination container remains if it has extra objects'''
+        migration = self._find_migration(
+            lambda cont: cont['aws_bucket'] == '/*')
+
+        conn_source = self.conn_for_acct(migration['aws_account'])
+        conn_destination = self.conn_for_acct(migration['account'])
+
+        self._setup_deleted_container_test()
+        conn_destination.put_object('test-delete', 'new-object', 'new')
+        conn_source.delete_object('test-delete', 'source_object')
+        conn_source.delete_container('test-delete')
+
+        def _check_deleted_migrated_objects():
+            hdrs, listing = conn_destination.get_container('test-delete')
+            if len(listing) != 1:
+                return False
+            if listing[0]['name'] != 'new-object':
+                return False
+            return True
+
+        with self.assertRaises(swiftclient.exceptions.ClientException) as cm:
+            conn_source.head_container('test-delete')
+        self.assertEqual(404, cm.exception.http_status)
+
+        with self.migrator_running():
+            wait_for_condition(5, _check_deleted_migrated_objects)
+
+    def test_deleted_container_after_post(self):
+        '''Destination container remains if it has been modified'''
+        migration = self._find_migration(
+            lambda cont: cont['aws_bucket'] == '/*')
+
+        conn_source = self.conn_for_acct(migration['aws_account'])
+        conn_destination = self.conn_for_acct(migration['account'])
+
+        self._setup_deleted_container_test()
+        conn_destination.post_container(
+            'test-delete',
+            {'x-container-meta-new-meta': 'value'})
+        conn_source.delete_object('test-delete', 'source_object')
+        conn_source.delete_container('test-delete')
+
+        def _check_deleted_migrated_objects():
+            hdrs, listing = conn_destination.get_container('test-delete')
+            self.assertIn('x-container-meta-new-meta', hdrs)
+            if len(listing) == 0:
+                return True
+            return False
+
+        with self.assertRaises(swiftclient.exceptions.ClientException) as cm:
+            conn_source.head_container('test-delete')
+        self.assertEqual(404, cm.exception.http_status)
+
+        with self.migrator_running():
+            wait_for_condition(5, _check_deleted_migrated_objects)
