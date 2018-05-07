@@ -259,6 +259,10 @@ class Migrator(object):
         try:
             self._reconcile_containers()
         except Exception:
+            # Any exception raised will terminate the migrator process. As the
+            # process should be going around in a loop through the configured
+            # migrations, we log the error and continue. This requires us to
+            # catch a bare exception.
             self.logger.error('Failed to list containers for "%s"' %
                               (self.config['account']))
             self.logger.error(''.join(traceback.format_exc()))
@@ -319,6 +323,8 @@ class Migrator(object):
             scanned = 0
             self.logger.error(unicode(e))
         except Exception:
+            # We must catch any errors to make sure we stop our workers. This
+            # might be better with a context manager.
             scanned = 0
             self.logger.error('Failed to migrate "%s"' %
                               self.config['aws_bucket'])
@@ -849,6 +855,9 @@ class Migrator(object):
                 else:
                     self._upload_object(work)
             except Exception:
+                # Avoid killing the worker, as it should only quit explicitly
+                # when we initiate it. Otherwise, we might deadlock if all
+                # workers quit, but the queue has not been drained.
                 self.errors.put((aws_bucket, key, sys.exc_info()))
             finally:
                 self.object_queue.task_done()
