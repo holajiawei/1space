@@ -140,8 +140,6 @@ def _update_status_counts(status, moved_count, scanned_count, reset):
 
 
 def _create_x_timestamp_from_hdrs(hdrs):
-    if 'x-timestamp' in hdrs:
-        return float(hdrs['x-timestamp'])
     if 'last-modified' in hdrs:
         ts = datetime.datetime.strptime(hdrs['last-modified'],
                                         LAST_MODIFIED_FMT)
