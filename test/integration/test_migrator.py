@@ -602,11 +602,13 @@ class TestMigrator(TestCloudSyncBase):
 
         init_local_headers = {
             key2: val2,
+            key3: val1,
         }
         init_remote_headers = {
             'x-container-write': acl,
             'x-container-read': acl,
             key1: val1,
+            key3: val3,
         }
 
         conn_local = self.conn_for_acct(migration['account'])
@@ -614,6 +616,9 @@ class TestMigrator(TestCloudSyncBase):
         conn_noshunt = self.conn_for_acct_noshunt(migration['account'])
 
         conn_local.put_container('metadata_test', headers=init_local_headers)
+        # Note: container last_modified dates are whole seconds, so sleep
+        # is needed to ensure remote is newer
+        time.sleep(2)
         conn_remote.put_container('metadata_test',
                                   headers=init_remote_headers)
 
@@ -640,7 +645,6 @@ class TestMigrator(TestCloudSyncBase):
             return False
 
         key1_copied = partial(key_val_copied, key1, val1)
-        val2_copied = partial(key_val_copied, key1, val2)
         val3_copied = partial(key_val_copied, key3, val3)
 
         def key_gone(key):
@@ -657,13 +661,6 @@ class TestMigrator(TestCloudSyncBase):
             # verify really copied
             wait_for_condition(5, key1_copied)
             self.assertTrue(key_gone(key2))
-
-            # verify change value copied after a pass
-            conn_remote.post_container('metadata_test',
-                                       headers={
-                                           key1: val2,
-                                           key3: val3})
-            wait_for_condition(5, val2_copied)
             self.assertTrue(val3_copied)
 
         # validate the acl was copied
@@ -676,6 +673,38 @@ class TestMigrator(TestCloudSyncBase):
         remote_swift.put_object('metadata_test', 'test', 'test')
         hdrs, body = remote_swift.get_object('metadata_test', 'test')
         self.assertEqual(body, 'test')
+
+    def test_container_metadata_copied_only_when_newer(self):
+        migration = self._find_migration(
+            lambda cont: cont['aws_bucket'] == '/*')
+        conn_local = self.conn_for_acct(migration['account'])
+        conn_remote = self.conn_for_acct(migration['aws_account'])
+        conn_noshunt = self.conn_for_acct_noshunt(migration['account'])
+
+        mykey = 'x-container-meta-where'
+
+        def is_where(val):
+            test_hdrs = conn_noshunt.head_container('prop_metadata_test')
+            if test_hdrs[mykey] == val:
+                return True
+            return False
+
+        conn_remote.put_container(
+            'prop_metadata_test', headers={mykey: 'remote'})
+        conn_local.put_container(
+            'prop_metadata_test', headers={mykey: 'local'})
+        time.sleep(1)
+        conn_remote.post_container(
+            'prop_metadata_test', headers={mykey: 'remote'})
+        time.sleep(1)
+        conn_local.post_container(
+            'prop_metadata_test', headers={mykey: 'local'})
+        with self.migrator_running():
+            # TODO (MSD): This should be replaced with a mechanism for
+            # executing the migrator once
+            with self.assertRaises(WaitTimedOut):
+                wait_for_condition(3, partial(is_where, 'remote'))
+            self.assertTrue(is_where('local'))
 
     def test_propagate_object_meta(self):
         migration = self.swift_migration()
