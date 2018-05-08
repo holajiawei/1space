@@ -720,7 +720,8 @@ class Migrator(object):
                 scanned += 1
                 if remote:
                     marker = remote['name']
-        while local:
+
+        while local and (not marker or local['name'] < marker):
             # We may have objects left behind that need to be removed
             with self.ic_pool.item() as ic:
                 self._reconcile_deleted_objects(ic, container, local['name'])
