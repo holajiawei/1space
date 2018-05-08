@@ -1,3 +1,20 @@
+## 0.1.33 (2018-05-08)
+
+Improvement:
+
+    - The migrator now tags and keeps track of containers that have been copied.
+      If a container is removed from the source blob store, it will be removed
+      from the destination (assuming it only contains objects copied from the
+      source and no metadata has been changed).
+
+Bug fixes:
+
+    - The migrator may remove objects previously copied when the paginated
+      listings from the two blob stores do not align.
+    - Container and object metadata updates were not always propagated, as the
+      migrator was considering the X-Timestamp date (created-at time), rather
+      than the last-modified date.
+
 ## 0.1.32 (2018-04-26)
 
 Bug fixes:
