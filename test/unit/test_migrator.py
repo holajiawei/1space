@@ -20,6 +20,7 @@ import hashlib
 import itertools
 import json
 import logging
+import math
 import mock
 from s3_sync.base_sync import ProviderResponse
 import s3_sync.migrator
@@ -693,6 +694,9 @@ class TestMigrator(unittest.TestCase):
         provider = create_provider_mock.return_value
         self.migrator.status.get_migration.return_value = {}
 
+        utcnow = datetime.datetime.utcnow()
+        now = (utcnow - s3_sync.migrator.EPOCH).total_seconds()
+
         tests = [{
             'objects': {
                 'foo': {
@@ -821,6 +825,61 @@ class TestMigrator(unittest.TestCase):
             'config': {
                 'aws_bucket': 'container',
                 'protocol': 'swift'
+            },
+            'local_objects': [
+                {'name': 'foo',
+                 'last_modified': create_list_timestamp(1.4e9),
+                 'hash': 'old-etag'},
+                {'name': 'bar',
+                 'last_modified': create_list_timestamp(1.3e9),
+                 'hash': 'old-etag'}
+            ],
+            'migrated': ['foo', 'bar']
+        }, {
+            'objects': {
+                'foo': {
+                    'remote_headers': {
+                        'x-object-meta-custom': 'custom',
+                        'last-modified': create_timestamp(1.5e9)},
+                    'expected_headers': {
+                        'x-object-meta-custom': 'custom',
+                        'x-timestamp': Timestamp(1.5e9).internal,
+                        s3_sync.utils.get_sys_migrator_header('object'): str(
+                            Timestamp(1.5e9).internal)},
+                    'list-time': create_list_timestamp(1.5e9),
+                    'hash': 'etag'
+                },
+                'bar': {
+                    'remote_headers': {
+                        'x-object-meta-custom': 'custom',
+                        'last-modified': create_timestamp(now - 35.0)},
+                    'expected_headers': {
+                        'x-object-meta-custom': 'custom',
+                        'x-timestamp':
+                            Timestamp(math.floor(now - 35.0)).internal,
+                        s3_sync.utils.get_sys_migrator_header('object'): str(
+                            Timestamp(math.floor(now - 35.0)).internal)},
+                    'list-time': create_list_timestamp(now - 35.0),
+                    'hash': 'etag'
+                },
+                'baz': {
+                    'remote_headers': {
+                        'x-object-meta-custom': 'custom',
+                        'last-modified': create_timestamp(now)
+                    },
+                    'expected_headers': {
+                        'x-object-meta-custom': 'custom',
+                        'x-timestamp': Timestamp(math.floor(now)).internal,
+                        s3_sync.utils.get_sys_migrator_header('object'): str(
+                            Timestamp(math.floor(now)).internal)},
+                    'list-time': create_list_timestamp(math.floor(now)),
+                    'hash': 'etag'
+                }
+            },
+            'config': {
+                'aws_bucket': 'container',
+                'protocol': 'swift',
+                'older_than': 30,
             },
             'local_objects': [
                 {'name': 'foo',
