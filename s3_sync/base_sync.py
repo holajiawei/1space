@@ -108,7 +108,8 @@ class BaseSync(object):
         def free_count(self):
             return self.get_semaphore.balance
 
-    def __init__(self, settings, max_conns=10, per_account=False, logger=None):
+    def __init__(self, settings, max_conns=10, per_account=False, logger=None,
+                 extra_headers=None):
         """Base class that every Cloud Sync provider implementation should
         derive from. Sets up the client pool for the provider and the common
         settings.
@@ -123,6 +124,10 @@ class BaseSync(object):
         max_conns -- maximum number of connections the pool should support.
         per_account -- whether the sync is per-account, where all containers
                        are synced.
+        logger -- anything that quacks like a Python logger; optional.
+        extra_headers -- optional extra headers to send with every request; not
+                         meant to be used outside of specific applications,
+                         like cloud-connector's usage of providers.
         """
 
         self.settings = settings
@@ -132,6 +137,7 @@ class BaseSync(object):
         self._per_account = per_account
         if '/' in self.container:
             raise ValueError('Invalid container name %r' % self.container)
+        self.extra_headers = extra_headers or {}
 
         # Due to the genesis of this project, the endpoint and bucket have the
         # "aws_" prefix, even though the endpoint may actually be a Swift

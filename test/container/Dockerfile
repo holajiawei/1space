@@ -1,14 +1,15 @@
 FROM bouncestorage/swift-aio:latest
 
 RUN apt-get update && \
-    apt-get install --no-install-recommends -y python-support openjdk-7-jdk \
-        wget curl patch && \
+    apt-get install --no-install-recommends -y \
+        wget curl patch git build-essential python-dev locales \
+        openjdk-8-jre-headless net-tools && \
     apt-get clean
 
-RUN pip install -e git://github.com/swiftstack/botocore.git@1.4.32.6#egg=botocore && \
-    pip install boto3==1.3.1 && \
-    pip install -e git://github.com/swiftstack/container-crawler.git@0.0.13#egg=container-crawler && \
-    pip install -U coverage nose flake8==3.5.0 psutil s3cmd && \
+RUN pip install -U -e git://github.com/swiftstack/botocore.git@1.4.32.6#egg=botocore \
+        boto3==1.3.1 \
+        -e git://github.com/swiftstack/container-crawler.git@0.0.13#egg=container-crawler \
+        coverage nose flake8==3.5.0 psutil s3cmd mock && \
     pip uninstall -y hacking
 
 RUN mkdir -p /s3proxy/data
@@ -29,4 +30,8 @@ COPY swiftclient.patch /tmp/
 RUN bash -c "cd /usr/local/src \
     && patch -p0 < /tmp/swiftclient.patch \
     && rm -f /tmp/swiftclient.patch"
+COPY swift3-unicode-fix.patch /tmp/
+RUN bash -c "cd /usr/local/src \
+    && patch -p0 < /tmp/swift3-unicode-fix.patch \
+    && rm -f /tmp/swift3-unicode-fix.patch"
 CMD ["/bin/bash", "/swift-s3-sync/test/container/launch.sh"]

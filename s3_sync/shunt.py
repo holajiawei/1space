@@ -15,16 +15,9 @@ limitations under the License.
 """
 
 import json
-from lxml import etree
 
 from swift.common import constraints, swob, utils
 from swift.common.wsgi import make_subrequest
-try:
-    from swift.common.middleware.listing_formats import (
-        get_listing_content_type)
-except ImportError:
-    # compat for < ss-swift-2.15.1.3
-    from swift.common.request_helpers import get_listing_content_type
 from swift.proxy.controllers.base import get_account_info
 
 from .provider_factory import create_provider
@@ -32,7 +25,10 @@ from .utils import (check_slo, SwiftPutWrapper, SwiftSloPutWrapper,
                     RemoteHTTPError, convert_to_local_headers,
                     response_is_complete, filter_hop_by_hop_headers,
                     iter_listing, get_container_headers,
-                    MigrationContainerStates, get_sys_migrator_header)
+                    MigrationContainerStates, get_sys_migrator_header,
+                    get_list_params, format_listing_response,
+                    format_container_listing_response, splice_listing,
+                    SHUNT_BYPASS_HEADER, get_listing_content_type)
 
 
 class S3SyncProxyFSSwitch(object):
@@ -98,102 +94,6 @@ def maybe_munge_profile_for_all_containers(sync_profile, container_name):
     return sync_profile, False
 
 
-def _splice_listing(internal_resp, remote_iter, limit):
-    remote_item, remote_key = next(remote_iter)
-    if not remote_item:
-        return internal_resp
-
-    spliced_response = []
-    for local_item in internal_resp:
-        if len(spliced_response) == limit:
-            break
-
-        if not remote_item:
-            spliced_response.append(local_item)
-            continue
-
-        if 'name' in local_item:
-            local_key = local_item['name']
-        else:
-            local_key = local_item['subdir']
-
-        while remote_item and remote_key < local_key:
-            spliced_response.append(remote_item)
-            remote_item, remote_key = next(remote_iter)
-
-        if remote_key == local_key:
-            # duplicate!
-            remote_item['content_location'].append('swift')
-            spliced_response.append(remote_item)
-            remote_item, remote_key = next(remote_iter)
-        else:
-            spliced_response.append(local_item)
-
-    while remote_item:
-        if len(spliced_response) == limit:
-            break
-        spliced_response.append(remote_item)
-        remote_item, _junk = next(remote_iter)
-    return spliced_response
-
-
-def get_list_params(req, list_limit):
-    limit = int(req.params.get('limit', list_limit))
-    marker = req.params.get('marker', '')
-    prefix = req.params.get('prefix', '')
-    delimiter = req.params.get('delimiter', '')
-    path = req.params.get('path', None)
-    return limit, marker, prefix, delimiter, path
-
-
-def _format_xml_listing(
-        list_results, root_node, root_name, entry_node, fields):
-    root = etree.Element(root_node, name=root_name)
-    for entry in list_results:
-        obj = etree.Element(entry_node)
-        for f in fields:
-            if f not in entry:
-                continue
-            el = etree.Element(f)
-            text = entry[f]
-            if type(text) == str:
-                text = text.decode('utf-8')
-            elif type(text) == int:
-                text = str(text)
-            el.text = text
-            obj.append(el)
-        root.append(obj)
-    resp = etree.tostring(root, encoding='UTF-8', xml_declaration=True)
-    return resp.replace("<?xml version='1.0' encoding='UTF-8'?>",
-                        '<?xml version="1.0" encoding="UTF-8"?>', 1)
-
-
-def _format_container_listing_response(list_results, list_format, account):
-    if list_format == 'application/json':
-        return json.dumps(list_results)
-    if list_format.endswith('/xml'):
-        fields = ['name', 'count', 'bytes', 'last_modified', 'subdir']
-        return _format_xml_listing(
-            list_results, 'account', account, 'container', fields)
-    # Default to plain format
-    return u'\n'.join(entry['name'] if 'name' in entry else entry['subdir']
-                      for entry in list_results).encode('utf-8')
-
-
-def _format_listing_response(list_results, list_format, container):
-    if list_format == 'application/json':
-        return json.dumps(list_results)
-    if list_format.endswith('/xml'):
-        fields = ['name', 'content_type', 'hash', 'bytes', 'last_modified',
-                  'subdir']
-        return _format_xml_listing(
-            list_results, 'container', container, 'object', fields)
-
-    # Default to plain format
-    return u'\n'.join(entry['name'] if 'name' in entry else entry['subdir']
-                      for entry in list_results).encode('utf-8')
-
-
 class S3SyncShunt(object):
     def __init__(self, app, conf_file, conf):
         self.logger = utils.get_logger(
@@ -236,6 +136,11 @@ class S3SyncShunt(object):
         try:
             vers, acct, cont, obj = req.split_path(2, 4, True)
         except ValueError:
+            return self.app(env, start_response)
+
+        if req.headers.get(SHUNT_BYPASS_HEADER, ''):
+            self.logger.debug('Bypassing shunt (%s header) for %r',
+                              SHUNT_BYPASS_HEADER, req.path_info)
             return self.app(env, start_response)
 
         if not constraints.valid_api_version(vers):
@@ -317,9 +222,9 @@ class S3SyncShunt(object):
 
         _, remote_iter = self.iter_remote_account(
             sync_profile, marker, limit, prefix, delimiter)
-        spliced = _splice_listing(
+        spliced = splice_listing(
             json.load(utils.FileLikeIter(app_iter)), remote_iter, limit)
-        response = _format_container_listing_response(
+        response = format_container_listing_response(
             spliced, resp_type, account)
         dict_headers = dict(headers)
         dict_headers['Content-Length'] = len(response)
@@ -412,12 +317,12 @@ class S3SyncShunt(object):
             # TODO: If to_wsgi does the utf8 header encoding, we wouldn't have
             # to worry about it here.
             status = remote_resp.to_wsgi()[0]
-            spliced = _splice_listing([], remote_iter, limit)
+            spliced = splice_listing([], remote_iter, limit)
         else:
-            spliced = _splice_listing(
+            spliced = splice_listing(
                 json.load(utils.FileLikeIter(app_iter)), remote_iter, limit)
 
-        response = _format_listing_response(spliced, resp_type, cont)
+        response = format_listing_response(spliced, resp_type, cont)
         dict_headers = dict(headers)
         dict_headers['Content-Length'] = len(response)
         dict_headers['Content-Type'] = resp_type

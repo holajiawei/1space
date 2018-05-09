@@ -47,6 +47,16 @@ class SyncS3(BaseSync):
     GOOGLE_UA_STRING = 'CloudSync/%s (GPN:SwiftStack)' % CLOUD_SYNC_VERSION
     SLO_MANIFEST_SUFFIX = '.swift_slo_manifest'
 
+    def _add_extra_headers(self, model, params, **kwargs):
+        """
+        Boto3 event handler for before-call.s3 to add extra HTTP headers, if
+        requested.
+        """
+        for k, v in self.extra_headers.items():
+            # TODO(darrell): worry about how to encode these, if necessary, if
+            # they are ever going to be consumed by real S3 or whatever.
+            params['headers'][k] = v
+
     def _is_amazon(self):
         return not self.endpoint or self.endpoint.endswith('amazonaws.com')
 
@@ -83,15 +93,22 @@ class SyncS3(BaseSync):
             s3_client = boto_session.client('s3',
                                             endpoint_url=self.endpoint,
                                             config=boto_config)
+
+            event_system = s3_client.meta.events
+
+            # Add hook to add HTTP headers (NOOP if self.extra_headers was not
+            # specified or is empty).
+            event_system.register('before-call.s3', self._add_extra_headers)
+
             # Remove the Content-MD5 computation as we will supply the MD5
             # header ourselves
-            s3_client.meta.events.unregister('before-call.s3.PutObject',
-                                             conditionally_calculate_md5)
-            s3_client.meta.events.unregister('before-call.s3.UploadPart',
-                                             conditionally_calculate_md5)
+            event_system.unregister('before-call.s3.PutObject',
+                                    conditionally_calculate_md5)
+            event_system.unregister('before-call.s3.UploadPart',
+                                    conditionally_calculate_md5)
 
             if self._google():
-                s3_client.meta.events.unregister(
+                event_system.unregister(
                     'before-parameter-build.s3.ListObjects',
                     set_list_objects_encoding_type_url)
             return s3_client
@@ -367,15 +384,21 @@ class SyncS3(BaseSync):
                 if key_prefix:
                     location_parts.append(key_prefix)
                 content_location = ';'.join(location_parts)
-                keys = [dict(hash=row.get('ETag', '').replace('"', ''),
-                             name=urllib.unquote(row['Key'])[key_offset:],
-                             last_modified=row['LastModified'].strftime(
-                             SWIFT_TIME_FMT),
-                             bytes=row['Size'],
-                             content_location=content_location,
-                             # S3 does not include content-type in listings
-                             content_type='application/octet-stream')
-                        for row in resp.get('Contents', [])]
+                # If list contents come from `swift3` running in a Swift
+                # cluster, the ETag header appears to include the double-quotes
+                # URL-quoted.  We appear to try to remove the double-quotes,
+                # here, but to do that right, we need to unquote first.
+                keys = [dict(
+                    hash=urllib.unquote(row.get(
+                        'ETag', '')).replace('"', ''),
+                    name=urllib.unquote(row['Key'])[key_offset:],
+                    last_modified=row['LastModified'].strftime(
+                        SWIFT_TIME_FMT),
+                    bytes=row['Size'],
+                    content_location=content_location,
+                    # S3 does not include content-type in listings
+                    content_type='application/octet-stream')
+                    for row in resp.get('Contents', [])]
                 prefixes = [
                     dict(subdir=urllib.unquote(row['Prefix'])[key_offset:],
                          content_location=content_location)

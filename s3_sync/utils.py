@@ -17,6 +17,7 @@ limitations under the License.
 import eventlet
 import hashlib
 import json
+from lxml import etree
 import StringIO
 import urllib
 
@@ -35,6 +36,14 @@ except ImportError:
     except ImportError:
         SYSMETA_VERSIONS_LOC = None
         SYSMETA_VERSIONS_MODE = None
+
+# Just keeping conditional import in one common place:
+try:
+    from swift.common.middleware.listing_formats import (
+        get_listing_content_type)
+except ImportError:
+    # compat for < ss-swift-2.15.1.3
+    from swift.common.request_helpers import get_listing_content_type  # noqa
 
 from swift.common.request_helpers import (
     get_sys_meta_prefix, get_object_transient_sysmeta)
@@ -62,6 +71,7 @@ HOP_BY_HOP_HEADERS = set([
 ])
 PROPAGATED_HDRS = ['x-container-read', 'x-container-write']
 MIGRATOR_HEADER = 'multi-cloud-internal-migrator'
+SHUNT_BYPASS_HEADER = 'x-cloud-sync-shunt-bypass'
 
 
 class MigrationContainerStates(object):
@@ -890,6 +900,123 @@ def iter_listing(list_func, logger, marker, limit, prefix, *args):
 
     resp = list_func(marker, limit, prefix, *args)
     return resp, _results_iterator(resp)
+
+
+def splice_listing(local_iter, remote_iter, limit):
+    remote_item, remote_key = next(remote_iter)
+    # There used to be an unnecessary short-circuit here if remote_item is
+    # false. However, it's easier to handle "local_iter" possibly only yielding
+    # items and not tuples of (item, key) if that's only handled in one place.
+
+    spliced_response = []
+    for local_item in local_iter:
+        # If local_iter came from iter_listing() then it has local_key in it
+        # already, otherwise it will have come from a local Swift cluster
+        # listing and we're being called from the shunt, and we have to compute
+        # the local_key value (duplicating some logic, incidentally).
+        if isinstance(local_item, tuple):
+            local_item, local_key = local_item
+        else:
+            if 'name' in local_item:
+                local_key = local_item['name']
+            else:
+                local_key = local_item['subdir']
+
+        if local_item is None:
+            # local_iter came from iter_listing() and it's exhausted
+            break
+
+        if len(spliced_response) == limit:
+            break
+
+        if not remote_item:
+            spliced_response.append(local_item)
+            continue
+
+        while (remote_item and remote_key < local_key and
+               len(spliced_response) < limit):
+            spliced_response.append(remote_item)
+            remote_item, remote_key = next(remote_iter)
+
+        if len(spliced_response) == limit:
+            break
+
+        if remote_key == local_key:
+            # duplicate!
+            # XXX(darrell): this is backward for cloud-connector; the value to
+            # append here will have to come from the caller--we don't have
+            # enough context.  OR, could we just append
+            # local_item['content_location'] or
+            # local_item['content_location'][0] or something??
+            remote_item['content_location'].append('swift')
+            spliced_response.append(remote_item)
+            remote_item, remote_key = next(remote_iter)
+        else:
+            spliced_response.append(local_item)
+
+    while remote_item:
+        if len(spliced_response) == limit:
+            break
+        spliced_response.append(remote_item)
+        remote_item, _junk = next(remote_iter)
+    return spliced_response
+
+
+def format_xml_listing(
+        list_results, root_node, root_name, entry_node, fields):
+    root = etree.Element(root_node, name=root_name)
+    for entry in list_results:
+        obj = etree.Element(entry_node)
+        for f in fields:
+            if f not in entry:
+                continue
+            el = etree.Element(f)
+            text = entry[f]
+            if type(text) == str:
+                text = text.decode('utf-8')
+            elif type(text) == int:
+                text = str(text)
+            el.text = text
+            obj.append(el)
+        root.append(obj)
+    resp = etree.tostring(root, encoding='UTF-8', xml_declaration=True)
+    return resp.replace("<?xml version='1.0' encoding='UTF-8'?>",
+                        '<?xml version="1.0" encoding="UTF-8"?>', 1)
+
+
+def format_container_listing_response(list_results, list_format, account):
+    if list_format == 'application/json':
+        return json.dumps(list_results)
+    if list_format.endswith('/xml'):
+        fields = ['name', 'count', 'bytes', 'last_modified', 'subdir']
+        return format_xml_listing(
+            list_results, 'account', account, 'container', fields)
+    # Default to plain format
+    return u'\n'.join(entry['name'] if 'name' in entry else entry['subdir']
+                      for entry in list_results).encode('utf-8')
+
+
+def format_listing_response(list_results, list_format, container):
+    if list_format == 'application/json':
+        return json.dumps(list_results)
+    if list_format.endswith('/xml'):
+        fields = ['name', 'content_type', 'hash', 'bytes', 'last_modified',
+                  'subdir']
+        return format_xml_listing(
+            list_results, 'container', container, 'object', fields)
+
+    # Default to plain format
+    return u'\n'.join(entry['name'] if 'name' in entry else entry['subdir']
+                      for entry in list_results).encode('utf-8')
+
+
+def get_list_params(req, list_limit):
+    limit = int(req.params.get('limit', list_limit))
+    marker = req.params.get('marker', '')
+    prefix = req.params.get('prefix', '')
+    delimiter = req.params.get('delimiter', '')
+    path = req.params.get('path', None)
+    return limit, marker, prefix, delimiter, path
 
 
 def get_sys_migrator_header(path_type):

@@ -1,0 +1,16 @@
+diff -ru swift3.orig/swift3/controllers/bucket.py swift3/swift3/controllers/bucket.py
+--- swift3.orig/swift3/controllers/bucket.py	2018-03-21 21:23:40.000000000 +0000
++++ swift3/swift3/controllers/bucket.py	2018-05-01 20:08:03.589958449 +0000
+@@ -156,10 +156,10 @@
+             if is_truncated:
+                 if 'name' in objects[-1]:
+                     SubElement(elem, 'NextContinuationToken').text = \
+-                        b64encode(objects[-1]['name'])
++                        b64encode(objects[-1]['name'].encode('utf8'))
+                 if 'subdir' in objects[-1]:
+                     SubElement(elem, 'NextContinuationToken').text = \
+-                        b64encode(objects[-1]['subdir'])
++                        b64encode(objects[-1]['subdir'].encode('utf8'))
+             if 'continuation-token' in req.params:
+                 SubElement(elem, 'ContinuationToken').text = \
+                     req.params['continuation-token']

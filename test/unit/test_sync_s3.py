@@ -755,6 +755,8 @@ class TestSyncS3(unittest.TestCase):
             mock.call('s3',
                       config=mock.ANY,
                       endpoint_url=SyncS3.GOOGLE_API),
+            mock.call().meta.events.register(
+                'before-call.s3', sync._add_extra_headers),
             mock.call().meta.events.unregister(
                 'before-call.s3.PutObject', mock.ANY),
             mock.call().meta.events.unregister(
@@ -803,6 +805,8 @@ class TestSyncS3(unittest.TestCase):
                         [mock.call('s3',
                                    config=mock.ANY,
                                    endpoint_url=endpoint),
+                         mock.call().meta.events.register(
+                            'before-call.s3', sync._add_extra_headers),
                          mock.call().meta.events.unregister(
                             'before-call.s3.PutObject', mock.ANY),
                          mock.call().meta.events.unregister(
@@ -815,6 +819,8 @@ class TestSyncS3(unittest.TestCase):
                         [mock.call('s3',
                                    config=mock.ANY,
                                    endpoint_url=endpoint),
+                         mock.call().meta.events.register(
+                            'before-call.s3', sync._add_extra_headers),
                          mock.call().meta.events.unregister(
                             'before-call.s3.PutObject', mock.ANY),
                          mock.call().meta.events.unregister(

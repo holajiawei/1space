@@ -29,9 +29,8 @@ from .utils import (FileWrapper, ClosingResourceIterable, check_slo,
 
 
 class SyncSwift(BaseSync):
-    def __init__(self, settings, max_conns=10, per_account=False, logger=None):
-        super(SyncSwift, self).__init__(settings, max_conns, per_account,
-                                        logger)
+    def __init__(self, *args, **kwargs):
+        super(SyncSwift, self).__init__(*args, **kwargs)
         # Used to verify the remote container in case of per_account uploads
         self.verified_container = False
 
@@ -71,6 +70,11 @@ class SyncSwift(BaseSync):
         if conn.http_conn:
             conn.http_conn[1].request_session.close()
 
+    def _client_headers(self, headers=None):
+        headers = headers or {}
+        headers.update(self.extra_headers)
+        return headers
+
     def put_object(self, swift_key, headers, body_iter, query_string=None):
         return self._call_swiftclient('put_object', self.container, swift_key,
                                       contents=body_iter, headers=headers,
@@ -80,17 +84,20 @@ class SyncSwift(BaseSync):
         if self._per_account and not self.verified_container:
             with self.client_pool.get_client() as swift_client:
                 try:
-                    swift_client.head_container(self.remote_container)
+                    swift_client.head_container(self.remote_container,
+                                                headers=self._client_headers())
                 except swiftclient.exceptions.ClientException as e:
                     if e.http_status != 404:
                         raise
-                    swift_client.put_container(self.remote_container)
+                    swift_client.put_container(self.remote_container,
+                                               headers=self._client_headers())
             self.verified_container = True
 
         try:
             with self.client_pool.get_client() as swift_client:
-                remote_meta = swift_client.head_object(self.remote_container,
-                                                       swift_key)
+                remote_meta = swift_client.head_object(
+                    self.remote_container, swift_key,
+                    headers=self._client_headers())
         except swiftclient.exceptions.ClientException as e:
             if e.http_status == 404:
                 remote_meta = None
@@ -122,7 +129,7 @@ class SyncSwift(BaseSync):
                     headers, _ = swift_client.get_object(
                         self.remote_container, swift_key,
                         query_string='multipart-manifest=get',
-                        headers={'Range': 'bytes=0-0'})
+                        headers=self._client_headers({'Range': 'bytes=0-0'}))
                 if headers['etag'] == metadata['etag']:
                     if not self._is_meta_synced(metadata, headers):
                         self.update_metadata(swift_key, metadata)
@@ -152,7 +159,7 @@ class SyncSwift(BaseSync):
                                     swift_key,
                                     wrapper_stream,
                                     etag=wrapper_stream.get_headers()['etag'],
-                                    headers=headers,
+                                    headers=self._client_headers(headers),
                                     content_length=len(wrapper_stream))
 
     def delete_object(self, swift_key):
@@ -164,8 +171,9 @@ class SyncSwift(BaseSync):
         """
         with self.client_pool.get_client() as swift_client:
             try:
-                headers = swift_client.head_object(self.remote_container,
-                                                   swift_key)
+                headers = swift_client.head_object(
+                    self.remote_container, swift_key,
+                    headers=self._client_headers())
             except swiftclient.exceptions.ClientException as e:
                 if e.http_status == 404:
                     return
@@ -173,8 +181,9 @@ class SyncSwift(BaseSync):
 
             if not check_slo(headers):
                 try:
-                    swift_client.delete_object(self.remote_container,
-                                               swift_key)
+                    swift_client.delete_object(
+                        self.remote_container, swift_key,
+                        headers=self._client_headers())
                 except swiftclient.exceptions.ClientException as e:
                     if e.http_status != 404:
                         raise
@@ -182,7 +191,8 @@ class SyncSwift(BaseSync):
                 try:
                     swift_client.delete_object(
                         self.remote_container, swift_key,
-                        query_string='multipart-manifest=delete')
+                        query_string='multipart-manifest=delete',
+                        headers=self._client_headers())
                 except swiftclient.exceptions.ClientException as e:
                     if e.http_status != 404:
                         raise
@@ -324,6 +334,7 @@ class SyncSwift(BaseSync):
                 self.logger.exception('Error contacting remote swift cluster')
                 return ProviderResponse(False, 502, {}, iter('Bad Gateway'))
 
+        args['headers'] = self._client_headers(args.get('headers', {}))
         # TODO: always use `response_dict` biz
         if op == 'get_object' and 'resp_chunk_size' in args:
             entry = self.client_pool.get_client()
@@ -368,8 +379,9 @@ class SyncSwift(BaseSync):
 
     def update_metadata(self, swift_key, metadata):
         with self.client_pool.get_client() as swift_client:
-            swift_client.post_object(self.remote_container, swift_key,
-                                     self._get_user_headers(metadata))
+            swift_client.post_object(
+                self.remote_container, swift_key,
+                self._client_headers(self._get_user_headers(metadata)))
 
     def _upload_slo(self, name, swift_headers, internal_client):
         status, headers, body = internal_client.get_object(
@@ -415,10 +427,10 @@ class SyncSwift(BaseSync):
         self.logger.debug(json.dumps(new_manifest))
         # Upload the manifest itself
         with self.client_pool.get_client() as swift_client:
-            swift_client.put_object(self.remote_container, name,
-                                    json.dumps(new_manifest),
-                                    headers=self._get_user_headers(headers),
-                                    query_string='multipart-manifest=put')
+            swift_client.put_object(
+                self.remote_container, name, json.dumps(new_manifest),
+                headers=self._client_headers(self._get_user_headers(headers)),
+                query_string='multipart-manifest=put')
 
     def get_manifest(self, key, bucket=None):
         if bucket is None:
@@ -427,7 +439,8 @@ class SyncSwift(BaseSync):
             try:
                 headers, body = swift_client.get_object(
                     bucket, key,
-                    query_string='multipart-manifest=get')
+                    query_string='multipart-manifest=get',
+                    headers=self._client_headers())
                 if 'x-static-large-object' not in headers:
                     return None
                 return json.loads(body)
@@ -463,7 +476,8 @@ class SyncSwift(BaseSync):
             try:
                 swift_client.put_object(dest_container, obj, wrapper,
                                         etag=segment['hash'],
-                                        content_length=len(wrapper))
+                                        content_length=len(wrapper),
+                                        headers=self._client_headers())
             except swiftclient.exceptions.ClientException as e:
                 # The segments may not exist, so we need to create it
                 if e.http_status == 404:
@@ -472,7 +486,8 @@ class SyncSwift(BaseSync):
                     # Creating a container may take some (small) amount of time
                     # and we should attempt to re-upload in the following
                     # iteration
-                    swift_client.put_container(dest_container)
+                    swift_client.put_container(dest_container,
+                                               headers=self._client_headers())
                     raise RuntimeError('Missing segments container')
 
     @staticmethod

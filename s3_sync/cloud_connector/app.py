@@ -29,7 +29,9 @@ from s3_sync.cloud_connector.util import (
     get_and_write_conf_file_from_s3, get_env_options)
 from s3_sync.provider_factory import create_provider
 from s3_sync.shunt import maybe_munge_profile_for_all_containers
-from s3_sync.utils import filter_hop_by_hop_headers
+from s3_sync.utils import (
+    get_list_params, filter_hop_by_hop_headers, iter_listing, splice_listing,
+    format_listing_response, SHUNT_BYPASS_HEADER, get_listing_content_type)
 
 
 CLOUD_CONNECTOR_CONF_PATH = os.path.sep + os.path.join(
@@ -63,34 +65,106 @@ class CloudConnectorController(Controller):
         self.local_to_me_provider = create_provider(
             self.local_to_me_profile, max_conns=1, per_account=per_account,
             logger=self.app.logger)
+
         self.remote_to_me_profile, per_account = \
             maybe_munge_profile_for_all_containers(remote_to_me_profile,
                                                    container_name)
         self.remote_to_me_provider = create_provider(
             self.remote_to_me_profile, max_conns=1, per_account=per_account,
-            logger=self.app.logger)
+            logger=self.app.logger,
+            extra_headers={SHUNT_BYPASS_HEADER: 'true'})
 
-        aco_str = urllib.quote('/'.join(filter(None, (
+        self.aco_str = urllib.quote('/'.join(filter(None, (
             account_name, container_name, object_name))))
-        self.app.logger.debug('For %s using local_to_me profile %r', aco_str,
+        self.app.logger.debug('For %s using local_to_me profile %r',
+                              self.aco_str,
                               safe_profile_config(self.local_to_me_profile))
-        self.app.logger.debug('For %s using remote_to_me profile %r', aco_str,
+        self.app.logger.debug('For %s using remote_to_me profile %r',
+                              self.aco_str,
                               safe_profile_config(self.remote_to_me_profile))
+
+    def handle_object_listing(self, req):
+        # XXX(darrell): this is still uncomfortably-duplicated with
+        # S3SyncShunt.handle_listing()
+        resp_type = get_listing_content_type(req)
+        limit, marker, prefix, delimiter, path = get_list_params(req, 1000)
+        # TODO(darrell): handle "path" presence kind of like the Shunt does?
+        # Figure that out when adding Swift API support.
+
+        local_resp, local_iter = iter_listing(
+            self.local_to_me_provider.list_objects, self.app.logger, marker,
+            limit, prefix, delimiter)
+        if local_resp.success:
+            final_status = local_resp.status
+            final_headers = local_resp.headers
+        else:
+            if local_resp.status != 404:
+                self.app.logger.debug('handle_object_listing: local-to-me '
+                                      'for %s got %d', self.aco_str,
+                                      local_resp.status)
+                headers = dict(filter_hop_by_hop_headers(
+                    local_resp.headers.items()))
+                return swob.Response(app_iter=iter(local_resp.body),
+                                     status=local_resp.status,
+                                     headers=headers, request=req)
+            # This is ok because splice_listing() only iterates over the
+            # local_iter--it doesn't try to call next() or anything if it's
+            # empty.
+            local_iter = []
+
+        remote_resp, remote_iter = iter_listing(
+            self.remote_to_me_provider.list_objects, self.app.logger, marker,
+            limit, prefix, delimiter)
+        if not remote_resp.success:
+            if not local_resp.success:
+                # Two strikes and you're OUT!
+                # If we got here, we know the first "error" was 404, so we'll
+                # return whatever we have, here, which will either be a 404
+                # (fine) or some other error (also fine since that's more
+                # interesting than any 404).
+                if remote_resp.status != 404:
+                    self.app.logger.debug('handle_object_listing: '
+                                          'remote-to-me for %s got %d',
+                                          self.aco_str, remote_resp.status)
+                headers = dict(filter_hop_by_hop_headers(
+                    remote_resp.headers.items()))
+                return swob.Response(app_iter=iter(remote_resp.body),
+                                     status=remote_resp.status,
+                                     headers=headers, request=req)
+            # This one does need to be an actual iterator and conform to the
+            # contract of yielding (None, None) when it's "done".
+            remote_iter = iter([(None, None)])
+        elif not local_resp.success:
+            final_status = remote_resp.status
+            final_headers = remote_resp.headers
+        self.app.logger.debug('handle_object_listing: final_status/headers: '
+                              '%r %r', final_status, final_headers)
+
+        spliced = splice_listing(local_iter, remote_iter, limit)
+        self.app.logger.debug('handle_object_listing: spliced: %r', spliced)
+
+        response_body = format_listing_response(spliced, resp_type,
+                                                self.container_name)
+        self.app.logger.debug('handle_object_listing: response_body: %r',
+                              response_body)
+        encoded_headers = {
+            k.encode('utf8'): v.encode('utf8')
+            for k, v in final_headers.items()
+            if k.lower not in ('content-type', 'content-length')}
+
+        no_hop_headers = dict(
+            filter_hop_by_hop_headers(encoded_headers.items()))
+        return swob.Response(body=response_body,
+                             status=final_status,
+                             headers=no_hop_headers, request=req,
+                             content_type=resp_type)
 
     def GETorHEAD(self, req):
         # Note: account operations were already filtered out in
         # get_controller(), and the only allowed container operation was GET.
         #
         if not self.object_name:
-            # container listing; we'll list the local-to-me store first, then
-            # overlay any listing results from the onprem Swift cluster
-            # (remote-to-me).
-            # Should be able to leverage sync/migrator shunt listing logic,
-            # with the caveat that in our case, "local" is an S3 store and
-            # "remote" is the Swift store.
-            #
-            # TODO: implement this
-            return swob.HTTPNotImplemented()
+            return self.handle_object_listing(req)
 
         # Try local-to-me first, then fall back to remote-to-me on any
         # non-success.
@@ -99,12 +173,12 @@ class CloudConnectorController(Controller):
         for provider_name in ('local_to_me_provider', 'remote_to_me_provider'):
             provider = getattr(self, provider_name)
             provider_fn = getattr(provider, provider_fn_name)
-            self.app.logger.debug('Calling %s(%s) on %s', provider_fn_name,
+            self.app.logger.debug('Calling %s(%r) on %s', provider_fn_name,
                                   self.object_name, provider_name)
             provider_resp = provider_fn(
                 self.object_name.decode('utf8'),  # boto wants Unicode?
             )
-            self.app.logger.debug('Got %s for %s(%s) on %s',
+            self.app.logger.debug('Got %s for %s(%r) on %s',
                                   provider_resp.status, provider_fn_name,
                                   self.object_name, provider_name)
             if provider_resp.status // 100 == 2:
@@ -137,13 +211,13 @@ class CloudConnectorController(Controller):
 
         # For PUTs, cloud-connector only writes to the local-to-me object
         # store.
-        self.app.logger.debug('Calling %s(%s) on %s', 'put_object',
+        self.app.logger.debug('Calling %s(%r) on %s', 'put_object',
                               self.object_name, 'local_to_me_provider')
         provider_resp = self.local_to_me_provider.put_object(
             self.object_name.decode('utf8'),  # boto wants Unicode?
             req.headers, req.body_file,
         )
-        self.app.logger.debug('Got %s for %s(%s) on %s',
+        self.app.logger.debug('Got %s for %s(%r) on %s',
                               provider_resp.status, 'put_object',
                               self.object_name, 'local_to_me_provider')
         if provider_resp.status == 200:
