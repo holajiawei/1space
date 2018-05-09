@@ -42,7 +42,7 @@ try:
     from swift.common.middleware.listing_formats import (
         get_listing_content_type)
 except ImportError:
-    # compat for < ss-swift-2.15.1.3
+    # compat for swift < 2.16
     from swift.common.request_helpers import get_listing_content_type  # noqa
 
 from swift.common.request_helpers import (
