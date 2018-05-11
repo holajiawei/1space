@@ -48,7 +48,7 @@ TIME_DIFF = 2
 LAST_MODIFIED_FMT = '%a, %d %b %Y %H:%M:%S %Z'
 EPOCH = datetime.datetime.utcfromtimestamp(0)
 
-IGNORE_KEYS = set(('status', 'aws_secret', 'all_buckets'))
+IGNORE_KEYS = set(('status', 'aws_secret', 'all_buckets', 'custom_prefix'))
 
 MigrateObjectWork = namedtuple('MigrateObjectWork', 'aws_bucket container key')
 UploadObjectWork = namedtuple('UploadObjectWork', 'container key object '
