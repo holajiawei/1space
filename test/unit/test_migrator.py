@@ -1288,7 +1288,10 @@ class TestMigrator(unittest.TestCase):
         fake_provider = s3_sync.sync_s3.SyncS3(self.migrator.config)
         create_provider_mock.return_value = fake_provider
         conn_mock.list_objects.return_value = {'Contents': []}
-        self.swift_client.iter_objects.return_value = iter([])
+        self.swift_client.make_request.return_value = mock.Mock(
+            status_int=200, body='[]')
+        self.migrator.status.get_migration.return_value = {}
+        self.migrator.config['container'] = 'container'
 
         self.migrator.next_pass()
         self.assertEqual(1, len(fake_provider.client_pool.client_pool))
@@ -1306,13 +1309,48 @@ class TestMigrator(unittest.TestCase):
         fake_provider = s3_sync.sync_swift.SyncSwift(self.migrator.config)
         create_provider_mock.return_value = fake_provider
         conn_mock.get_container.return_value = ({}, [])
-        self.swift_client.iter_objects.return_value = iter([])
+        self.swift_client.make_request.return_value = mock.Mock(
+            status_int=200, body='[]')
         conn_mock.http_conn = [None, mock.Mock()]
+        self.migrator.status.get_migration.return_value = {}
+        self.migrator.config['container'] = 'container'
 
         self.migrator.next_pass()
         self.assertEqual(1, len(fake_provider.client_pool.client_pool))
         self.migrator.close()
         conn_mock.http_conn[1].request_session.close.assert_called_once_with()
+
+    @mock.patch('s3_sync.migrator.create_provider')
+    def test_paginate_migration_listings(self, create_provider_mock):
+        self.migrator.status.get_migration.return_value = {
+            'marker': 'bar'}
+        provider = create_provider_mock.return_value
+        provider.list_objects.return_value = mock.Mock(status=200, body=[])
+        self.swift_client.make_request.return_value = mock.Mock(
+            status_int=200, body='[]')
+
+        def _make_path(account, container):
+            return '/'.join([account, container])
+
+        self.swift_client.make_path.side_effect = _make_path
+
+        self.migrator.next_pass()
+        self.swift_client.make_request.assert_has_calls(
+            [mock.call(
+                'GET', '%s/%s?format=json&marker=bar' % (
+                    self.migrator.config['account'],
+                    self.migrator.config['container']),
+                {}, (2, 404)),
+             mock.call(
+                'GET', '%s/%s?format=json&marker=' % (
+                    self.migrator.config['account'],
+                    self.migrator.config['container']),
+                {}, (2, 404))])
+        provider.list_objects.assert_has_calls(
+            [mock.call(
+                'bar', 1000, '', bucket=self.migrator.config['aws_bucket']),
+             mock.call(
+                '', 1000, '', bucket=self.migrator.config['aws_bucket'])])
 
     @mock.patch('s3_sync.migrator.create_provider')
     def test_migrate_dlo(self, create_provider_mock):

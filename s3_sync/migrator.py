@@ -413,7 +413,8 @@ class Migrator(object):
         raise MigrationError('Timeout while creating container "%s"' %
                              container)
 
-    def _iterate_internal_listing(self, container=None, prefix=None):
+    def _iterate_internal_listing(
+            self, container=None, marker='', prefix=None):
         '''Calls GET on the specified path to list items.
 
         Useful in case we cannot use the InternalClient.iter_{containers,
@@ -421,7 +422,6 @@ class Migrator(object):
         object store and require holding the client out of the InternalClient
         pool.
         '''
-        marker = ''
         while True:
             with self.ic_pool.item() as ic:
                 path = ic.make_path(self.config['account'], container)
@@ -665,7 +665,7 @@ class Migrator(object):
 
         copied = 0
         scanned = 0
-        local_iter = self._iterate_internal_listing(container, prefix)
+        local_iter = self._iterate_internal_listing(container, marker, prefix)
         local = next(local_iter)
         remote = next(source_iter)
         if remote:
@@ -710,7 +710,7 @@ class Migrator(object):
                 if remote:
                     marker = remote['name']
 
-        while local and (not marker or local['name'] < marker):
+        while local and (not marker or local['name'] < marker or scanned == 0):
             # We may have objects left behind that need to be removed
             with self.ic_pool.item() as ic:
                 self._reconcile_deleted_objects(ic, container, local['name'])
