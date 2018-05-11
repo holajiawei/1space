@@ -1,3 +1,14 @@
+## 0.1.34 (2018-05-11)
+
+Bug fixes:
+
+    - The migrator never processes more than one page of objects. This bug was
+      due to the fact that the status files would be overwritten every time the
+      migrator completes a pass.
+    - Objects that have been copied as part of the migration may be removed if
+      the listings are paginated. This is an issue with the marker not being set
+      when listing objects in the destination blob store.
+
 ## 0.1.33 (2018-05-08)
 
 Improvement:
