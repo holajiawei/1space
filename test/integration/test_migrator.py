@@ -587,7 +587,7 @@ class TestMigrator(TestCloudSyncBase):
             'head_container', migration['container'])
         self.assertNotIn(u'x-container-meta-migrated-\u062a', new_hdrs)
 
-    def test_migrate_correct_metadata_changes(self):
+    def test_propagate_container_meta_changes(self):
         migration = self._find_migration(
             lambda cont: cont['aws_bucket'] == '/*')
 
@@ -632,9 +632,8 @@ class TestMigrator(TestCloudSyncBase):
             key=self.SWIFT_CREDS['dst']['key'],
             os_options={'object_storage_url': '%s://%s/v1/%s' % (
                 scheme, swift_host, migration['aws_account'].split(':')[0])})
-        remote_swift.put_object('metadata_test', 'test', 'test')
-        hdrs, body = remote_swift.get_object('metadata_test', 'test')
-        self.assertEqual(body, 'test')
+        etag = remote_swift.put_object('metadata_test', 'test', 'test')
+        self.assertEqual(hashlib.md5('test').hexdigest(), etag)
 
         def key_val_copied(k, v):
             test_hdrs = conn_noshunt.head_container('metadata_test')
