@@ -489,6 +489,62 @@ class TestMigratorUtils(unittest.TestCase):
         with open(self.status_file_path) as rf:
             self.assertEqual(json.load(rf), existing_status)
 
+    @mock.patch('s3_sync.migrator.time')
+    def test_status_prune_saved(self, time_mock):
+        time_mock.time.return_value = 10000
+        self.setup_status_file_path()
+        config = {
+            "account": "AUTH_dev",
+            "aws_bucket": "bucket.example.com",
+            "aws_identity": "identity",
+            "aws_secret": "secret",
+            "container": "bucket.example.com",
+            "all_buckets": True,
+            "prefix": "",
+            "protocol": "s3",
+            "remote_account": "",
+        }
+        status_list = [dict(config)]
+        status_list[0]['status'] = {
+            "finished": 1000,
+            "last_finished": 900,
+            "last_moved_count": 0,
+            "last_scanned_count": 1,
+            "marker": "blah",
+            "moved_count": 0,
+            "scanned_count": 1
+        }
+        with open(self.status_file_path, 'w') as wf:
+            json.dump(status_list, wf)
+        status = s3_sync.migrator.Status(self.status_file_path)
+        status.load_status_list()
+        migrator = s3_sync.migrator.Migrator(
+            config, status, 10, mock.Mock(max_size=1), None, 0, 1)
+        self.assertIn('custom_prefix', migrator.config)
+        self.assertEqual('', migrator.config['custom_prefix'])
+        status.save_migration(migrator.config, 'new-marker', 10, 100, False)
+        status.prune([config])
+        with open(self.status_file_path) as rf:
+            self.assertEqual(json.load(rf), json.loads(json.dumps([{
+                "account": "AUTH_dev",
+                "aws_bucket": "bucket.example.com",
+                "aws_identity": "identity",
+                "container": "bucket.example.com",
+                "all_buckets": True,
+                "prefix": "",
+                "protocol": "s3",
+                "remote_account": "",
+                "status": {
+                    "finished": 10000,
+                    "last_finished": 900,
+                    "last_moved_count": 0,
+                    "last_scanned_count": 1,
+                    "marker": "new-marker",
+                    "moved_count": 10,
+                    "scanned_count": 101
+                }
+            }])))
+
     def test_status_get_migration(self):
         config = {
             'aws_secret': 'admin',
