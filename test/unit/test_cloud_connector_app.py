@@ -294,7 +294,7 @@ class TestCloudConnectorApp(TestCloudConnectorBase):
             mock.call.list_objects('a b', 10, 'abc', 'def'),
         ], self.mock_rtm_provider.mock_calls)
 
-    def test_container_get_local_and_remote_buckets_404(self):
+    def test_container_get_local_and_remote_buckets_404_bucket_ok(self):
         controller, req = self.controller_for(
             u'AUTH_b\u062a', 'jojo',
             query_string='limit=10&marker=a%20b&prefix=abc&delimiter=def',
@@ -773,6 +773,62 @@ class TestCloudConnectorApp(TestCloudConnectorBase):
                 self.assertEqual('', ''.join(got.body))
             else:
                 self.assertEqual('A' * 86, ''.join(got.body))
+
+    def test_get_and_head_both_404_container_exists(self):
+        obj_name = u'\u062aoo'
+        for verb, fn_name in (('HEAD', 'head_object'), ('GET', 'get_object')):
+            mock_provider_fn = getattr(self.mock_ltm_provider, fn_name)
+            mock_provider_fn.return_value = ProviderResponse(
+                success=False, status=404, headers={'Content-Length': '88'},
+                body=iter(['']) if verb == 'HEAD' else iter('A' * 88))
+            mock_provider_fn = getattr(self.mock_rtm_provider, fn_name)
+            body = 'The specified key does not exist.'
+            mock_provider_fn.return_value = ProviderResponse(
+                success=False, status=404,
+                headers={'Content-Length': str(len(body))},
+                body=iter(['']) if verb == 'HEAD' else iter(body))
+            controller, req = self.controller_for(u'AUTH_b\u062a', 'jojo',
+                                                  obj_name, verb)
+            fn = getattr(controller, verb)
+            got = fn(req)
+            self.assertEqual(404, got.status_int)
+            self.assertEqual(str(len(body)), got.headers['Content-Length'])
+            if verb == 'HEAD':
+                self.assertEqual('', ''.join(got.body))
+            else:
+                self.assertEqual(body, ''.join(got.body))
+            if verb == 'GET':
+                infocache = req.environ['swift.infocache']
+                cache_item = infocache[(u'container/%s/%s' % (
+                    u'AUTH_b\u062a', 'jojo')).encode('utf8')]
+                self.assertEqual(200, cache_item['status'])
+            else:
+                self.assertNotIn('swift.infocache', req.environ)
+
+    def test_get_and_head_both_404_container_does_not_exist(self):
+        obj_name = u'\u062aoo'
+        for verb, fn_name in (('HEAD', 'head_object'), ('GET', 'get_object')):
+            mock_provider_fn = getattr(self.mock_ltm_provider, fn_name)
+            mock_provider_fn.return_value = ProviderResponse(
+                success=False, status=404, headers={'Content-Length': '88'},
+                body=iter(['']) if verb == 'HEAD' else iter('A' * 88))
+            mock_provider_fn = getattr(self.mock_rtm_provider, fn_name)
+            body = 'No bucket, bro.'
+            mock_provider_fn.return_value = ProviderResponse(
+                success=False, status=404,
+                headers={'Content-Length': str(len(body))},
+                body=iter(['']) if verb == 'HEAD' else iter(body))
+            controller, req = self.controller_for(u'AUTH_b\u062a', 'jojo',
+                                                  obj_name, verb)
+            fn = getattr(controller, verb)
+            got = fn(req)
+            self.assertEqual(404, got.status_int)
+            self.assertEqual(str(len(body)), got.headers['Content-Length'])
+            if verb == 'HEAD':
+                self.assertEqual('', ''.join(got.body))
+            else:
+                self.assertEqual(body, ''.join(got.body))
+            self.assertNotIn('swift.infocache', req.environ)
 
     def test_put_success(self):
         obj_name = u'\u062aoo'
