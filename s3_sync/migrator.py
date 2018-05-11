@@ -47,6 +47,7 @@ ETAG_DIFF = 1
 TIME_DIFF = 2
 LAST_MODIFIED_FMT = '%a, %d %b %Y %H:%M:%S %Z'
 EPOCH = datetime.datetime.utcfromtimestamp(0)
+LOGGER_NAME = 'swift-s3-migrator'
 
 IGNORE_KEYS = set(('status', 'aws_secret', 'all_buckets', 'custom_prefix'))
 
@@ -956,6 +957,13 @@ def run(migrations, migration_status, internal_pool, logger, items_chunk,
         time.sleep(naptime)
 
 
+def create_ic_pool(config, swift_dir, workers):
+    return eventlet.pools.Pool(
+        create=lambda: create_internal_client(config, swift_dir),
+        min_size=0,
+        max_size=workers + 1)  # Our enumerating thread uses a client as well.
+
+
 def main():
     args, conf = setup_context(
         description='Daemon to migrate objects into Swift')
@@ -968,22 +976,18 @@ def main():
         print 'Missing status file location!'
         exit(-1 * errno.ENOENT)
 
-    logger_name = 'swift-s3-migrator'
     if args.log_level:
         migrator_conf['log_level'] = args.log_level
     migrator_conf['console'] = args.console
 
-    setup_logger(logger_name, migrator_conf)
-    load_swift(logger_name, args.once)
+    setup_logger(LOGGER_NAME, migrator_conf)
+    load_swift(LOGGER_NAME, args.once)
 
-    logger = logging.getLogger(logger_name)
+    logger = logging.getLogger(LOGGER_NAME)
 
     workers = migrator_conf.get('workers', 10)
     swift_dir = conf.get('swift_dir', '/etc/swift')
-    internal_pool = eventlet.pools.Pool(
-        create=lambda: create_internal_client(conf, swift_dir),
-        min_size=0,
-        max_size=workers + 1)  # Our enumerating thread uses a client as well.
+    internal_pool = create_ic_pool(conf, swift_dir, workers)
 
     if 'process' not in migrator_conf or 'processes' not in migrator_conf:
         print 'Missing "process" or "processes" settings in the config file'
