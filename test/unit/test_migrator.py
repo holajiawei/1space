@@ -620,7 +620,8 @@ class TestMigratorUtils(unittest.TestCase):
 class TestMigrator(unittest.TestCase):
     def setUp(self):
         config = {'aws_bucket': 'bucket',
-                  'account': 'AUTH_test'}
+                  'account': 'AUTH_test',
+                  'aws_identity': 'source-account'}
         self.swift_client = mock.Mock()
         pool = mock.Mock()
         pool.item.return_value.__enter__ = lambda *args: self.swift_client
@@ -643,7 +644,8 @@ class TestMigrator(unittest.TestCase):
         self.migrator.next_pass()
         create_provider_mock.assert_called_once_with(
             {'aws_bucket': 'bucket', 'container': 'bucket',
-             'account': 'AUTH_test', 'custom_prefix': ''},
+             'account': 'AUTH_test', 'custom_prefix': '',
+             'aws_identity': 'source-account'},
             self.migrator.ic_pool.max_size, False)
         self.migrator._next_pass.assert_called_once_with()
 
@@ -1144,8 +1146,9 @@ class TestMigrator(unittest.TestCase):
         self.migrator.status.get_migration.return_value = {}
 
         self.migrator.next_pass()
-        self.assertEqual('Bucket/container "bucket" does not exist',
-                         self.get_log_lines()[0])
+        self.assertEqual(
+            'Bucket/container "bucket" does not exist for source-account',
+            self.get_log_lines()[0])
         provider.head_bucket.assert_called_once_with(
             self.migrator.config['container'])
 
