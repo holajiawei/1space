@@ -312,7 +312,8 @@ class TestCloudConnectorUtil(TestCloudConnectorBase):
 
     def test_get_env_options_no_conf_bucket(self):
         with env_changed({'AWS_ACCESS_KEY_ID': 'a',
-                          'AWS_SECRET_ACCESS_KEY': 'b'}):
+                          'AWS_SECRET_ACCESS_KEY': 'b',
+                          'CONF_BUCKET': None}):
             with self.assertRaises(SystemExit):
                 cc_util.get_env_options()
 

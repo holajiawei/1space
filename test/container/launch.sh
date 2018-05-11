@@ -7,11 +7,6 @@ set -e
 find /var/lib/ -name *.pid -delete
 find /var/run/ -name *.pid -delete
 
-cp -f /swift-s3-sync/test/container/11-cloud-connector.conf /etc/rsyslog.d/
-touch /var/log/cloud-connector.log
-chown syslog:adm /var/log/cloud-connector.log
-chmod 644 /var/log/cloud-connector.log
-
 # Include our own internal-client config.
 # Ditto for proxy-server config, and a config that will run a no-auth, no-shunt
 # proxy-server instance on port 8082.
@@ -50,12 +45,10 @@ python -m s3_sync --log-level debug \
     --properties /swift-s3-sync/test/container/s3proxy.properties \
     2>&1 > /var/log/s3proxy.log &
 
-sleep 5  # let S3Proxy start up
+sleep 6  # let S3Proxy start up
 
 # Set up stuff for cloud-connector
-export CONF_BUCKET=cloud-connector-conf
-export CONF_ENDPOINT=http://localhost:10080
-# s3cmd is pip-installed in the Dockerfile
+# NOTE: s3cmd is installed via requirements-test.txt in the Dockerfile
 s3cmd -c /swift-s3-sync/s3cfg mb s3://$CONF_BUCKET ||:
 s3cmd -c /swift-s3-sync/s3cfg put /swift-s3-sync/test/container/cloud-connector.conf \
     s3://$CONF_BUCKET
@@ -63,7 +56,5 @@ s3cmd -c /swift-s3-sync/s3cfg put /swift-s3-sync/test/container/swift-s3-sync.co
     s3://$CONF_BUCKET/sync-config.json
 s3cmd -c /swift-s3-sync/s3cfg put /swift-s3-sync/test/container/s3-passwd.json \
     s3://$CONF_BUCKET/s3-passwd.json
-AWS_ACCESS_KEY_ID=s3-sync-test AWS_SECRET_ACCESS_KEY=s3-sync-test cloud-connector \
-    2>&1 >> /var/log/cloud-connector.log &
 
 /usr/local/bin/supervisord -n -c /etc/supervisord.conf

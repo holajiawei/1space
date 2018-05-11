@@ -294,6 +294,10 @@ class CloudConnectorApplication(ProxyApplication):
     swift3 middleware) to run on cloud compute nodes and
     seamlessly provide R/W access to the "cloud sync" data namespace.
     """
+    # We're going to want fine-grained control over our pipeline and, for
+    # example, don't want proxy code sticking the "copy" middleware back in
+    # when we can't have it.  This setting disables automatic mucking with our
+    # pipeline.
     modify_wsgi_pipeline = None
 
     def __init__(self, conf, logger=None):

@@ -5,8 +5,6 @@ MYDIR=$(dirname $(python -c 'import os,sys;print os.path.realpath(sys.argv[1])' 
 cd "$MYDIR"
 
 # Make sure container is running
-./up
-
-docker exec -e DOCKER=true -e TERM=$TERM \
-    -e "COLUMNS=$(tput cols)" -e "LINES=$(tput lines)" \
-    -it swift-s3-sync /bin/bash
+if test -z "$(docker ps -f name=swift-s3-sync -q)"; then
+    ./scripts/rebuild_and_start_main_container
+fi

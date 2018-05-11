@@ -173,7 +173,7 @@ class TestCloudSyncBase(unittest.TestCase):
     IMAGE_NAME = 'swift-s3-sync'
     PORTS = get_container_ports(IMAGE_NAME)
     SWIFT_STORAGE_BASE = 'http://localhost:%d/v1/' % PORTS['swift']
-    CLOUD_CONNECTOR_STORAGE_BASE = 'http://localhost:%d/v1/' % (
+    CLOUD_CONNECTOR_STORAGE_BASE = 'http://cloud-connector:%d/v1/' % (
         PORTS['cloud_connector'],)
     NOSHUNT_STORAGE_BASE = 'http://localhost:%d/v1/' % PORTS['noshunt']
 
@@ -362,7 +362,8 @@ class TestCloudSyncBase(unittest.TestCase):
         klass.swift_nuser2 = klass.conn_for_acct('AUTH_nacct2')
         # We actually test auth through this connection, so give it real creds:
         klass.cloud_connector_client = swiftclient.Connection(
-            'http://localhost:%d/auth/v1.0' % klass.PORTS['cloud_connector'],
+            'http://cloud-connector:%d/auth/v1.0' %
+            klass.PORTS['cloud_connector'],
             klass.SWIFT_CREDS['cloud-connector']['user'],
             klass.SWIFT_CREDS['cloud-connector']['key'],
             retries=0)

@@ -1,18 +1,19 @@
 #!/bin/bash
 
-docker-compose down
-# This will be fast if your bouncy is already up to date
-docker pull bouncestorage/swift-aio
-# The --build is safe because if nothing in the Dockerfile has changed, it'll
-# just quickly "build" entirely from cache and not do anything.
-docker-compose up --build -d
-docker exec swift-s3-sync /bin/bash -c 'cd /swift-s3-sync; flake8'
-export COVER_HTML_DIR=/swift-s3-sync/.coverhtml
-docker exec swift-s3-sync /bin/bash -c "mkdir -p $COVER_HTML_DIR; \
-    cd /swift-s3-sync; \
-    nosetests --with-coverage --cover-branches \
-    --cover-package=s3_sync --cover-erase --cover-html \
-    --cover-html-dir=$COVER_HTML_DIR test/unit"
+# The following method is cross-platform (OS X and Linux)
+MYDIR=$(dirname $(python -c 'import os,sys;print os.path.realpath(sys.argv[1])' $0))
+cd "$MYDIR"
+
+# For full test run, always rebuild & start/stop containers (clean slate)
+./scripts/rebuild_and_start_main_container
+
+./run_unit_tests
+./scripts/ensure_cloud_connector_container_started
+
 echo Waiting for container services to start...
-docker exec swift-s3-sync timeout 40 bash -c 'until echo > /dev/tcp/localhost/8081; do sleep 0.5; done' >/dev/null 2>&1
-docker exec -e DOCKER=true  swift-s3-sync nosetests --nocapture /swift-s3-sync/test/integration/
+docker exec swift-s3-sync timeout 40 \
+    bash -c "until s3cmd -c /swift-s3-sync/s3cfg ls s3://\$CONF_BUCKET/s3-passwd.json; do sleep 0.5; done" >/dev/null 2>&1
+docker exec cloud-connector timeout 40 \
+    bash -c 'until echo > /dev/tcp/localhost/8081; do sleep 0.5; done' >/dev/null 2>&1
+
+docker exec -e DOCKER=true  swift-s3-sync nosetests /swift-s3-sync/test/integration/

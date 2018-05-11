@@ -1,14 +1,5 @@
 services:
     - docker
 
-before_install:
-    - docker build -t swift-s3-sync test/container
-    - container_id=$(mktemp)
-    - docker run -d -v `pwd`:/swift-s3-sync swift-s3-sync > "${container_id}"
-
 script:
-    - docker exec -it `cat ${container_id}` /bin/bash -c 'cd /swift-s3-sync; flake8'
-    - docker exec -it `cat ${container_id}` /bin/bash -c 'cd /swift-s3-sync; nosetests --with-coverage --cover-branches --cover-package=s3_sync test/unit'
-    - docker exec -it `cat ${container_id}` timeout 60 bash -c '(until echo > /dev/tcp/localhost/8081; do sleep 0.5; done) >/dev/null 2>&1'
-    - docker exec -it `cat ${container_id}` netstat -ptan | grep LISTEN
-    - docker exec -e DOCKER=true -it `cat ${container_id}` /bin/bash -c 'cd /swift-s3-sync; nosetests test/integration'
+    - ./run_tests

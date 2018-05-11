@@ -1,6 +1,0 @@
-version: '3'
-services:
-  swift-s3-sync:
-    ports:
-     - "8080:8080"
-     - "10080:10080"

@@ -1,8 +1,0 @@
-version: '3'
-services:
-  swift-s3-sync:
-    build: test/container/
-    image: swift-s3-sync
-    container_name: swift-s3-sync
-    volumes:
-     - .:/swift-s3-sync
