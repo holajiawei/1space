@@ -830,6 +830,157 @@ class TestCloudConnectorApp(TestCloudConnectorBase):
                 self.assertEqual(body, ''.join(got.body))
             self.assertNotIn('swift.infocache', req.environ)
 
+    def test_obj_post_bad_directive(self):
+        obj_name = u'\u062afkwo'
+
+        raw_path_info = '/'.join(map(urllib.quote, (
+            '', 'jojo', obj_name.encode('utf8'))))
+        controller, req = self.controller_for(
+            u'AUTH_b\u062a', 'jojo', obj_name, 'PUT',
+            req_kwargs={'headers': {
+                'X-Amz-Metadata-Directive': 'BLAHBLAH',
+                'X-Copy-From': raw_path_info}})
+        req.environ['swift.source'] = 'S3'
+        req.environ['RAW_PATH_INFO'] = raw_path_info
+
+        with self.assertRaises(swob.HTTPException) as cm:
+            controller.PUT(req)
+        got = cm.exception
+        self.assertEqual(501, got.status_int)
+        self.assertEqual(
+            'X-Amz-Metadata-Directive was not "REPLACE"; '
+            'only object-overwrite copying is supported.',
+            ''.join(got.body))
+
+        # provider never used
+        self.assertEqual([], self.mock_ltm_provider.mock_calls)
+
+    def test_obj_post_different_location(self):
+        obj_name = u'\u062avksej'
+
+        raw_path_info = '/'.join(map(urllib.quote, (
+            '', 'jojo', obj_name.encode('utf8'))))
+        controller, req = self.controller_for(
+            u'AUTH_b\u062a', 'jojo', obj_name, 'PUT',
+            req_kwargs={'headers': {
+                'X-Amz-Metadata-Directive': 'REPLACE',
+                'X-Copy-From': raw_path_info}})
+        req.environ['swift.source'] = 'S3'
+        req.environ['RAW_PATH_INFO'] = '/oh/noes'
+
+        with self.assertRaises(swob.HTTPException) as cm:
+            controller.PUT(req)
+        got = cm.exception
+        self.assertEqual(501, got.status_int)
+        self.assertEqual(
+            'X-Amz-Copy-Source != object path; '
+            'only object-overwrite copying is supported.',
+            ''.join(got.body))
+
+        # provider never used
+        self.assertEqual([], self.mock_ltm_provider.mock_calls)
+
+    def test_obj_post_in_local(self):
+        obj_name = u'\u062awoub'
+        mock_provider_fn = self.mock_ltm_provider.post_object
+        mock_provider_fn.return_value = ProviderResponse(
+            success=True, status=200, headers={},
+            body=iter(['']))
+
+        raw_path_info = '/'.join(map(urllib.quote, (
+            '', 'jojo', obj_name.encode('utf8'))))
+        controller, req = self.controller_for(
+            u'AUTH_b\u062a', 'jojo', obj_name, 'PUT',
+            req_kwargs={'headers': {
+                'X-Amz-Metadata-Directive': 'REPLACE',
+                'X-Copy-From': raw_path_info}})
+        req.environ['swift.source'] = 'S3'
+        req.environ['RAW_PATH_INFO'] = raw_path_info
+
+        got = controller.PUT(req)
+        self.assertEqual(201, got.status_int)  # swift3 mw will expect 201
+        self.assertEqual([
+            # I guess swob always sticks this one in?
+            ('Content-Type', 'text/html; charset=UTF-8')
+        ], got.headers.items())
+        self.assertEqual('', ''.join(got.body))
+        self.assertEqual([
+            mock.call.post_object(obj_name, req.headers),
+        ], self.mock_ltm_provider.mock_calls)
+
+        # remote provider unused
+        self.assertEqual([], self.mock_rtm_provider.mock_calls)
+
+    def test_obj_post_in_remote(self):
+        obj_name = u'\u062awoub'
+        mock_provider_fn = self.mock_ltm_provider.post_object
+        mock_provider_fn.return_value = ProviderResponse(
+            success=False, status=404, headers={},
+            body=iter(['']))
+        mock_provider_fn = self.mock_rtm_provider.post_object
+        mock_provider_fn.return_value = ProviderResponse(
+            success=True, status=200, headers={},
+            body=iter(['']))
+
+        raw_path_info = '/'.join(map(urllib.quote, (
+            '', 'jojo', obj_name.encode('utf8'))))
+        controller, req = self.controller_for(
+            u'AUTH_b\u062a', 'jojo', obj_name, 'PUT',
+            req_kwargs={'headers': {
+                'X-Amz-Metadata-Directive': 'REPLACE',
+                'X-Copy-From': raw_path_info}})
+        req.environ['swift.source'] = 'S3'
+        req.environ['RAW_PATH_INFO'] = raw_path_info
+
+        got = controller.PUT(req)
+        self.assertEqual(201, got.status_int)  # swift3 mw will expect 201
+        self.assertEqual([
+            # I guess swob always sticks this one in?
+            ('Content-Type', 'text/html; charset=UTF-8')
+        ], got.headers.items())
+        self.assertEqual('', ''.join(got.body))
+        self.assertEqual([
+            mock.call.post_object(obj_name, req.headers),
+        ], self.mock_ltm_provider.mock_calls)
+        self.assertEqual([
+            mock.call.post_object(obj_name, req.headers),
+        ], self.mock_rtm_provider.mock_calls)
+
+    def test_obj_post_in_neither(self):
+        obj_name = u'\u062awoub'
+        mock_provider_fn = self.mock_ltm_provider.post_object
+        mock_provider_fn.return_value = ProviderResponse(
+            success=False, status=404, headers={},
+            body=iter(['']))
+        mock_provider_fn = self.mock_rtm_provider.post_object
+        mock_provider_fn.return_value = ProviderResponse(
+            success=False, status=404, headers={},
+            body=iter(['']))
+
+        raw_path_info = '/'.join(map(urllib.quote, (
+            '', 'jojo', obj_name.encode('utf8'))))
+        controller, req = self.controller_for(
+            u'AUTH_b\u062a', 'jojo', obj_name, 'PUT',
+            req_kwargs={'headers': {
+                'X-Amz-Metadata-Directive': 'REPLACE',
+                'X-Copy-From': raw_path_info}})
+        req.environ['swift.source'] = 'S3'
+        req.environ['RAW_PATH_INFO'] = raw_path_info
+
+        got = controller.PUT(req)
+        self.assertEqual(404, got.status_int)  # swift3 mw will expect 201
+        self.assertEqual([
+            # I guess swob always sticks this one in?
+            ('Content-Type', 'text/html; charset=UTF-8')
+        ], got.headers.items())
+        self.assertEqual('', ''.join(got.body))
+        self.assertEqual([
+            mock.call.post_object(obj_name, req.headers),
+        ], self.mock_ltm_provider.mock_calls)
+        self.assertEqual([
+            mock.call.post_object(obj_name, req.headers),
+        ], self.mock_rtm_provider.mock_calls)
+
     def test_put_success(self):
         obj_name = u'\u062aoo'
         mock_provider_fn = self.mock_ltm_provider.put_object

@@ -252,6 +252,22 @@ class SyncS3(BaseSync):
             bucket = self.aws_bucket
         return self._call_boto('head_bucket', bucket, None, **options)
 
+    def post_object(self, swift_key, headers):
+        s3_key = self.get_s3_name(swift_key)
+        content_type = headers.get('content-type', 'application/octet-stream')
+        meta = convert_to_s3_headers(headers)
+        self.logger.debug('Updating metadata for %s to %r', s3_key, meta)
+        params = dict(
+            Bucket=self.aws_bucket, Key=s3_key,
+            CopySource={'Bucket': self.aws_bucket, 'Key': s3_key},
+            Metadata=meta,
+            MetadataDirective='REPLACE',
+            ContentType=content_type,
+        )
+        if self._is_amazon() and self.encryption:
+            params['ServerSideEncryption'] = 'AES256'
+        return self._call_boto('copy_object', **params)
+
     def put_object(self, swift_key, headers, body, query_string=None):
         s3_key = self.get_s3_name(swift_key)
         content_length = None
@@ -298,6 +314,9 @@ class SyncS3(BaseSync):
             try:
                 resp = getattr(s3_client, op)(**args)
                 body = resp.get('Body', iter(['']))
+                if 'CopyObjectResult' in resp:
+                    return ProviderResponse(True, 200, {}, body)
+
                 return ProviderResponse(
                     True, resp['ResponseMetadata']['HTTPStatusCode'],
                     convert_to_swift_headers(
@@ -735,26 +754,14 @@ class SyncS3(BaseSync):
                 UploadId=multipart_resp['UploadId'])
 
     def update_metadata(self, swift_key, swift_meta):
-        s3_key = self.get_s3_name(swift_key)
-        self.logger.debug('Updating metadata for %s to %r' % (
-            s3_key, convert_to_s3_headers(swift_meta)))
-        with self.client_pool.get_client() as s3_client:
-            if not check_slo(swift_meta) or self._google():
-                meta = convert_to_s3_headers(swift_meta)
-                if self._google() and check_slo(swift_meta):
-                    meta[SLO_ETAG_FIELD] = swift_meta['etag']
-                params = dict(
-                    CopySource={'Bucket': self.aws_bucket,
-                                'Key': s3_key},
-                    MetadataDirective='REPLACE',
-                    Metadata=meta,
-                    Bucket=self.aws_bucket,
-                    Key=s3_key,
-                    ContentType=swift_meta['content-type']
-                )
-                if self._is_amazon() and self.encryption:
-                    params['ServerSideEncryption'] = 'AES256'
-                s3_client.copy_object(**params)
+        if not check_slo(swift_meta) or self._google():
+            meta = swift_meta.copy()
+            if self._google() and check_slo(swift_meta):
+                # metadata still in canonical Swift format, so stick Swift
+                # object metadata header in front
+                meta[SWIFT_USER_META_PREFIX + SLO_ETAG_FIELD] = \
+                    swift_meta['etag']
+            self.post_object(swift_key, meta)
 
     @staticmethod
     def check_etag(swift_etag, s3_etag):

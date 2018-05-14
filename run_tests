@@ -8,6 +8,7 @@ cd "$MYDIR"
 ./scripts/rebuild_and_start_main_container
 
 ./run_unit_tests
+unit_test_status=$?
 ./scripts/ensure_cloud_connector_container_started
 
 echo Waiting for container services to start...
@@ -17,3 +18,4 @@ docker exec cloud-connector timeout 40 \
     bash -c 'until echo > /dev/tcp/localhost/8081; do sleep 0.5; done' >/dev/null 2>&1
 
 docker exec -e DOCKER=true  swift-s3-sync nosetests /swift-s3-sync/test/integration/
+exit $(($unit_test_status + $?))

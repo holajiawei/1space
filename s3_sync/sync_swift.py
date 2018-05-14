@@ -75,6 +75,11 @@ class SyncSwift(BaseSync):
         headers.update(self.extra_headers)
         return headers
 
+    def post_object(self, swift_key, headers):
+        return self._call_swiftclient(
+            'post_object', self.remote_container, swift_key,
+            headers=headers)
+
     def put_object(self, swift_key, headers, body_iter, query_string=None):
         return self._call_swiftclient('put_object', self.container, swift_key,
                                       contents=body_iter, headers=headers,
@@ -378,10 +383,8 @@ class SyncSwift(BaseSync):
         return resp
 
     def update_metadata(self, swift_key, metadata):
-        with self.client_pool.get_client() as swift_client:
-            swift_client.post_object(
-                self.remote_container, swift_key,
-                self._client_headers(self._get_user_headers(metadata)))
+        user_headers = self._get_user_headers(metadata)
+        self.post_object(swift_key, user_headers)
 
     def _upload_slo(self, name, swift_headers, internal_client):
         status, headers, body = internal_client.get_object(
