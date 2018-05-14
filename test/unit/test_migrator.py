@@ -1700,6 +1700,35 @@ class TestMigrator(unittest.TestCase):
         self.migrator.next_pass()
         self.assertEqual('', self.stream.getvalue())
 
+    @mock.patch('s3_sync.migrator.create_provider')
+    def test_reconcile_deleted_object(self, create_provider_mock):
+        provider_mock = create_provider_mock.return_value
+        provider_mock.list_objects.side_effect = [
+            ProviderResponse(True, 200, {}, [{'name': 'qux'}]),
+            ProviderResponse(True, 200, {}, [])]
+        provider_mock.get_object.return_value = ProviderResponse(
+            True, 200, {'last-modified': create_timestamp(1.5e9)}, [])
+        swift_404_resp = mock.Mock()
+        swift_404_resp.status_int = 404
+        self.migrator.status.get_migration.return_value = {}
+
+        self.swift_client.make_request.side_effect = [
+            mock.Mock(status_int=200, body='[{"name": "foo"}]'),
+            mock.Mock(status_int=200, body='[]')]
+        self.swift_client.get_object_metadata.side_effect = UnexpectedResponse(
+            '', swift_404_resp)
+
+        self.migrator.next_pass()
+
+        internal_header = s3_sync.utils.get_sys_migrator_header('object')
+        self.swift_client.upload_object.assert_called_once_with(
+            mock.ANY,
+            self.migrator.config['account'],
+            self.migrator.config['aws_bucket'],
+            'qux',
+            {internal_header: '1500000000.00000',
+             'x-timestamp': '1500000000.00000'})
+
 
 class TestStatus(unittest.TestCase):
 

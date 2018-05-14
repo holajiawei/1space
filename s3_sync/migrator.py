@@ -530,9 +530,15 @@ class Migrator(object):
         # NOTE: to handle the case of objects being deleted from the source
         # cluster after they've been migrated, we have to HEAD the object to
         # check for the migration header.
-
-        hdrs = internal_client.get_object_metadata(
-            self.config['account'], container, key)
+        try:
+            hdrs = internal_client.get_object_metadata(
+                self.config['account'], container, key)
+        except UnexpectedResponse as e:
+            # This may arise if there an eventual consistency issue between the
+            # container database and the object server state.
+            if e.resp.status_int == HTTP_NOT_FOUND:
+                return
+            raise
         if get_sys_migrator_header('object') in hdrs:
             self.logger.info(
                 'Detected removed object %s. Removing from %s/%s' % (
