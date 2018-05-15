@@ -659,6 +659,16 @@ class Migrator(object):
         return self._find_missing_objects(container, aws_bucket, marker,
                                           prefix, list_all)
 
+    def _old_enough(self, remote):
+        older_than = self.config.get('older_than')
+        if older_than is None:
+            return True
+        older_than = datetime.timedelta(seconds=older_than)
+        now = datetime.datetime.utcnow()
+        remote_time = datetime.datetime.strptime(
+            remote['last_modified'], SWIFT_TIME_FMT)
+        return remote_time < now - older_than
+
     def _find_missing_objects(
             self, container, aws_bucket, marker, prefix, list_all):
 
@@ -681,10 +691,11 @@ class Migrator(object):
             # the keys that were returned in the listing and restart on the
             # following iteration.
             if not local or local['name'] > remote['name']:
-                work = MigrateObjectWork(aws_bucket, container,
-                                         remote['name'])
-                self.object_queue.put(work)
-                copied += 1
+                if self._old_enough(remote):
+                    work = MigrateObjectWork(aws_bucket, container,
+                                             remote['name'])
+                    self.object_queue.put(work)
+                    copied += 1
                 scanned += 1
                 remote = next(source_iter)
                 if remote:
@@ -704,7 +715,7 @@ class Migrator(object):
                         self._check_large_objects(
                             aws_bucket, container, remote['name'], ic)
                 else:
-                    if cmp_ret < 0:
+                    if cmp_ret < 0 and self._old_enough(remote):
                         work = MigrateObjectWork(aws_bucket, container,
                                                  remote['name'])
                         self.object_queue.put(work)
