@@ -825,7 +825,11 @@ class Migrator(object):
                                         (container, segment_key))
                     continue
             work = MigrateObjectWork(container, container, segment_key)
-            self.object_queue.put(work)
+            try:
+                self.object_queue.put(work, block=False)
+            except eventlet.queue.Full:
+                self._migrate_object(
+                    work.aws_bucket, work.container, segment_key)
         manifest_blob = json.dumps(manifest)
         headers['Content-Length'] = str(len(manifest_blob))
         # The SLO middleware is not in the pipeline. The ETag we provide should
@@ -835,7 +839,10 @@ class Migrator(object):
         work = UploadObjectWork(slo_container, key,
                                 FileLikeIter(manifest_blob), headers,
                                 slo_container)
-        self.object_queue.put(work)
+        try:
+            self.object_queue.put(work, block=False)
+        except eventlet.queue.Full:
+            self._upload_object(work)
 
     def _upload_object(self, work):
         container, key, content, headers, aws_bucket = work

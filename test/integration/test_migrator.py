@@ -1170,3 +1170,67 @@ class TestMigrator(TestCloudSyncBase):
         # migrator
         for i in range(0, 5):
             self.assertEqual(first_migrated[i], new_migrated[i + 5])
+
+    def test_migrate_many_slos(self):
+        '''Ensure we can migrate numerous SLOs with multiple segments'''
+        # The object_queue is sized to be 2*workers. This test makes sure that
+        # we can handle SLOs that fill the object_queue.
+        migration = self._find_migration(
+            lambda cont: cont['aws_bucket'] == '/*')
+        conn_source = self.conn_for_acct(migration['aws_account'])
+        conn_destination = self.conn_for_acct(migration['account'])
+
+        segments = 10
+        slos = 5
+        # we want the SLO container to sort before all others,
+        # as this is a /* migration.
+        container = '1-test-slos'
+        conn_source.put_container(container)
+
+        def _make_manifest(index):
+            manifest = [
+                {'path': 'segments-%d/segment-%d' % (index, j)}
+                for j in range(segments)]
+            return manifest
+
+        for i in range(slos):
+            conn_source.put_container('segments-%d' % i)
+            for j in range(segments):
+                conn_source.put_object(
+                    'segments-%d' % i, 'segment-%d' % j,
+                    chr(ord('A') + j) * 4)
+            conn_source.put_object(
+                container, 'slo-%d' % i,
+                json.dumps(_make_manifest(i)),
+                query_string='multipart-manifest=put')
+
+        def _check_migrated_objects(container, expected_count):
+            _, listing = conn_destination.get_container(container)
+            local = [entry for entry in listing
+                     if 'swift' in entry.get('content_location', [])]
+            if len(local) != expected_count:
+                return False
+            return local
+
+        with self.migrator_running():
+            wait_for_condition(
+                10,
+                partial(_check_migrated_objects, container, slos))
+
+        expected_body = ''.join([
+            chr(ord('A') + i) * 4 for i in range(segments)])
+        for i in range(slos):
+            hdrs, body = conn_destination.get_object(
+                container, 'slo-%d' % i)
+            for hdr in hdrs.keys():
+                # make sure the response is local to us
+                self.assertFalse(hdr.startswith('Remote-'))
+            self.assertEqual('True', hdrs['x-static-large-object'])
+            self.assertEqual(expected_body, body)
+
+            _, body = conn_destination.get_object(
+                container, 'slo-%d' % i,
+                query_string='multipart-manifest=get&format=raw')
+            self.assertEqual(
+                ['/' + entry['path'] for entry in _make_manifest(i)],
+                [entry['path'] for entry in json.loads(body)])
