@@ -48,7 +48,7 @@ TIME_DIFF = 2
 LAST_MODIFIED_FMT = '%a, %d %b %Y %H:%M:%S %Z'
 EPOCH = datetime.datetime.utcfromtimestamp(0)
 
-IGNORE_KEYS = set(('status', 'aws_secret', 'all_buckets'))
+IGNORE_KEYS = set(('status', 'aws_secret', 'all_buckets', 'custom_prefix'))
 
 MigrateObjectWork = namedtuple('MigrateObjectWork', 'aws_bucket container key')
 UploadObjectWork = namedtuple('UploadObjectWork', 'container key object '
@@ -60,12 +60,14 @@ class MigrationError(Exception):
 
 
 class ContainerNotFound(Exception):
-    def __init__(self, container, *args, **kwargs):
+    def __init__(self, account, container, *args, **kwargs):
+        self.account = account
         self.container = container
         super(ContainerNotFound, self).__init__(*args, **kwargs)
 
     def __unicode__(self):
-        return u'Bucket/container "%s" does not exist' % self.container
+        return u'Bucket/container "%s" does not exist for %s' % (
+            self.container, self.account)
 
 
 def equal_migration(left, right):
@@ -373,7 +375,7 @@ class Migrator(object):
                                      '"%s": %d' % (container, resp.status_int),
                                      resp)
 
-        self.logger.debug('Updated headers for container "%s"' % container)
+        self.logger.info('Updated headers for container "%s"' % container)
 
     def _create_container(self, container, internal_client, aws_bucket,
                           timeout=1):
@@ -382,7 +384,8 @@ class Migrator(object):
                 headers = get_container_headers(self.provider, aws_bucket)
             except RemoteHTTPError as e:
                 if e.resp.status == 404:
-                    raise ContainerNotFound(container)
+                    raise ContainerNotFound(
+                        self.config['aws_identity'], aws_bucket)
                 else:
                     raise
         else:
@@ -408,12 +411,13 @@ class Migrator(object):
                     self.config['account'], container):
                 time.sleep(0.1)
             else:
-                self.logger.debug('Created container "%s"' % container)
+                self.logger.info('Created container "%s"' % container)
                 return
         raise MigrationError('Timeout while creating container "%s"' %
                              container)
 
-    def _iterate_internal_listing(self, container=None, prefix=None):
+    def _iterate_internal_listing(
+            self, container=None, marker='', prefix=None):
         '''Calls GET on the specified path to list items.
 
         Useful in case we cannot use the InternalClient.iter_{containers,
@@ -421,7 +425,6 @@ class Migrator(object):
         object store and require holding the client out of the InternalClient
         pool.
         '''
-        marker = ''
         while True:
             with self.ic_pool.item() as ic:
                 path = ic.make_path(self.config['account'], container)
@@ -525,7 +528,8 @@ class Migrator(object):
             resp = self.provider.list_objects(
                 next_marker, self.work_chunk, prefix, bucket=container)
             if resp.status == 404:
-                raise ContainerNotFound(container)
+                raise ContainerNotFound(
+                    self.config['aws_identity'], container)
             if resp.status != 200:
                 raise MigrationError(
                     'Failed to list source bucket/container "%s"' %
@@ -594,7 +598,8 @@ class Migrator(object):
         if self.config.get('protocol') == 'swift':
             resp = self.provider.head_bucket(aws_bucket)
             if resp.status == 404:
-                raise ContainerNotFound(aws_bucket)
+                raise ContainerNotFound(
+                    self.config['aws_identity'], aws_bucket)
             if resp.status != 200:
                 raise MigrationError(
                     'Failed to HEAD bucket/container "%s"' % container)
@@ -675,7 +680,7 @@ class Migrator(object):
 
         copied = 0
         scanned = 0
-        local_iter = self._iterate_internal_listing(container, prefix)
+        local_iter = self._iterate_internal_listing(container, marker, prefix)
         local = next(local_iter)
         remote = next(source_iter)
         if remote:
@@ -721,7 +726,7 @@ class Migrator(object):
                 if remote:
                     marker = remote['name']
 
-        while local and (not marker or local['name'] < marker):
+        while local and (not marker or local['name'] < marker or scanned == 0):
             # We may have objects left behind that need to be removed
             with self.ic_pool.item() as ic:
                 self._reconcile_deleted_objects(ic, container, local['name'])
@@ -889,7 +894,7 @@ def process_migrations(migrations, migration_status, internal_pool, logger,
                 src_account = migration.get('remote_account')
             else:
                 src_account = migration['aws_identity']
-            logger.debug('Processing "%s"' % (
+            logger.info('Processing "%s"' % (
                 ':'.join([migration.get('aws_endpoint', ''),
                           src_account, migration['aws_bucket']])))
             migrator = Migrator(migration, migration_status,
@@ -910,10 +915,10 @@ def run(migrations, migration_status, internal_pool, logger, items_chunk,
         naptime = max(0, poll_interval - elapsed)
         msg = 'Finished cycle in %0.2fs' % elapsed
         if once:
-            logger.debug(msg)
+            logger.info(msg)
             return
         msg += ', sleeping for %0.2fs.' % naptime
-        logger.debug(msg)
+        logger.info(msg)
         time.sleep(naptime)
 
 

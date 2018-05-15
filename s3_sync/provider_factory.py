@@ -18,11 +18,14 @@ from .sync_s3 import SyncS3
 from .sync_swift import SyncSwift
 
 
-def create_provider(sync_settings, max_conns, per_account=False, logger=None):
+def create_provider(sync_settings, max_conns, per_account=False, logger=None,
+                    extra_headers=None):
     provider_type = sync_settings.get('protocol', None)
     if not provider_type or provider_type == 's3':
-        return SyncS3(sync_settings, max_conns, per_account, logger)
+        return SyncS3(sync_settings, max_conns, per_account, logger,
+                      extra_headers=extra_headers)
     elif provider_type == 'swift':
-        return SyncSwift(sync_settings, max_conns, per_account, logger)
+        return SyncSwift(sync_settings, max_conns, per_account, logger,
+                         extra_headers=extra_headers)
     else:
         raise NotImplementedError()

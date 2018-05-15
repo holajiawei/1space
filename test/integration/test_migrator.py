@@ -587,7 +587,7 @@ class TestMigrator(TestCloudSyncBase):
             'head_container', migration['container'])
         self.assertNotIn(u'x-container-meta-migrated-\u062a', new_hdrs)
 
-    def test_migrate_correct_metadata_changes(self):
+    def test_propagate_container_meta_changes(self):
         migration = self._find_migration(
             lambda cont: cont['aws_bucket'] == '/*')
 
@@ -632,9 +632,8 @@ class TestMigrator(TestCloudSyncBase):
             key=self.SWIFT_CREDS['dst']['key'],
             os_options={'object_storage_url': '%s://%s/v1/%s' % (
                 scheme, swift_host, migration['aws_account'].split(':')[0])})
-        remote_swift.put_object('metadata_test', 'test', 'test')
-        hdrs, body = remote_swift.get_object('metadata_test', 'test')
-        self.assertEqual(body, 'test')
+        etag = remote_swift.put_object('metadata_test', 'test', 'test')
+        self.assertEqual(hashlib.md5('test').hexdigest(), etag)
 
         def key_val_copied(k, v):
             test_hdrs = conn_noshunt.head_container('metadata_test')
@@ -702,6 +701,46 @@ class TestMigrator(TestCloudSyncBase):
         with self.migrator_running():
             # TODO (MSD): This should be replaced with a mechanism for
             # executing the migrator once
+            with self.assertRaises(WaitTimedOut):
+                wait_for_condition(3, partial(is_where, 'remote'))
+            self.assertTrue(is_where('local'))
+
+    def test_object_metadata_copied_only_when_newer(self):
+        migration = self.swift_migration()
+        key = u'test_object-own'
+        content = 'test object'
+
+        where_header = 'x-object-meta-where'
+
+        conn_local = self.conn_for_acct(migration['account'])
+        conn_remote = self.conn_for_acct(migration['aws_account'])
+        conn_noshunt = self.conn_for_acct_noshunt(migration['account'])
+
+        def is_where(val):
+            try:
+                test_hdrs = conn_noshunt.head_object(
+                    migration['container'], key)
+                if test_hdrs[where_header] == val:
+                    return True
+            except swiftclient.exceptions.ClientException as e:
+                if e.http_status == 404:
+                    return False
+                raise
+            return False
+
+        conn_local.put_object(
+            migration['container'], key, StringIO.StringIO(content),
+            headers={where_header: 'local'})
+        time.sleep(1)
+        conn_remote.put_object(
+            migration['aws_bucket'], key, StringIO.StringIO(content),
+            headers={where_header: 'remote'})
+        time.sleep(1)
+        conn_local.post_object(
+            migration['container'], key, headers={where_header: 'local'})
+        with self.migrator_running():
+            # TODO: Replace this silliness with a means of calling migrator
+            # run once.
             with self.assertRaises(WaitTimedOut):
                 wait_for_condition(3, partial(is_where, 'remote'))
             self.assertTrue(is_where('local'))
