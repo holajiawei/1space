@@ -20,6 +20,7 @@ import json
 import swiftclient
 from swift.common.internal_client import UnexpectedResponse
 from swift.common.utils import FileLikeIter
+import sys
 import traceback
 import urllib
 
@@ -184,23 +185,15 @@ class SyncSwift(BaseSync):
                     return
                 raise
 
-            if not check_slo(headers):
-                try:
-                    swift_client.delete_object(
-                        self.remote_container, swift_key,
-                        headers=self._client_headers())
-                except swiftclient.exceptions.ClientException as e:
-                    if e.http_status != 404:
-                        raise
-            else:
-                try:
-                    swift_client.delete_object(
-                        self.remote_container, swift_key,
-                        query_string='multipart-manifest=delete',
-                        headers=self._client_headers())
-                except swiftclient.exceptions.ClientException as e:
-                    if e.http_status != 404:
-                        raise
+        delete_kwargs = {'headers': self._client_headers()}
+        if check_slo(headers):
+            delete_kwargs['query_string'] = 'multipart-manifest=delete'
+        resp = self._call_swiftclient('delete_object',
+                                      self.remote_container, swift_key,
+                                      **delete_kwargs)
+        if not resp.success and resp.status != 404:
+            resp.reraise()
+        return resp
 
     def shunt_object(self, req, swift_key):
         """Fetch an object from the remote cluster to stream back to a client.
@@ -334,10 +327,12 @@ class SyncSwift(BaseSync):
                                 for header, value in
                                 e.http_response_headers.items()])
                 return ProviderResponse(False, e.http_status, headers,
-                                        iter(e.http_response_content))
+                                        iter(e.http_response_content),
+                                        exc_info=sys.exc_info())
             except Exception:
                 self.logger.exception('Error contacting remote swift cluster')
-                return ProviderResponse(False, 502, {}, iter('Bad Gateway'))
+                return ProviderResponse(False, 502, {}, iter('Bad Gateway'),
+                                        exc_info=sys.exc_info())
 
         args['headers'] = self._client_headers(args.get('headers', {}))
         # TODO: always use `response_dict` biz

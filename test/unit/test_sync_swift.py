@@ -235,6 +235,7 @@ class TestSyncSwift(unittest.TestCase):
             'etag': '%s' % etag,
             'Content-Type': 'application/foo'}
         swift_client.post_object.return_value = None
+        swift_client.delete_object.return_value = None
 
         self.sync_swift.upload_object(key, storage_policy, mock_ic)
 
@@ -259,6 +260,7 @@ class TestSyncSwift(unittest.TestCase):
         swift_client.head_object.return_value = {
             'x-object-meta-old': 'old', 'etag': '%s' % etag}
         swift_client.post_object.return_value = None
+        swift_client.delete_object.return_value = None
 
         self.sync_swift.upload_object(key, storage_policy, mock_ic)
 
@@ -556,6 +558,8 @@ class TestSyncSwift(unittest.TestCase):
         mock_swift.return_value = swift_client
         # When deleting in Swift, we have to do a HEAD in case it's an SLO
         swift_client.head_object.return_value = {}
+        swift_client.delete_object.return_value = None
+
         self.sync_swift.delete_object(key)
         swift_client.delete_object.assert_called_with(
             self.aws_bucket, key, headers={})
@@ -589,6 +593,7 @@ class TestSyncSwift(unittest.TestCase):
         }
         swift_client.get_object.return_value = (
             {}, json.dumps(manifest))
+        swift_client.delete_object.return_value = None
 
         self.sync_swift.delete_object(slo_key)
 
