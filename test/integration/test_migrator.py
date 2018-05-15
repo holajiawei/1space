@@ -1234,3 +1234,61 @@ class TestMigrator(TestCloudSyncBase):
             self.assertEqual(
                 ['/' + entry['path'] for entry in _make_manifest(i)],
                 [entry['path'] for entry in json.loads(body)])
+
+    def test_migrate_many_dlos(self):
+        '''Ensure we can migrate many DLOs'''
+        migration = self.swift_migration()
+        conn_source = self.conn_for_acct(migration['aws_account'])
+        conn_destination = self.conn_for_acct(migration['account'])
+
+        conn_source.put_container('nested-segments')
+        for i in range(5):
+            conn_source.put_object(
+                'nested-segments', 'segment-%d' % i,
+                chr(ord('A') + i) * 4)
+
+        for i in range(10):
+            conn_source.put_container('segments-%d' % i)
+            for j in range(5):
+                conn_source.put_object(
+                    'segments-%d' % i, 'segment-%d' % j,
+                    chr(ord('A') + j) * 4)
+            conn_source.put_object(
+                'segments-%d' % i, 'segment-dlo', '',
+                headers={'x-object-manifest': 'nested-segments/segment'})
+            conn_source.put_object(
+                migration['aws_bucket'], 'dlo-%d' % i, '',
+                headers={'x-object-manifest': 'segments-%d/segment-' % i})
+
+        def _check_migrated_objects(container, expected_count):
+            _, listing = conn_destination.get_container(migration['container'])
+            local = [entry for entry in listing
+                     if 'swift' in entry.get('content_location', [])]
+            if len(local) != expected_count:
+                return False
+            return local
+
+        with self.migrator_running():
+            wait_for_condition(
+                15,
+                partial(_check_migrated_objects, migration['container'], 10))
+
+        expected_body = ''.join([
+            chr(ord('A') + i) * 4 for i in range(5)])
+        for i in range(10):
+            hdrs, body = conn_destination.get_object(
+                migration['container'], 'dlo-%d' % i)
+            for hdr in hdrs.keys():
+                # make sure the response is local to us
+                self.assertFalse(hdr.startswith('Remote-'))
+            self.assertEqual('segments-%d/segment-' % i,
+                             hdrs['x-object-manifest'])
+            self.assertEqual(20, int(hdrs['content-length']))
+            self.assertEqual(expected_body, body)
+
+            hdrs, body = conn_destination.get_object(
+                'segments-%d' % i, 'segment-dlo')
+            self.assertEqual(expected_body, body)
+            self.assertEqual(
+                'nested-segments/segment',
+                hdrs['x-object-manifest'])

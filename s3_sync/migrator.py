@@ -239,6 +239,7 @@ class Migrator(object):
         self.work_chunk = work_chunk
         self.max_conns = swift_pool.max_size
         self.object_queue = eventlet.queue.Queue(self.max_conns * 2)
+        self.container_queue = eventlet.queue.Queue()
         self.ic_pool = swift_pool
         self.errors = eventlet.queue.Queue()
         self.workers = workers
@@ -331,8 +332,38 @@ class Migrator(object):
             self.logger.error('Failed to migrate "%s"' %
                               self.config['aws_bucket'])
             self.logger.error(''.join(traceback.format_exc()))
-
         self.object_queue.join()
+
+        while not self.container_queue.empty():
+            # Additional containers that we have discovered we have to handle.
+            # These are containers that hold DLOs. We process all objects in
+            # these containers. We may encounter an object that itself is also
+            # a DLO in these containers, so we keep going until we have copied
+            # all of the referenced objects.
+            refd_container, prefix = self.container_queue.get()
+            try:
+                _, refd_scanned, refd_copied = self._process_container(
+                    container=refd_container,
+                    aws_bucket=refd_container,
+                    marker='',
+                    prefix=prefix,
+                    list_all=True)
+                scanned += refd_scanned
+                copied += refd_copied
+            except Exception:
+                self.logger.error(
+                    'Failed to process referenced container: "%s"' %
+                    refd_container)
+                self.logger.error(''.join(traceback.format_exc()))
+            self.object_queue.join()
+
+        # We process the DLO manifests separately. This is to avoid a situation
+        # of an object appearing before its corresponding segments do.
+        for aws_bucket, container, dlo in self._manifests:
+            self.object_queue.put(
+                MigrateObjectWork(aws_bucket, container, dlo))
+        self.object_queue.join()
+
         self._stop_workers(self.object_queue)
 
         self.check_errors()
@@ -738,7 +769,7 @@ class Migrator(object):
         if self.config.get('protocol', 's3') == 'swift':
             args['resp_chunk_size'] = 65536
 
-        if (container, key) in self._manifests:
+        if (aws_bucket, container, key) in self._manifests:
             # Special handling for the DLO manifests
             args['query_string'] = 'multipart-manifest=get'
             resp = self.provider.get_object(key, **args)
@@ -779,16 +810,12 @@ class Migrator(object):
 
     def _migrate_dlo(self, aws_bucket, container, key, headers):
         dlo_container, prefix = headers['x-object-manifest'].split('/', 1)
-        self._manifests.add((container, key))
-        self._process_container(
-            container=dlo_container, aws_bucket=dlo_container, marker='',
-            prefix=prefix, list_all=True)
+        self.container_queue.put((dlo_container, prefix))
         if dlo_container != container or not key.startswith(prefix):
             # The DLO prefix can include the manifest object, which doesn't
             # have to be 0-sized. We have to be careful not to end up recursing
             # infinitely in that case.
-            work = MigrateObjectWork(aws_bucket, container, key)
-            self.object_queue.put(work)
+            self._manifests.add((aws_bucket, container, key))
 
     def _migrate_slo(self, aws_bucket, slo_container, key, headers):
         manifest = self.provider.get_manifest(key, aws_bucket)
