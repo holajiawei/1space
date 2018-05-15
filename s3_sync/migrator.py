@@ -224,7 +224,7 @@ class Status(object):
 
 class Migrator(object):
     '''List and move objects from a remote store into the Swift cluster'''
-    def __init__(self, config, status, work_chunk, swift_pool, logger,
+    def __init__(self, config, status, work_chunk, workers, swift_pool, logger,
                  node_id, nodes):
         self.config = dict(config)
         if 'container' not in self.config:
@@ -241,7 +241,7 @@ class Migrator(object):
         self.object_queue = eventlet.queue.Queue(self.max_conns * 2)
         self.ic_pool = swift_pool
         self.errors = eventlet.queue.Queue()
-        self.workers = config.get('workers', 10)
+        self.workers = workers
         self.logger = logger
         self.node_id = node_id
         self.nodes = nodes
@@ -887,7 +887,7 @@ class Migrator(object):
 
 
 def process_migrations(migrations, migration_status, internal_pool, logger,
-                       items_chunk, node_id, nodes):
+                       items_chunk, workers, node_id, nodes):
     for index, migration in enumerate(migrations):
         if migration['aws_bucket'] == '/*' or index % nodes == node_id:
             if migration.get('remote_account'):
@@ -898,7 +898,7 @@ def process_migrations(migrations, migration_status, internal_pool, logger,
                 ':'.join([migration.get('aws_endpoint', ''),
                           src_account, migration['aws_bucket']])))
             migrator = Migrator(migration, migration_status,
-                                items_chunk,
+                                items_chunk, workers,
                                 internal_pool, logger,
                                 node_id, nodes)
             migrator.next_pass()
@@ -906,11 +906,11 @@ def process_migrations(migrations, migration_status, internal_pool, logger,
 
 
 def run(migrations, migration_status, internal_pool, logger, items_chunk,
-        node_id, nodes, poll_interval, once):
+        workers, node_id, nodes, poll_interval, once):
     while True:
         cycle_start = time.time()
         process_migrations(migrations, migration_status, internal_pool, logger,
-                           items_chunk, node_id, nodes)
+                           items_chunk, workers, node_id, nodes)
         elapsed = time.time() - cycle_start
         naptime = max(0, poll_interval - elapsed)
         msg = 'Finished cycle in %0.2fs' % elapsed
@@ -944,12 +944,12 @@ def main():
 
     logger = logging.getLogger(logger_name)
 
-    pool_size = migrator_conf.get('workers', 10)
+    workers = migrator_conf.get('workers', 10)
     swift_dir = conf.get('swift_dir', '/etc/swift')
     internal_pool = eventlet.pools.Pool(
         create=lambda: create_internal_client(conf, swift_dir),
         min_size=0,
-        max_size=pool_size)
+        max_size=workers + 1)  # Our enumerating thread uses a client as well.
 
     if 'process' not in migrator_conf or 'processes' not in migrator_conf:
         print 'Missing "process" or "processes" settings in the config file'
@@ -965,7 +965,7 @@ def main():
     migration_status.prune(migrations)
 
     run(migrations, migration_status, internal_pool, logger, items_chunk,
-        node_id, nodes, poll_interval, args.once)
+        workers, node_id, nodes, poll_interval, args.once)
 
 
 if __name__ == '__main__':

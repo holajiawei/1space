@@ -520,7 +520,7 @@ class TestMigratorUtils(unittest.TestCase):
         status = s3_sync.migrator.Status(self.status_file_path)
         status.load_status_list()
         migrator = s3_sync.migrator.Migrator(
-            config, status, 10, mock.Mock(max_size=1), None, 0, 1)
+            config, status, 10, 5, mock.Mock(max_size=1), None, 0, 1)
         self.assertIn('custom_prefix', migrator.config)
         self.assertEqual('', migrator.config['custom_prefix'])
         status.save_migration(migrator.config, 'new-marker', 10, 100, False)
@@ -632,7 +632,7 @@ class TestMigrator(unittest.TestCase):
         self.stream = StringIO()
         self.logger.addHandler(logging.StreamHandler(self.stream))
         self.migrator = s3_sync.migrator.Migrator(
-            config, None, 1000, pool, self.logger, 0, 1)
+            config, None, 1000, 5, pool, self.logger, 0, 1)
         self.migrator.status = mock.Mock()
 
     def get_log_lines(self):
@@ -1895,6 +1895,7 @@ class TestMain(unittest.TestCase):
             'internal_pool': None,
             'logger': self.logger,
             'items_chunk': None,
+            'workers': 5,
             'node_id': 0,
             'nodes': 1,
             'poll_interval': 30,
@@ -1941,3 +1942,35 @@ class TestMain(unittest.TestCase):
                 'Finished cycle in 1.00s, sleeping for 29.00s.',
                 'Finished cycle in 1.00s, sleeping for 29.00s.',
             ], self.pop_log_lines().splitlines())
+
+    def test_conf_parsing(self):
+        config = {
+            'migrator_settings': {
+                'workers': 1337,
+                'items_chunk': 42,
+                'status_file': '/test/status',
+                'poll_interval': 5,
+                'process': 0,
+                'processes': 15,
+            },
+            'migrations': [
+                {'aws_bucket': 'test_bucket',
+                 'account': 'AUTH_test',
+                 'aws_identity': 'identity',
+                 'aws_secret': 'secret',
+                 'container': 'dst-container'}
+            ],
+            'swift_dir': '/foo/bar/swift',
+        }
+        with self.patch('setup_context') as mock_setup_context,\
+                self.patch('Migrator') as mock_migrator,\
+                self.patch('Status') as mock_status:
+            mock_setup_context.return_value = (
+                mock.Mock(log_level='warn', console=True, once=True),
+                config)
+
+            s3_sync.migrator.main()
+            mock_status.assert_called_once_with('/test/status')
+            mock_migrator.assert_called_once_with(
+                config['migrations'][0], mock_status.return_value, 42, 1337,
+                mock.ANY, mock.ANY, 0, 15)
