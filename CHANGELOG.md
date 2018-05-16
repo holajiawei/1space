@@ -1,3 +1,20 @@
+## 0.1.35 (2018-05-16)
+
+Feature:
+
+    - Migrations can be configured to copy objects only older than a specified
+      number of seconds. If this configuration option is not set, objects are
+      copied immediately as before.
+
+Bug fixes:
+
+    - A container with numerous dynamic large objects will no longer stall when
+      attempting to copy its segments.
+    - The migrator will not stall when encountering a static large object with
+      numerous segments.
+    - Workers are correctly passed to the migrator instance. Previously, the
+      configuration option was ignored and we always defaulted to 10 workers.
+
 ## 0.1.34 (2018-05-11)
 
 Bug fixes:
