@@ -673,6 +673,14 @@ class TestCloudConnector(TestCloudSyncBase):
 
         self.assertEqual(200, resp.status)
         self.assertEqual('abc', ''.join(resp.body))
+        self.assertEqual('3', resp.headers['Content-Length'])
+        self.assertEqual('slam', resp.headers['x-object-meta-slim'])
+
+        resp = self.cc_provider.head_object(obj_name)
+
+        self.assertEqual(200, resp.status)
+        self.assertEqual('', ''.join(resp.body))
+        self.assertEqual('3', resp.headers['Content-Length'])
         self.assertEqual('slam', resp.headers['x-object-meta-slim'])
 
         # Sanity-check
@@ -691,6 +699,13 @@ class TestCloudConnector(TestCloudSyncBase):
         self.assertEqual('def', ''.join(resp.body))
         self.assertEqual('bamm', resp.headers['x-object-meta-jamm'])
 
+        resp = self.cc_provider.head_object(obj_name)
+
+        self.assertEqual(200, resp.status)
+        self.assertEqual('', ''.join(resp.body))
+        self.assertEqual('3', resp.headers['Content-Length'])
+        self.assertEqual('bamm', resp.headers['x-object-meta-jamm'])
+
         # Sanity-check
         headers = self.conn_noshunt.head_object(self.mapping['container'],
                                                 obj_name)
@@ -703,6 +718,13 @@ class TestCloudConnector(TestCloudSyncBase):
 
         self.assertEqual(200, resp.status)
         self.assertEqual('def', ''.join(resp.body))
+        self.assertEqual('bamm', resp.headers['x-object-meta-jamm'])
+
+        resp = self.cc_provider.head_object(obj_name)
+
+        self.assertEqual(200, resp.status)
+        self.assertEqual('', ''.join(resp.body))
+        self.assertEqual('3', resp.headers['Content-Length'])
         self.assertEqual('bamm', resp.headers['x-object-meta-jamm'])
 
     def test_obj_put(self):
@@ -732,3 +754,83 @@ class TestCloudConnector(TestCloudSyncBase):
         with self.assertRaises(ClientException) as cm:
             self.conn_noshunt.head_object(self.mapping['container'], obj_name)
         self.assertEqual(404, cm.exception.http_status)
+
+    def test_obj_post(self):
+        # Not there yet...
+        obj_name = u'slimm\u062ajimm'
+
+        resp = self.cc_provider.get_object(obj_name)
+
+        self.assertEqual(404, resp.status)
+        self.assertEqual('The specified key does not exist.',
+                         ''.join(resp.body))
+
+        # Put an obj into swift
+        self.conn_noshunt.put_object(
+            self.mapping['container'], obj_name,
+            'abc', headers={'x-object-meta-slim': 'slam'})
+        # Sanity-check
+        headers = self.conn_noshunt.head_object(self.mapping['container'],
+                                                obj_name)
+        self.assertEqual('3', headers['content-length'])
+        self.assertEqual('slam', headers['x-object-meta-slim'])
+
+        resp = self.cc_provider.get_object(obj_name)
+
+        self.assertEqual(200, resp.status)
+        self.assertEqual('abc', ''.join(resp.body))
+        self.assertEqual('slam', resp.headers['x-object-meta-slim'])
+
+        resp = self.cc_provider.post_object(obj_name, {
+            'x-object-meta-shoo': 'gloo',
+            'content-type': 'application/meat-popsicle',
+        })
+
+        self.assertEqual(200, resp.status)
+        self.assertEqual('', ''.join(resp.body))
+        self.assertEqual({}, resp.headers)
+
+        resp = self.cc_provider.get_object(obj_name)
+
+        self.assertEqual(200, resp.status)
+        self.assertEqual('abc', ''.join(resp.body))
+        # So I wanted the following assert, but I guess that when the new
+        # "post" (PUT copy) is done by c-c against the `swift3` of the Swift
+        # cluster, old metadata is retained--perhaps by the cluster's "copy"
+        # middleware doing a HEAD and copying existing metadata from that?
+        # self.assertNotIn('x-object-meta-slim', resp.headers)
+        self.assertEqual('gloo', resp.headers['x-object-meta-shoo'])
+        self.assertEqual('application/meat-popsicle',
+                         resp.headers['content-type'])
+
+        # Stick a different obj in S3 and make sure that's what we modify and
+        # later get
+        self.local_to_me_provider.put_object(obj_name,
+                                             {'x-object-meta-jamm': 'bamm'},
+                                             'def')
+
+        # Sanity-check
+        resp = self.cc_provider.get_object(obj_name)
+
+        self.assertEqual(200, resp.status)
+        self.assertEqual('def', ''.join(resp.body))
+        self.assertEqual('bamm', resp.headers['x-object-meta-jamm'])
+
+        resp = self.cc_provider.post_object(obj_name, {
+            'x-object-meta-jamm': 'floo',
+            'content-type': 'application/party-boat',
+        })
+
+        self.assertEqual(200, resp.status)
+        self.assertEqual('', ''.join(resp.body))
+        self.assertEqual({}, resp.headers)
+
+        resp = self.cc_provider.get_object(obj_name)
+
+        self.assertEqual(200, resp.status)
+        self.assertEqual('def', ''.join(resp.body))
+        self.assertNotIn('x-object-meta-slim', resp.headers)
+        self.assertNotIn('x-object-meta-shoo', resp.headers)
+        self.assertEqual('floo', resp.headers['x-object-meta-jamm'])
+        self.assertEqual('application/party-boat',
+                         resp.headers['content-type'])

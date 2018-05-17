@@ -234,14 +234,15 @@ class TestSyncSwift(unittest.TestCase):
             'x-object-meta-old': 'old',
             'etag': '%s' % etag,
             'Content-Type': 'application/foo'}
+        swift_client.post_object.return_value = None
 
         self.sync_swift.upload_object(key, storage_policy, mock_ic)
 
         swift_client.post_object.assert_called_with(
-            self.aws_bucket, key,
-            {'x-object-meta-new': 'new',
-             'x-object-meta-old': 'updated',
-             'Content-Type': 'application/bar'})
+            self.aws_bucket, key, headers={
+                'x-object-meta-new': 'new',
+                'x-object-meta-old': 'updated',
+                'Content-Type': 'application/bar'})
 
     @mock.patch('s3_sync.sync_swift.swiftclient.client.Connection')
     def test_meta_unicode(self, mock_swift):
@@ -257,14 +258,14 @@ class TestSyncSwift(unittest.TestCase):
         mock_swift.return_value = swift_client
         swift_client.head_object.return_value = {
             'x-object-meta-old': 'old', 'etag': '%s' % etag}
+        swift_client.post_object.return_value = None
 
         self.sync_swift.upload_object(key, storage_policy, mock_ic)
 
         swift_client.post_object.assert_called_with(
-            self.aws_bucket,
-            key,
-            {'x-object-meta-new': '\xf0\x9f\x91\x8d',
-             'x-object-meta-old': 'updated'})
+            self.aws_bucket, key, headers={
+                'x-object-meta-new': '\xf0\x9f\x91\x8d',
+                'x-object-meta-old': 'updated'})
 
     @mock.patch('s3_sync.sync_swift.swiftclient.client.Connection')
     @mock.patch('s3_sync.sync_swift.FileWrapper')
@@ -518,12 +519,14 @@ class TestSyncSwift(unittest.TestCase):
         swift_client.get_object.return_value = ({
             'etag': etag
         }, '')
+        swift_client.post_object.return_value = None
 
         self.sync_swift.upload_object(key, storage_policy, mock_ic)
 
         swift_client.post_object.assert_called_with(
-            self.aws_bucket, key,
-            {'x-object-meta-new': 'new', 'x-object-meta-old': 'updated'})
+            self.aws_bucket, key, headers={
+                'x-object-meta-new': 'new',
+                'x-object-meta-old': 'updated'})
 
     @mock.patch('s3_sync.sync_swift.swiftclient.client.Connection')
     def test_slo_no_changes(self, mock_swift):

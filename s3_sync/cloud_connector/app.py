@@ -189,6 +189,29 @@ class CloudConnectorController(Controller):
                              headers=no_hop_headers, request=req,
                              content_type=resp_type)
 
+    def _provider_fn_with_fallback(self, provider_fn_name, *args, **kwargs):
+        """
+        Calls the method name in provider_fn_name on the local-to-me provider,
+        and then if the result is not 2xx, calls it on the remote-to-me
+        provider.
+
+        In all cases, the last ProviderResponse instance is returned
+        """
+        for provider_name in ('local_to_me_provider', 'remote_to_me_provider'):
+            provider = getattr(self, provider_name)
+            provider_fn = getattr(provider, provider_fn_name)
+            arg_str = ', '.join(map(repr, args) + [
+                '%s=%r' % (k, v) for k, v in kwargs])
+            self.app.logger.debug('Calling %s.%s(%s)', provider_name,
+                                  provider_fn_name, arg_str)
+            provider_resp = provider_fn(*args, **kwargs)
+            self.app.logger.debug('Got %s for %s.%s(%s)',
+                                  provider_resp.status, provider_name,
+                                  provider_fn_name, arg_str)
+            if provider_resp.status // 100 == 2:
+                break
+        return provider_resp
+
     def GETorHEAD(self, req):
         # Note: account operations were already filtered out in
         # get_controller(), and the only allowed container operation was GET.
@@ -200,19 +223,9 @@ class CloudConnectorController(Controller):
         # non-success.
         provider_fn_name = 'get_object' if req.method == 'GET' else \
             'head_object'
-        for provider_name in ('local_to_me_provider', 'remote_to_me_provider'):
-            provider = getattr(self, provider_name)
-            provider_fn = getattr(provider, provider_fn_name)
-            self.app.logger.debug('Calling %s(%r) on %s', provider_fn_name,
-                                  self.object_name, provider_name)
-            provider_resp = provider_fn(
-                self.object_name.decode('utf8'),  # boto wants Unicode?
-            )
-            self.app.logger.debug('Got %s for %s(%r) on %s',
-                                  provider_resp.status, provider_fn_name,
-                                  self.object_name, provider_name)
-            if provider_resp.status // 100 == 2:
-                break
+        provider_resp = self._provider_fn_with_fallback(
+            # Apparently boto wants Unicode?
+            provider_fn_name, self.object_name.decode('utf8'))
 
         # If we know the container ("bucket" if the request we're servicing
         # came in via S3 API middleware) exists, and the response is a 404, we
@@ -244,22 +257,63 @@ class CloudConnectorController(Controller):
         # get_controller()
         return self.GETorHEAD(req)
 
+    def _handle_copy_put_from_swift3(self, req):
+        if req.headers['X-Amz-Metadata-Directive'] != 'REPLACE':
+            raise swob.HTTPNotImplemented(
+                'X-Amz-Metadata-Directive was not "REPLACE"; '
+                'only object-overwrite copying is supported.')
+        raw_path = urllib.unquote(req.environ['RAW_PATH_INFO'])
+        copy_from = urllib.unquote(req.headers['x-copy-from'])
+        if raw_path != copy_from:
+            raise swob.HTTPNotImplemented(
+                'X-Amz-Copy-Source != object path; '
+                'only object-overwrite copying is supported.')
+
+        return self._provider_fn_with_fallback(
+            'post_object', self.object_name.decode('utf8'), req.headers)
+
     @utils.public
     def PUT(self, req):
         # Note: account and controller operations were already filtered out in
         # get_controller()
 
-        # For PUTs, cloud-connector only writes to the local-to-me object
-        # store.
-        self.app.logger.debug('Calling %s(%r) on %s', 'put_object',
-                              self.object_name, 'local_to_me_provider')
-        provider_resp = self.local_to_me_provider.put_object(
-            self.object_name.decode('utf8'),  # boto wants Unicode?
-            req.headers, req.body_file,
-        )
-        self.app.logger.debug('Got %s for %s(%r) on %s',
-                              provider_resp.status, 'put_object',
-                              self.object_name, 'local_to_me_provider')
+        # Object metadata updates (POST in Swift API) that come in through the
+        # S3 API are actually copying PUTs, and end up here with
+        # x-amz-copy-source set, x-amz-metadata-directive set to "REPLACE", and
+        # a content-length of '0'.
+        #
+        # Headers will have:
+        #  ('X-Amz-Metadata-Directive', 'REPLACE'),
+        #  ('X-Copy-From', '/<contaienr>/<key>'),  (uri quoted)
+        #
+        # Environ will have:
+        # 'PATH_INFO': '/v1/<acct>/<container>/<key>',
+        # 'CONTENT_LENGTH': '0',
+        # 'HTTP_X_AMZ_METADATA_DIRECTIVE': 'REPLACE',
+        # 'HTTP_X_COPY_FROM': '/<container>/<key>', (uri quoted)
+        # 'swift.source': 'S3',
+        # 'RAW_PATH_INFO': '/<container>/<key>', (uri quoted)
+        # 'headers_raw': (
+        #     ('Content-Length', '0'),
+        #     ('x-amz-copy-source', '<bucket>/<key>'),  (uri qutoed)
+        #     ('kx-amz-metadata-directive', 'REPLACE')
+        # )
+        if req.environ.get('swift.source') == 'S3' and \
+                'X-Amz-Metadata-Directive' in req.headers:
+            provider_resp = self._handle_copy_put_from_swift3(req)
+        else:
+            # For PUTs, cloud-connector only writes to the local-to-me object
+            # store.
+            self.app.logger.debug('Calling %s(%r) on %s', 'put_object',
+                                  self.object_name, 'local_to_me_provider')
+            provider_resp = self.local_to_me_provider.put_object(
+                self.object_name.decode('utf8'),  # boto wants Unicode?
+                req.headers, req.body_file,
+            )
+            self.app.logger.debug('Got %s for %s(%r) on %s',
+                                  provider_resp.status, 'put_object',
+                                  self.object_name, 'local_to_me_provider')
+
         if provider_resp.status == 200:
             # S3 returns 200 but `swift3` expects what Swift returns, which is
             # 201.  So we catch the 200, turn it into 201, then swift3 will
