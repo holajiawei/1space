@@ -35,28 +35,15 @@ class TestCloudConnector(TestCloudSyncBase):
             # background daemons won't be mucking about with our objects while
             # these tests are trying to do _their_ job.
             lambda m: m.get('container') == u"s3-restore")
-        # {
-        #     "account": "AUTH_test",
-        #     "aws_bucket": "s3-sync-test",
-        #     "aws_endpoint": "http://localhost:10080",
-        #     "aws_identity": "s3-sync-test",
-        #     "aws_secret": "s3-sync-test",
-        #     "container": "s3-restore",
-        #     "copy_after": 3600,
-        #     "propagate_delete": false,
-        #     "protocol": "s3",
-        #     "retain_local": false,
-        #     "restore_object": true
-        # },
         self.conn_noshunt = self.conn_for_acct_noshunt(u'AUTH_test')
         self.local_to_me_provider = create_provider(self.mapping, 1, False)
-        self.cc_endpoint = "http://localhost:%d" % (
+        self.cc_endpoint = "http://cloud-connector:%d" % (
             self.PORTS['cloud_connector'],)
         self.cc_mapping = {
             "account": u"AUTH_test",
             "container": "s3-restore",
             "aws_bucket": "s3-restore",
-            "aws_endpoint": "http://localhost:8081",
+            "aws_endpoint": "http://cloud-connector:8081",
             "aws_identity": u"test:tester",
             "aws_secret": u"testing",
             "protocol": "s3",

@@ -1,0 +1,31 @@
+#!/bin/bash
+
+# The following method is cross-platform (OS X and Linux)
+MYDIR=$(dirname $(python -c 'import os,sys;print os.path.realpath(sys.argv[1])' $0))
+cd "$MYDIR"/..
+
+# You can set these in "port-mapping.env" to publish the Swift and S3 API
+# endpoints to different ports on the host:
+# HOST_S3_PORT=...
+# HOST_SWIFT_PORT=...
+# HOST_CLOUD_CONNECTOR_PORT=...
+test -f ./port-mapping.env && . ./port-mapping.env
+
+# This will be fast if the image is up-to-date and cached:
+docker pull bouncestorage/swift-aio
+
+# Build our image
+docker build -t swift-s3-sync -f test/container/Dockerfile .
+
+# Create a network for our party
+docker network create --attachable swift-s3-sync-net 2>/dev/null ||:
+
+docker container stop swift-s3-sync 2>/dev/null ||:
+docker container rm swift-s3-sync 2>/dev/null ||:
+
+docker run -d -v `pwd`:/swift-s3-sync \
+    --hostname swift-s3-sync --name swift-s3-sync \
+    --network swift-s3-sync-net --network-alias swift-s3-sync \
+    -p "${HOST_S3_PORT:-10080}:10080" \
+    -p "${HOST_SWIFT_PORT:-8080}:8080" \
+    swift-s3-sync

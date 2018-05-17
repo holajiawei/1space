@@ -1,11 +1,17 @@
 #!/bin/bash
 
-# The --build is safe because if nothing in the Dockerfile has changed, it'll
-# just quickly "build" entirely from cache and not do anything.
-docker-compose up --build -d
-docker-compose exec swift-s3-sync /bin/bash -c 'cd /swift-s3-sync; flake8'
+# The following method is cross-platform (OS X and Linux)
+MYDIR=$(dirname $(python -c 'import os,sys;print os.path.realpath(sys.argv[1])' $0))
+cd "$MYDIR"
+
+# Make sure container is running
+./up
+
+docker exec swift-s3-sync /bin/bash -c \
+    'cd /swift-s3-sync; flake8'
+
 export COVER_HTML_DIR=/swift-s3-sync/.coverhtml
-docker-compose exec swift-s3-sync /bin/bash -c "mkdir -p $COVER_HTML_DIR; \
+docker exec swift-s3-sync /bin/bash -c "mkdir -p $COVER_HTML_DIR; \
     cd /swift-s3-sync; \
     nosetests --with-coverage --cover-branches \
     --cover-package=s3_sync --cover-erase --cover-html \

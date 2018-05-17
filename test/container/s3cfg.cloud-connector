@@ -1,7 +1,7 @@
 [default]
 access_key=test:tester
 secret_key=testing
-host_base=localhost:8081
-host_bucket=localhost:8081
+host_base=cloud-connector:8081
+host_bucket=cloud-connector:8081
 use_https = False
 bucket_location = us-east-1

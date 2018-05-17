@@ -4,4 +4,6 @@ docker-compose.custom.yml
 .env
 /venv
 .coverage
-.coverhtml
+/.coverhtml
+/.swift-s3-sync
+/port-mapping.env

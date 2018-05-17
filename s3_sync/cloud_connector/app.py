@@ -21,7 +21,7 @@ import sys
 import urllib
 
 from swift.common import swob, utils, wsgi
-from swift.proxy.controllers.base import Controller
+from swift.proxy.controllers.base import Controller, get_cache_key
 from swift.proxy.server import Application as ProxyApplication
 
 from s3_sync.cloud_connector.auth import S3_IDENTITY_ENV_KEY
@@ -82,6 +82,36 @@ class CloudConnectorController(Controller):
         self.app.logger.debug('For %s using remote_to_me profile %r',
                               self.aco_str,
                               safe_profile_config(self.remote_to_me_profile))
+
+    def _cache_container_exists(self, req, account, container):
+        """
+        The swift3 middleware, at least, changes what it says in an object 404
+        response based on whether or not swift3 thinks the actual underlying
+        Swift container exists.  So we need to stick our knowledge of
+        underlying Swift container existence in the cache for swift3 to find.
+        The actual values are obviously made up garbage, but swift3 just looks
+        for existence.
+        """
+        fake_info = {
+            'status': 200,
+            'read_acl': '',
+            'write_acl': '',
+            'sync_key': '',
+            'object_count': '0',
+            'bytes': '0',
+            'versions': None,
+            'storage_policy': '0',
+            'cors': {
+                'allow_origin': None,
+                'expose_headers': None,
+                'max_age': None,
+            },
+            'meta': {},
+            'sysmeta': {},
+        }
+        cache_key = get_cache_key(account, container)
+        infocache = req.environ.setdefault('swift.infocache', {})
+        infocache[cache_key] = fake_info
 
     def handle_object_listing(self, req):
         # XXX(darrell): this is still uncomfortably-duplicated with
@@ -184,6 +214,16 @@ class CloudConnectorController(Controller):
             if provider_resp.status // 100 == 2:
                 break
 
+        # If we know the container ("bucket" if the request we're servicing
+        # came in via S3 API middleware) exists, and the response is a 404, we
+        # need to note that with a fake cache entry.
+        if provider_resp.status == 404:
+            body = ''.join(provider_resp.body)
+            provider_resp.body = [body]
+            if body and 'The specified key does not exist.' in body:
+                self._cache_container_exists(req, self.account_name,
+                                             self.container_name)
+
         # Note convert_to_swift_headers() will have already been called on
         # the returned S3 headers.
         # ...but we should still call filter_hop_by_hop_headers()
@@ -254,6 +294,12 @@ class CloudConnectorApplication(ProxyApplication):
     swift3 middleware) to run on cloud compute nodes and
     seamlessly provide R/W access to the "cloud sync" data namespace.
     """
+    # We're going to want fine-grained control over our pipeline and, for
+    # example, don't want proxy code sticking the "copy" middleware back in
+    # when we can't have it.  This setting disables automatic mucking with our
+    # pipeline.
+    modify_wsgi_pipeline = None
+
     def __init__(self, conf, logger=None):
         self.conf = conf
 

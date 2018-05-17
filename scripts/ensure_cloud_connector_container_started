@@ -1,0 +1,30 @@
+#!/bin/bash
+set -e
+
+# The following method is cross-platform (OS X and Linux)
+MYDIR=$(dirname $(python -c 'import os,sys;print os.path.realpath(sys.argv[1])' $0))
+cd "$MYDIR"/..
+
+# You can set these in "port-mapping.env" to publish the Swift and S3 API
+# endpoints to different ports on the host:
+# HOST_S3_PORT=...
+# HOST_SWIFT_PORT=...
+# HOST_CLOUD_CONNECTOR_PORT=...
+test -f ./port-mapping.env && . ./port-mapping.env
+
+# Build the image
+docker build -t cloud-connector -f cloud-connector-docker/Dockerfile .
+
+# Create a network for our party (if necessary)
+docker network create --attachable swift-s3-sync-net 2>/dev/null ||:
+
+docker container stop cloud-connector 2>/dev/null ||:
+docker container rm cloud-connector 2>/dev/null ||:
+
+docker run -d -v `pwd`:/swift-s3-sync \
+    --network swift-s3-sync-net --network-alias cloud-connector \
+    --restart on-failure --name cloud-connector \
+    -p "${HOST_CLOUD_CONNECTOR_PORT:-8081}:8081" \
+    -e AWS_ACCESS_KEY_ID=s3-sync-test -e AWS_SECRET_ACCESS_KEY=s3-sync-test \
+    -e CONF_ENDPOINT=http://swift-s3-sync:10080 \
+    cloud-connector

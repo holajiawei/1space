@@ -1,3 +1,6 @@
+# I am intended to be built from the top of the swift-s3-sync tree like this:
+#    docker build [...] -f test/container/Dockerfile .
+
 FROM bouncestorage/swift-aio:latest
 
 RUN apt-get update && \
@@ -6,32 +9,32 @@ RUN apt-get update && \
         openjdk-8-jre-headless net-tools && \
     apt-get clean
 
-RUN pip install -U -e git://github.com/swiftstack/botocore.git@1.4.32.6#egg=botocore \
-        boto3==1.3.1 \
-        -e git://github.com/swiftstack/container-crawler.git@0.0.13#egg=container-crawler \
-        coverage nose flake8==3.5.0 psutil s3cmd mock && \
+COPY requirements.txt requirements-test.txt /tmp/
+RUN pip install -U -r /tmp/requirements.txt -r /tmp/requirements-test.txt && \
     pip uninstall -y hacking
 
-RUN mkdir -p /s3proxy/data
-RUN cd /s3proxy && wget https://github.com/andrewgaul/s3proxy/releases/download/s3proxy-1.5.3/s3proxy
+RUN mkdir -p /s3proxy/data && \
+    cd /s3proxy && wget https://github.com/andrewgaul/s3proxy/releases/download/s3proxy-1.5.3/s3proxy
 
 RUN mkdir /swift-s3-sync && mkdir /var/lib/swift-s3-sync
 EXPOSE 10080
 RUN locale-gen en_US.UTF-8
 ENV LANG='en_US.UTF-8' LANGUAGE='en_US:en' LC_ALL='en_US.UTF-8'
 
-# These two patches make tempauth and swiftclient both work properly with a
-# Swift Account name containing a Unicode character.
-COPY tempauth.patch /tmp/
+# These patches improve Unicode handling in tempauth, swiftclient, and swift3
+COPY test/container/tempauth.patch /tmp/
 RUN bash -c "cd /usr/local/src \
     && patch -p0 < /tmp/tempauth.patch \
     && rm -f /tmp/tempauth.patch"
-COPY swiftclient.patch /tmp/
+COPY test/container/swiftclient.patch /tmp/
 RUN bash -c "cd /usr/local/src \
     && patch -p0 < /tmp/swiftclient.patch \
     && rm -f /tmp/swiftclient.patch"
-COPY swift3-unicode-fix.patch /tmp/
+COPY test/container/swift3-unicode-fix.patch /tmp/
 RUN bash -c "cd /usr/local/src \
     && patch -p0 < /tmp/swift3-unicode-fix.patch \
     && rm -f /tmp/swift3-unicode-fix.patch"
+
+ENV CONF_BUCKET=cloud-connector-conf
+
 CMD ["/bin/bash", "/swift-s3-sync/test/container/launch.sh"]

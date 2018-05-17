@@ -1,3 +1,6 @@
-nose==1.3.7
-flake8==2.5.4
+nose
+flake8==3.5.0
 mock==2.0.0
+psutil
+s3cmd
+coverage
