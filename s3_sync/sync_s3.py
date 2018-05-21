@@ -315,6 +315,12 @@ class SyncS3(BaseSync):
             try:
                 resp = getattr(s3_client, op)(**args)
                 body = resp.get('Body', iter(['']))
+
+                # S3 API responses are inconsistent, so there will be various
+                # special-cases here.  This one about CopyObjectResult is for
+                # PUTs that copy objects (to update metadata or whatever).
+                # The API response for delete_object is also different (but
+                # only sometimes?).
                 if 'CopyObjectResult' in resp:
                     return ProviderResponse(True, 200, {}, body)
                 if ('ResponseMetadata' not in resp and

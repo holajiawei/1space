@@ -35,15 +35,18 @@ class ProviderResponse(object):
         wsgi_status = '%d %s' % (self.status, RESPONSE_REASONS[self.status][0])
         return wsgi_status, self.headers.items(), self.body
 
-    def __repr__(self):
-        return '<%s: %s, %r, %r, %r>' % (
-            self.__class__.__name__, self.success, self.status, self.headers,
-            (self.body or '')[:70])
-
     def reraise(self):
         if self.exc_info:
             raise self.exc_info[0], self.exc_info[1], self.exc_info[2]
-        raise ValueError('reraise had no prior exception for %r' % self)
+        header_str = '{' + ', '.join('%r: %r' % (k, self.headers[k])
+                                     for k in sorted(self.headers)) + '}'
+        body_str = ''.join(self.body) if self.body else ''
+        if len(body_str) > 70:
+            body_str = body_str[:70] + '...'
+        me_as_a_str = '<%s: %s, %r, %s, %r>' % (
+            self.__class__.__name__, self.success, self.status,
+            header_str, body_str)
+        raise ValueError('reraise had no prior exception for %s' % me_as_a_str)
 
 
 class BaseSync(object):

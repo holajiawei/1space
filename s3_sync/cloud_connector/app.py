@@ -189,6 +189,21 @@ class CloudConnectorController(Controller):
                              headers=no_hop_headers, request=req,
                              content_type=resp_type)
 
+    def _arg_str(self, *args, **kwargs):
+        return ', '.join(map(repr, args) + [
+            '%s=%r' % (k, v) for k, v in kwargs])
+
+    def _log_provider_call(self, provider_name, provider_fn_name, *args,
+                           **kwargs):
+        self.app.logger.debug('Calling %s.%s(%s)', provider_name,
+                              provider_fn_name, self._arg_str(*args, **kwargs))
+
+    def _log_provider_response(self, provider_name, provider_fn_name, resp,
+                               *args, **kwargs):
+        self.app.logger.debug('Got %s for %s.%s(%s)', resp.status,
+                              provider_name, provider_fn_name,
+                              self._arg_str(*args, **kwargs))
+
     def _provider_fn_with_fallback(self, provider_fn_name, *args, **kwargs):
         """
         Calls the method name in provider_fn_name on the local-to-me provider,
@@ -200,14 +215,11 @@ class CloudConnectorController(Controller):
         for provider_name in ('local_to_me_provider', 'remote_to_me_provider'):
             provider = getattr(self, provider_name)
             provider_fn = getattr(provider, provider_fn_name)
-            arg_str = ', '.join(map(repr, args) + [
-                '%s=%r' % (k, v) for k, v in kwargs])
-            self.app.logger.debug('Calling %s.%s(%s)', provider_name,
-                                  provider_fn_name, arg_str)
+            self._log_provider_call(provider_name, provider_fn_name, *args,
+                                    **kwargs)
             provider_resp = provider_fn(*args, **kwargs)
-            self.app.logger.debug('Got %s for %s.%s(%s)',
-                                  provider_resp.status, provider_name,
-                                  provider_fn_name, arg_str)
+            self._log_provider_response(provider_name, provider_fn_name,
+                                        provider_resp, *args, **kwargs)
             if provider_resp.status // 100 == 2:
                 break
         return provider_resp
@@ -304,15 +316,18 @@ class CloudConnectorController(Controller):
         else:
             # For PUTs, cloud-connector only writes to the local-to-me object
             # store.
-            self.app.logger.debug('Calling %s(%r) on %s', 'put_object',
-                                  self.object_name, 'local_to_me_provider')
+            self._log_provider_call(
+                'local_to_me_provider', 'put_object',
+                self.object_name.decode('utf8'),
+                req.headers, req.body_file)
             provider_resp = self.local_to_me_provider.put_object(
                 self.object_name.decode('utf8'),  # boto wants Unicode?
                 req.headers, req.body_file,
             )
-            self.app.logger.debug('Got %s for %s(%r) on %s',
-                                  provider_resp.status, 'put_object',
-                                  self.object_name, 'local_to_me_provider')
+            self._log_provider_response(
+                'local_to_me_provider', 'put_object', provider_resp,
+                self.object_name.decode('utf8'),
+                req.headers, req.body_file)
 
         if provider_resp.status == 200:
             # S3 returns 200 but `swift3` expects what Swift returns, which is
@@ -327,13 +342,29 @@ class CloudConnectorController(Controller):
                              headers=headers, request=req)
 
     @utils.public
-    def POST(self, req):
-        # TODO: implement this
-        return swob.HTTPNotImplemented()
+    def DELETE(self, req):
+        # For DELETEs, cloud-connector only deletes from the local-to-me object
+        # store.
+        self._log_provider_call('local_to_me_provider', 'delete_object',
+                                self.object_name.decode('utf8'))
+        provider_resp = self.local_to_me_provider.delete_object(
+            self.object_name.decode('utf8'),  # boto wants Unicode?
+        )
+        self._log_provider_response('local_to_me_provider', 'delete_object',
+                                    provider_resp,
+                                    self.object_name.decode('utf8'))
+
+        headers = dict(filter_hop_by_hop_headers(
+            provider_resp.headers.items()))
+        return swob.Response(app_iter=iter(provider_resp.body),
+                             status=provider_resp.status,
+                             headers=headers, request=req)
 
     @utils.public
-    def DELETE(self, req):
+    def POST(self, req):
         # TODO: implement this
+        # NOTE: obj metadata update via S3 API (`swift3` middleware) is
+        # implemented in the PUT method.
         return swob.HTTPNotImplemented()
 
     @utils.public

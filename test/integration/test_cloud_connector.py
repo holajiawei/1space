@@ -650,82 +650,126 @@ class TestCloudConnector(TestCloudSyncBase):
         ], list_resp['CommonPrefixes'])
         self.assertFalse(list_resp['IsTruncated'])
 
-    def test_obj_head_and_get(self):
-        # Not there yet...
+    def test_obj_head_and_get_and_delete(self):
+        # Unique obj name not used elsewhere:
         obj_name = u'shimmy\u062ajimmy'
 
+        # Not there yet
         resp = self.cc_provider.get_object(obj_name)
-
         self.assertEqual(404, resp.status)
         self.assertEqual('The specified key does not exist.',
                          ''.join(resp.body))
 
+        # For some reason, a delete at this point gets a 404 back from the boto
+        # library in the cloud-connector (but not later).  I think the bucket
+        # exists, so I dunno why this is true, but it seems "fine".
+        resp = self.cc_provider.delete_object(obj_name)
+        self.assertEqual(404, resp.status)
+
         # Put an obj into swift
-        self.conn_noshunt.put_object(
+        swift_etag = self.conn_noshunt.put_object(
             self.mapping['container'], obj_name,
             'abc', headers={'x-object-meta-slim': 'slam'})
         # Sanity-check
         headers = self.conn_noshunt.head_object(self.mapping['container'],
                                                 obj_name)
         self.assertEqual('3', headers['content-length'])
+        self.assertEqual(swift_etag, headers['etag'])
 
+        # Can GET & HEAD swift obj through c-c
         resp = self.cc_provider.get_object(obj_name)
-
         self.assertEqual(200, resp.status)
         self.assertEqual('abc', ''.join(resp.body))
         self.assertEqual('3', resp.headers['Content-Length'])
         self.assertEqual('slam', resp.headers['x-object-meta-slim'])
 
         resp = self.cc_provider.head_object(obj_name)
-
         self.assertEqual(200, resp.status)
         self.assertEqual('', ''.join(resp.body))
         self.assertEqual('3', resp.headers['Content-Length'])
         self.assertEqual('slam', resp.headers['x-object-meta-slim'])
 
-        # Sanity-check
+        # If we try to DELETE an object only in Swift, cloud-connector will
+        # not delete the object from Swift.  This is a safety mechanism to
+        # prevent accidental deletion of onprem data from compute that bursted
+        # into the public cloud.
+        resp = self.cc_provider.delete_object(obj_name)
+        # Yup, it's true that a S3 DELETE of nonexistent object gets a 204.
+        self.assertEqual(204, resp.status)
+
+        # Show that Swift object is still there
         headers = self.conn_noshunt.head_object(self.mapping['container'],
                                                 obj_name)
         self.assertEqual('3', headers['content-length'])
+        self.assertEqual(swift_etag, headers['etag'])
 
         # Stick a different obj in S3 and make sure that's what we get
-        self.local_to_me_provider.put_object(obj_name,
-                                             {'x-object-meta-jamm': 'bamm'},
-                                             'def')
+        self.local_to_me_provider.put_object(
+            obj_name, {'x-object-meta-jamm': 'bamm'}, 'defff')
 
         resp = self.cc_provider.get_object(obj_name)
-
         self.assertEqual(200, resp.status)
-        self.assertEqual('def', ''.join(resp.body))
+        self.assertEqual('defff', ''.join(resp.body))
         self.assertEqual('bamm', resp.headers['x-object-meta-jamm'])
 
         resp = self.cc_provider.head_object(obj_name)
-
         self.assertEqual(200, resp.status)
         self.assertEqual('', ''.join(resp.body))
-        self.assertEqual('3', resp.headers['Content-Length'])
+        self.assertEqual('5', resp.headers['Content-Length'])
         self.assertEqual('bamm', resp.headers['x-object-meta-jamm'])
-
-        # Sanity-check
-        headers = self.conn_noshunt.head_object(self.mapping['container'],
-                                                obj_name)
-        self.assertEqual('3', headers['content-length'])
 
         # And same if we delete the obj in swift
         self.conn_noshunt.delete_object(self.mapping['container'], obj_name)
 
         resp = self.cc_provider.get_object(obj_name)
-
         self.assertEqual(200, resp.status)
-        self.assertEqual('def', ''.join(resp.body))
+        self.assertEqual('defff', ''.join(resp.body))
         self.assertEqual('bamm', resp.headers['x-object-meta-jamm'])
 
         resp = self.cc_provider.head_object(obj_name)
-
         self.assertEqual(200, resp.status)
         self.assertEqual('', ''.join(resp.body))
-        self.assertEqual('3', resp.headers['Content-Length'])
+        self.assertEqual('5', resp.headers['Content-Length'])
         self.assertEqual('bamm', resp.headers['x-object-meta-jamm'])
+
+        # Now put an object back in Swift, delete the S3 object, and show we
+        # get the new Swift object.
+        swift_etag = self.conn_noshunt.put_object(
+            self.mapping['container'], obj_name,
+            'xyzz', headers={'x-object-meta-sloo': 'floo'})
+        headers = self.conn_noshunt.head_object(self.mapping['container'],
+                                                obj_name)
+        self.assertEqual('4', headers['content-length'])
+        self.assertEqual(swift_etag, headers['etag'])
+
+        resp = self.cc_provider.get_object(obj_name)
+        self.assertEqual(200, resp.status)
+        self.assertEqual('defff', ''.join(resp.body))
+        self.assertEqual('bamm', resp.headers['x-object-meta-jamm'])
+
+        resp = self.cc_provider.head_object(obj_name)
+        self.assertEqual(200, resp.status)
+        self.assertEqual('', ''.join(resp.body))
+        self.assertEqual('5', resp.headers['Content-Length'])
+        self.assertEqual('bamm', resp.headers['x-object-meta-jamm'])
+
+        # Delete the obj from S3
+        resp = self.cc_provider.delete_object(obj_name)
+        self.assertEqual(204, resp.status)
+
+        # Now we see the Swift obj
+        resp = self.cc_provider.get_object(obj_name)
+        self.assertEqual(200, resp.status)
+        self.assertEqual('xyzz', ''.join(resp.body))
+        self.assertNotIn('x-object-meta-jamm', resp.headers)
+        self.assertEqual('floo', resp.headers['x-object-meta-sloo'])
+
+        resp = self.cc_provider.head_object(obj_name)
+        self.assertEqual(200, resp.status)
+        self.assertEqual('', ''.join(resp.body))
+        self.assertEqual('4', resp.headers['Content-Length'])
+        self.assertNotIn('x-object-meta-jamm', resp.headers)
+        self.assertEqual('floo', resp.headers['x-object-meta-sloo'])
 
     def test_obj_put(self):
         # Not there yet...
