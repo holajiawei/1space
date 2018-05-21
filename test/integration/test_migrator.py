@@ -20,6 +20,7 @@ from functools import partial
 import hashlib
 import json
 import StringIO
+from swift.common.middleware.acl import format_acl
 import swiftclient
 import time
 import urllib
@@ -27,6 +28,7 @@ from . import (
     TestCloudSyncBase, clear_swift_container, wait_for_condition,
     clear_s3_bucket, clear_swift_account, WaitTimedOut)
 import migrator_utils
+from s3_sync.utils import ACCOUNT_ACL_KEY
 
 
 class TestMigrator(TestCloudSyncBase):
@@ -587,6 +589,74 @@ class TestMigrator(TestCloudSyncBase):
         new_hdrs = self.local_swift(
             'head_container', migration['container'])
         self.assertNotIn(u'x-container-meta-migrated-\u062a', new_hdrs)
+
+    def test_migrate_account_metadata(self):
+        migration = self.swift_migration()
+        conn_remote = self.conn_for_acct(migration['aws_account'])
+        conn_local = self.conn_for_acct(migration['account'])
+        status = migrator_utils.TempMigratorStatus(migration)
+        migrator = migrator_utils.MigratorFactory().get_migrator(
+            migration, status)
+
+        acl_dict = {'read-write': [u'AUTH_\u062aacct2']}
+        acl = format_acl(version=2, acl_dict=acl_dict)
+        expected_headers = {
+            'x-account-meta-test1': 'mytestval',
+            u'x-account-meta-\u062atest1': u'mytestval\u062a',
+            'x-account-meta-temp-url-key': 'mysecret',
+            ACCOUNT_ACL_KEY: acl
+        }
+
+        def validate_acct_metadata(assertit=False):
+            hdrs = conn_local.head_account()
+            for hdr in expected_headers:
+                if assertit:
+                    self.assertEqual(expected_headers[hdr], hdrs.get(hdr),
+                                     'value wrong for "%s" expected: "%s", '
+                                     'got: "%s"' % (hdr, expected_headers[hdr],
+                                                    hdrs.get(hdr)))
+                else:
+                    if expected_headers[hdr] != hdrs.get(hdr):
+                        return False
+            return True
+
+        def validate_no_metadata():
+            hdrs = conn_local.head_account()
+            for hdr in expected_headers:
+                if hdrs.get(hdr) is not None:
+                    return False
+            return True
+
+        if not validate_no_metadata():
+            # This can happen if the previous run failed and the clean up
+            # code at end of test doesn't run.
+            # TODO: make clean up account metadata part of tearDown
+            conn_local.post_account({
+                'x-account-meta-test1': '',
+                'x-account-meta-temp-url-key': '',
+                u'x-account-meta-\u062atest1': '',
+                ACCOUNT_ACL_KEY: '',
+            })
+            time.sleep(2)
+
+        conn_remote.post_account({
+            'x-account-meta-test1': 'mytestval',
+            'x-account-meta-temp-url-key': 'mysecret',
+            u'x-account-meta-\u062atest1': u'mytestval\u062a',
+            ACCOUNT_ACL_KEY: acl,
+        })
+
+        self.assertTrue(validate_no_metadata())
+        migrator.next_pass()
+        self.assertTrue(validate_acct_metadata())
+        conn_remote.post_account({
+            'x-account-meta-test1': '',
+            u'x-account-meta-\u062atest1': '',
+            'x-account-meta-temp-url-key': '',
+            ACCOUNT_ACL_KEY: '',
+        })
+        migrator.next_pass()
+        self.assertTrue(validate_no_metadata())
 
     def test_propagate_container_meta_changes(self):
         migration = self._find_migration(

@@ -183,6 +183,9 @@ class BaseSync(object):
     def post_object(self, swift_key, headers):
         raise NotImplementedError()
 
+    def head_account(self):
+        raise NotImplementedError()
+
     def put_object(self, swift_key, headers, body, query_string=None):
         """
         Uploads a single object to the provider's object store, as configured

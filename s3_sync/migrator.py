@@ -35,7 +35,8 @@ from .provider_factory import create_provider
 from .utils import (convert_to_local_headers, convert_to_swift_headers,
                     get_container_headers, iter_listing, RemoteHTTPError,
                     SWIFT_TIME_FMT, diff_container_headers,
-                    get_sys_migrator_header, MigrationContainerStates)
+                    get_sys_migrator_header, MigrationContainerStates,
+                    diff_account_headers)
 from swift.common.http import HTTP_NOT_FOUND, HTTP_CONFLICT
 from swift.common import swob
 from swift.common.internal_client import UnexpectedResponse
@@ -312,7 +313,32 @@ class Migrator(object):
             self._maybe_delete_internal_container(local_container['name'])
             local_container = next(local_iterator)
 
+    def _process_account_metadata(self):
+        if self.config.get('protocol') != 'swift':
+            return
+        if not self.config.get('propagate_account_metadata'):
+            return
+
+        resp = self.provider.head_account()
+        if resp.status // 100 != 2:
+            raise UnexpectedResponse('Failed to read container headers for '
+                                     '"%s": %d' % (self.config['account'],
+                                                   resp.status_int), resp)
+        rem_headers = resp.headers
+        with self.ic_pool.item() as ic:
+            local_headers = self._head_internal_account(ic)
+            if rem_headers and local_headers:
+                header_changes = diff_account_headers(
+                    rem_headers, local_headers)
+                if header_changes:
+                    ic.set_account_metadata(self.config['account'],
+                                            dict(header_changes))
+                    self.logger.info(
+                        'Updated account metadata for %s: %s' %
+                        (self.config['account'], header_changes.keys()))
+
     def _next_pass(self):
+        self._process_account_metadata()
         worker_pool = eventlet.GreenPool(self.workers)
         for _ in xrange(self.workers):
             worker_pool.spawn_n(self._upload_worker)
@@ -391,6 +417,26 @@ class Migrator(object):
         for _ in range(self.workers):
             q.put(None)
         q.join()
+
+    def _head_internal_account(self, internal_client):
+        # This explicitly does not use get_account_metadata because it
+        # needs to be able to read the temp url key (swift_owner: True).
+        # It should be noted that this should be something internal client can
+        # do and there is a patch proposed to allow it.
+        req = swob.Request.blank(
+            internal_client.make_path(self.config['account']),
+            environ={
+                'REQUEST_METHOD': 'HEAD',
+                'swift_owner': True
+            })
+
+        resp = req.get_response(internal_client.app)
+        if resp.status_int // 100 != 2:
+            raise UnexpectedResponse('Failed to read container headers for '
+                                     '"%s": %d' % (self.config['account'],
+                                                   resp.status_int), resp)
+
+        return dict(resp.headers)
 
     def _update_container_headers(self, container, internal_client, headers):
         # This explicitly does not use update_container_metadata because it

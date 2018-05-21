@@ -72,6 +72,9 @@ HOP_BY_HOP_HEADERS = set([
 PROPAGATED_HDRS = ['x-container-read', 'x-container-write']
 MIGRATOR_HEADER = 'multi-cloud-internal-migrator'
 SHUNT_BYPASS_HEADER = 'x-cloud-sync-shunt-bypass'
+ACCOUNT_ACL_KEY = 'x-account-access-control'
+SYSMETA_ACCOUNT_ACL_KEY = \
+    get_sys_meta_prefix('account') + 'core-access-control'
 
 
 class MigrationContainerStates(object):
@@ -782,6 +785,37 @@ def diff_container_headers(remote_headers, local_headers):
                 [(k, rem_headers[k]) for k in missing_local_keys] +
                 [(k, '') for k in missing_remote_keys
                  if _propagated_hdr(k) or k in versioning_headers])
+
+
+def diff_account_headers(remote_headers, local_headers):
+    # account acls need to be translated to sysmeta
+    def _fix_acl(key):
+        if key == ACCOUNT_ACL_KEY:
+            return SYSMETA_ACCOUNT_ACL_KEY
+        return key
+
+    def _prop_hdr(hdr):
+        propagate_keys = [ACCOUNT_ACL_KEY, SYSMETA_ACCOUNT_ACL_KEY]
+        return hdr.startswith('x-account-meta') or hdr in propagate_keys
+
+    # remote_headers need to be utf8-encoded to match local,
+    # returns utf8-encoded strings
+    rem_headers = dict([(_fix_acl(k.lower().encode('utf8')), v.encode('utf8'))
+                        for k, v in remote_headers.items()
+                        if _prop_hdr(k.lower())])
+    loc_headers = dict([(_fix_acl(k.lower()), v) for k, v in
+                        local_headers.items()
+                        if _prop_hdr(k.lower())])
+    matching_keys = set(rem_headers.keys()).intersection(loc_headers.keys())
+    missing_remote_keys = set(
+        loc_headers.keys()).difference(rem_headers.keys())
+    missing_local_keys = set(
+        rem_headers.keys()).difference(loc_headers.keys())
+    return dict([(k, rem_headers[k])
+                 for k in matching_keys if
+                 rem_headers[k] != loc_headers.get(k)] +
+                [(k, rem_headers[k]) for k in missing_local_keys] +
+                [(k, '') for k in missing_remote_keys])
 
 
 def filter_hop_by_hop_headers(headers):
