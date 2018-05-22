@@ -589,6 +589,10 @@ class TestSyncS3(unittest.TestCase):
 
     def test_delete_object(self):
         key = 'key'
+        self.mock_boto3_client.delete_object.return_value = {
+            'DeleteMarker': False,
+            'VersionId': '',
+        }
 
         self.sync_s3.delete_object(key)
         self.mock_boto3_client.delete_object.assert_has_calls([
@@ -741,6 +745,10 @@ class TestSyncS3(unittest.TestCase):
 
         client = mock.Mock()
         session.client.return_value = client
+        client.delete_object.return_value = {
+            'DeleteMarker': False,
+            'VersionId': '',
+        }
 
         sync = SyncS3({'aws_bucket': self.aws_bucket,
                        'aws_identity': 'identity',
@@ -794,6 +802,10 @@ class TestSyncS3(unittest.TestCase):
 
                 client = mock.Mock()
                 session.client.return_value = client
+                client.delete_object.return_value = {
+                    'DeleteMarker': False,
+                    'VersionId': '',
+                }
 
                 sync = SyncS3(settings)
                 # Connections are only instantiated when there is an object to

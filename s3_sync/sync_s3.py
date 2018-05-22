@@ -22,6 +22,7 @@ import eventlet
 import hashlib
 import json
 import re
+import sys
 import traceback
 import urllib
 
@@ -179,25 +180,25 @@ class SyncS3(BaseSync):
                 params['ServerSideEncryption'] = 'AES256'
             s3_client.put_object(**params)
 
-    def _delete_not_found(self, s3_key):
-        '''Deletes the object and ignores the 404 Not Found error.'''
-        with self.client_pool.get_client() as s3_client:
-            try:
-                s3_client.delete_object(Bucket=self.aws_bucket, Key=s3_key)
-            except botocore.exceptions.ClientError as e:
-                resp_meta = e.response.get('ResponseMetadata', {})
-                if resp_meta.get('HTTPStatusCode', 0) == 404:
-                    self.logger.warning('%s already removed from %s' % (
-                        s3_key, self.aws_bucket))
-                else:
-                    raise
-
     def delete_object(self, swift_key):
         s3_key = self.get_s3_name(swift_key)
         self.logger.debug('Deleting object %s' % s3_key)
-        self._delete_not_found(s3_key)
+        resp = self._call_boto('delete_object', Bucket=self.aws_bucket,
+                               Key=s3_key)
+        if not resp.success:
+            if resp.status == 404:
+                self.logger.warning('%s already removed from %s', s3_key,
+                                    self.aws_bucket)
+            else:
+                resp.reraise()
         # If there is a manifest uploaded for this object, remove it as well
-        self._delete_not_found(self.get_manifest_name(s3_key))
+        resp_manifest = self._call_boto('delete_object',
+                                        Bucket=self.aws_bucket,
+                                        Key=self.get_manifest_name(s3_key))
+        if not resp_manifest.success and resp_manifest.status != 404:
+            resp_manifest.reraise()
+
+        return resp
 
     def shunt_object(self, req, swift_key):
         """Fetch an object from the remote cluster to stream back to a client.
@@ -314,13 +315,22 @@ class SyncS3(BaseSync):
             try:
                 resp = getattr(s3_client, op)(**args)
                 body = resp.get('Body', iter(['']))
+
+                # S3 API responses are inconsistent, so there will be various
+                # special-cases here.  This one about CopyObjectResult is for
+                # PUTs that copy objects (to update metadata or whatever).
+                # The API response for delete_object is also different (but
+                # only sometimes?).
                 if 'CopyObjectResult' in resp:
                     return ProviderResponse(True, 200, {}, body)
+                if ('ResponseMetadata' not in resp and
+                        op == 'delete_object'):
+                    return ProviderResponse(True, 204, {}, body)
 
                 return ProviderResponse(
                     True, resp['ResponseMetadata']['HTTPStatusCode'],
                     convert_to_swift_headers(
-                        resp['ResponseMetadata']['HTTPHeaders']),
+                        resp['ResponseMetadata'].get('HTTPHeaders', {})),
                     body)
             except botocore.exceptions.ClientError as e:
                 self.logger.debug(
@@ -329,11 +339,16 @@ class SyncS3(BaseSync):
                     self.settings['aws_bucket'].encode('utf8'),
                     self.settings['aws_identity'].encode('utf8'),
                     e.response)
-                return ProviderResponse(
-                    False, e.response['ResponseMetadata']['HTTPStatusCode'],
-                    convert_to_swift_headers(
-                        e.response['ResponseMetadata']['HTTPHeaders']),
-                    iter(e.response['Error']['Message']))
+                status = 502
+                headers = {}
+                message = 'Bad Gateway'
+                if 'ResponseMetadata' in e.response:
+                    status = e.response['ResponseMetadata']['HTTPStatusCode']
+                    headers = convert_to_swift_headers(
+                        e.response['ResponseMetadata'].get('HTTPHeaders', {}))
+                    message = e.response.get('Error', {}).get('Message', '')
+                return ProviderResponse(False, status, headers, iter(message),
+                                        exc_info=sys.exc_info())
             except Exception as e:
                 self.logger.exception(
                     'Error with S3 API %r to %s/%s (key_id: %s): %r',
@@ -341,7 +356,8 @@ class SyncS3(BaseSync):
                     self.settings['aws_bucket'].encode('utf8'),
                     self.settings['aws_identity'].encode('utf8'),
                     e.message)
-                return ProviderResponse(False, 502, {}, iter(['Bad Gateway']))
+                return ProviderResponse(False, 502, {}, iter(['Bad Gateway']),
+                                        exc_info=sys.exc_info())
 
         if op == 'get_object':
             entry = self.client_pool.get_client()

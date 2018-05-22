@@ -74,8 +74,8 @@ def validate_bucket(provider, swift_key, create_bucket):
         return 'Unexpected status code listing bucket: %d' % result.status
 
     result = provider.delete_object(swift_key)
-    if result is not None:
-        return result
+    if result is not None and not result.success:
+        return 'Unexpected status code deleting obj: %s' % result.status
 
     if create_bucket:
         # Clean up after ourselves

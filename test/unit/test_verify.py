@@ -222,6 +222,10 @@ class TestMainTrackClientCalls(unittest.TestCase):
                 },
             },
         }
+        mock_client.delete_object.return_value = {
+            'DeleteMarker': False,
+            'VersionId': '',
+        }
         exit_arg = main([
             '--protocol', 's3',
             '--endpoint', 'https://s3.amazonaws.com',
@@ -364,6 +368,7 @@ class TestMainTrackClientCalls(unittest.TestCase):
         ]
         mock_client.get_container.return_value = ({}, [])
         mock_client.post_object.return_value = None
+        mock_client.delete_object.return_value = None
         exit_arg = main([
             '--protocol', 'swift',
             '--endpoint', 'https://saio:8080/auth/v1.0',

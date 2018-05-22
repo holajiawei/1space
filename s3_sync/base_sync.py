@@ -20,16 +20,33 @@ from swift.common.swob import RESPONSE_REASONS
 
 
 class ProviderResponse(object):
-    def __init__(self, success, status, headers, body):
+    def __init__(self, success, status, headers, body, exc_info=None):
         self.success = success
         self.status = status
         self.headers = headers
         self.body = body
+        # optional result from calling sys.exc_info(); used to implement
+        # reraise(), which allows a receiver of a ProviderResponse to reraise a
+        # prior client library exception.
+        self.exc_info = exc_info
 
     def to_wsgi(self):
         # WSGI expects an HTTP status + reason string
         wsgi_status = '%d %s' % (self.status, RESPONSE_REASONS[self.status][0])
         return wsgi_status, self.headers.items(), self.body
+
+    def reraise(self):
+        if self.exc_info:
+            raise self.exc_info[0], self.exc_info[1], self.exc_info[2]
+        header_str = '{' + ', '.join('%r: %r' % (k, self.headers[k])
+                                     for k in sorted(self.headers)) + '}'
+        body_str = ''.join(self.body) if self.body else ''
+        if len(body_str) > 70:
+            body_str = body_str[:70] + '...'
+        me_as_a_str = '<%s: %s, %r, %s, %r>' % (
+            self.__class__.__name__, self.success, self.status,
+            header_str, body_str)
+        raise ValueError('reraise had no prior exception for %s' % me_as_a_str)
 
 
 class BaseSync(object):

@@ -981,6 +981,23 @@ class TestCloudConnectorApp(TestCloudConnectorBase):
             mock.call.post_object(obj_name, req.headers),
         ], self.mock_rtm_provider.mock_calls)
 
+    def test_delete(self):
+        obj_name = u'\u062ablaie'
+        mock_provider_fn = self.mock_ltm_provider.delete_object
+        mock_provider_fn.return_value = ProviderResponse(
+            success=True, status=204, headers={}, body=iter(['']))
+
+        controller, req = self.controller_for(u'AUTH_b\u062a', 'foofoo',
+                                              obj_name, 'DELETE')
+        got = controller.DELETE(req)
+        self.assertEqual(204, got.status_int)  # swift3 mw will expect 201
+        self.assertEqual({
+            # This is set by swob, I guess (we know the headers delivered by
+            # cloud-connector's DELETE method was {}).
+            'Content-Type': 'text/html; charset=UTF-8',
+        }, got.headers)
+        self.assertEqual('', ''.join(got.body))
+
     def test_put_success(self):
         obj_name = u'\u062aoo'
         mock_provider_fn = self.mock_ltm_provider.put_object
@@ -1011,7 +1028,9 @@ class TestCloudConnectorApp(TestCloudConnectorBase):
 
     def test_obj_not_implemented_yet(self):
         # Remove these as object verb support is added (where applicable)
-        for verb in ('POST', 'OPTIONS', 'DELETE'):
+        # NOTE: metadata update (a swift POST) is implemented in S3 API as a
+        # PUT verb.
+        for verb in ('POST', 'OPTIONS'):
             controller, req = self.controller_for(u'AUTH_b\u062a', 'jojo',
                                                   'oo', verb)
             fn = getattr(controller, verb)
