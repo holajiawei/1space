@@ -13,7 +13,8 @@ cd "$MYDIR"/..
 test -f ./port-mapping.env && . ./port-mapping.env
 
 # Build the image
-docker build -t cloud-connector -f cloud-connector-docker/Dockerfile .
+docker build -t cloud-connector-wheel --cache-from cloud-connector-wheel:latest --target wheel -f cloud-connector-docker/Dockerfile .
+docker build --cache-from cloud-connector:latest --cache-from cloud-connector-wheel:latest -t cloud-connector -f cloud-connector-docker/Dockerfile .
 
 # Create a network for our party (if necessary)
 docker network create --attachable swift-s3-sync-net 2>/dev/null ||:

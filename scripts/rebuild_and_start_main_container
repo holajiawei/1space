@@ -15,7 +15,7 @@ test -f ./port-mapping.env && . ./port-mapping.env
 docker pull bouncestorage/swift-aio
 
 # Build our image
-docker build -t swift-s3-sync -f test/container/Dockerfile .
+docker build --cache-from swift-s3-sync:latest -t swift-s3-sync -f test/container/Dockerfile .
 
 # Create a network for our party
 docker network create --attachable swift-s3-sync-net 2>/dev/null ||:
