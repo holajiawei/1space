@@ -433,8 +433,7 @@ class TestCloudSyncBase(unittest.TestCase):
         devnull = open('/dev/null', 'wb')
         proc = subprocess.Popen(
             ['/usr/bin/python', '/usr/local/bin/swift-s3-migrator',
-             '--log-level', 'debug', '--config',
-             '/swift-s3-sync/test/container/swift-s3-sync.conf'],
+             '--config', '/swift-s3-sync/test/container/swift-s3-sync.conf'],
             close_fds=True,
             cwd='/',
             stdout=devnull, stderr=devnull)
