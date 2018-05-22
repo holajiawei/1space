@@ -751,6 +751,10 @@ class TestMigrator(TestCloudSyncBase):
         conn_remote = self.conn_for_acct(migration['aws_account'])
         conn_noshunt = self.conn_for_acct_noshunt(migration['account'])
 
+        status = migrator_utils.TempMigratorStatus(migration)
+        migrator = migrator_utils.MigratorFactory().get_migrator(
+            migration, status)
+
         mykey = 'x-container-meta-where'
 
         def is_where(val):
@@ -769,12 +773,8 @@ class TestMigrator(TestCloudSyncBase):
         time.sleep(1)
         conn_local.post_container(
             'prop_metadata_test', headers={mykey: 'local'})
-        with self.migrator_running():
-            # TODO (MSD): This should be replaced with a mechanism for
-            # executing the migrator once
-            with self.assertRaises(WaitTimedOut):
-                wait_for_condition(3, partial(is_where, 'remote'))
-            self.assertTrue(is_where('local'))
+        migrator.next_pass()
+        self.assertTrue(is_where('local'))
 
     def test_object_metadata_copied_only_when_newer(self):
         migration = self.swift_migration()
@@ -782,6 +782,10 @@ class TestMigrator(TestCloudSyncBase):
         content = 'test object'
 
         where_header = 'x-object-meta-where'
+
+        status = migrator_utils.TempMigratorStatus(migration)
+        migrator = migrator_utils.MigratorFactory().get_migrator(
+            migration, status)
 
         conn_local = self.conn_for_acct(migration['account'])
         conn_remote = self.conn_for_acct(migration['aws_account'])
@@ -809,12 +813,8 @@ class TestMigrator(TestCloudSyncBase):
         time.sleep(1)
         conn_local.post_object(
             migration['container'], key, headers={where_header: 'local'})
-        with self.migrator_running():
-            # TODO: Replace this silliness with a means of calling migrator
-            # run once.
-            with self.assertRaises(WaitTimedOut):
-                wait_for_condition(3, partial(is_where, 'remote'))
-            self.assertTrue(is_where('local'))
+        migrator.next_pass()
+        self.assertTrue(is_where('local'))
 
     def test_propagate_object_meta(self):
         migration = self.swift_migration()
