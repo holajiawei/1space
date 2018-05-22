@@ -26,6 +26,7 @@ import urllib
 from . import (
     TestCloudSyncBase, clear_swift_container, wait_for_condition,
     clear_s3_bucket, clear_swift_account, WaitTimedOut)
+import migrator_utils
 
 
 class TestMigrator(TestCloudSyncBase):
@@ -1241,15 +1242,22 @@ class TestMigrator(TestCloudSyncBase):
         conn_source = self.conn_for_acct(migration['aws_account'])
         conn_destination = self.conn_for_acct(migration['account'])
 
+        status = migrator_utils.TempMigratorStatus(migration)
+        migrator = migrator_utils.MigratorFactory().get_migrator(
+            migration, status)
+
+        segments = migrator.work_chunk
+        manifests = migrator.work_chunk * 2
+
         conn_source.put_container('nested-segments')
-        for i in range(5):
+        for i in range(segments):
             conn_source.put_object(
                 'nested-segments', 'segment-%d' % i,
                 chr(ord('A') + i) * 4)
 
-        for i in range(10):
+        for i in range(manifests):
             conn_source.put_container('segments-%d' % i)
-            for j in range(5):
+            for j in range(segments):
                 conn_source.put_object(
                     'segments-%d' % i, 'segment-%d' % j,
                     chr(ord('A') + j) * 4)
@@ -1268,14 +1276,33 @@ class TestMigrator(TestCloudSyncBase):
                 return False
             return local
 
-        with self.migrator_running():
-            wait_for_condition(
-                15,
-                partial(_check_migrated_objects, migration['container'], 10))
+        migrator.next_pass()
+        self.assertEqual(
+            'dlo-%d' % (manifests / 2 - 1),
+            status.get_migration(migration).get('marker'))
+        migrator.next_pass()
+        self.assertEqual(
+            'dlo-%d' % (manifests - 1),
+            status.get_migration(migration).get('marker'))
+        self.assertEqual(
+            # We have to copy the DLO manifests, the segments in each manifest
+            # (including one nested manifest), and the segments in the nested
+            # manifest, which is shared across the top level DLOs, so we copy
+            # it once.
+            manifests + manifests * (segments + 1) + segments,
+            status.get_migration(migration).get('moved_count'))
+        self.assertEqual(
+            # We have to scan the DLO manifests, the segment in each manifest
+            # (which include a nested manifest), and the segments in the nested
+            # manifest (we won't copy them, but will examine more than once).
+            manifests + manifests * (segments + 1) + manifests * segments,
+            status.get_migration(migration).get('scanned_count'))
+        self.assertTrue(_check_migrated_objects(
+            migration['container'], manifests))
 
         expected_body = ''.join([
-            chr(ord('A') + i) * 4 for i in range(5)])
-        for i in range(10):
+            chr(ord('A') + i) * 4 for i in range(segments)])
+        for i in range(manifests):
             hdrs, body = conn_destination.get_object(
                 migration['container'], 'dlo-%d' % i)
             for hdr in hdrs.keys():
