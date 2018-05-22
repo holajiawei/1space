@@ -509,24 +509,12 @@ class TestMigrator(TestCloudSyncBase):
 
     def test_propagate_delete(self):
         migration = self.swift_migration()
+        status = migrator_utils.TempMigratorStatus(migration)
+        migrator = migrator_utils.MigratorFactory().get_migrator(
+            migration, status)
+
         key = 'test_delete_object'
         content = 'D' * 2**10
-
-        def _check_object_copied():
-            hdrs, listing = self.local_swift(
-                'get_container', migration['container'])
-            if not listing:
-                return False
-            if listing[0]['name'] != key:
-                return False
-            if 'swift' not in listing[0]['content_location']:
-                return False
-            return True
-
-        def _check_removed():
-            _, listing = self.local_swift(
-                'get_container', migration['container'])
-            return listing == []
 
         def _container_exists(client, container):
             try:
@@ -537,27 +525,39 @@ class TestMigrator(TestCloudSyncBase):
                     return False
                 raise
 
-        def _check_removed_container():
-            if _container_exists(self.local_swift, migration['container']):
-                return False
-            if _container_exists(self.remote_swift, migration['aws_bucket']):
-                return False
-            return True
-
         self.remote_swift('put_object', migration['aws_bucket'], key,
                           StringIO.StringIO(content))
 
-        with self.migrator_running():
-            wait_for_condition(5, _check_object_copied)
+        migrator.next_pass()
+        hdrs, listing = self.local_swift(
+            'get_container', migration['container'])
+        self.assertEqual(key, listing[0]['name'])
+        self.assertIn('swift', listing[0]['content_location'])
+        # When copying objects, the destination object's timestamp may drift
+        # into the future, as Swift computes last-modified time as
+        # math.ceil(timestamp). If we attempt to delete an object with a
+        # timestamp in the future, Swift will return a 409.
+        sleep_timeout = 0
+        for swift in [self.local_swift, self.remote_swift]:
+            hdrs, body = swift('get_object', migration['container'], key)
+            self.assertEqual(content, body)
+            if swift == self.local_swift:
+                now = time.time()
+                if float(hdrs['x-timestamp']) > now:
+                    sleep_timeout = float(hdrs['x-timestamp']) - now
+        time.sleep(sleep_timeout)
 
-            for swift in [self.local_swift, self.remote_swift]:
-                hdrs, body = swift('get_object', migration['container'], key)
-                self.assertEqual(content, body)
+        self.local_swift('delete_object', migration['container'], key)
+        for swift in [self.local_swift, self.remote_swift]:
+            _, listing = swift(
+                'get_container', migration['container'])
+            self.assertFalse(listing)
 
-            self.local_swift('delete_object', migration['container'], key)
-            wait_for_condition(5, _check_removed)
-            self.local_swift('delete_container', migration['container'])
-            wait_for_condition(5, _check_removed_container)
+        self.local_swift('delete_container', migration['container'])
+        self.assertFalse(_container_exists(self.local_swift,
+                                           migration['container']))
+        self.assertFalse(_container_exists(self.remote_swift,
+                                           migration['aws_bucket']))
 
         # recreate the removed container for future tests
         self.local_swift('put_container', migration['container'])
