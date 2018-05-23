@@ -262,6 +262,68 @@ class TestShunt(unittest.TestCase):
             },
         })
 
+    @mock.patch('s3_sync.shunt.getmtime')
+    @mock.patch('s3_sync.shunt.time')
+    def test_init_and_reload(self, mock_time, mock_getmtime):
+        # mock time and gmtime
+        mock_time.side_effect = [100, 101, 102, 103]
+        mock_getmtime.side_effect = [50, 50, 102, 103]
+        # load init and verify
+        conf = {
+            'containers': [
+                {
+                    'account': 'AUTH_a',
+                    'container': u'sw\u00e9ft',
+                    'propagate_delete': False,
+                    'protocol': 'swift',
+                    'aws_bucket': 'dest-container',
+                    'aws_identity': 'user',
+                    'aws_secret': 'key',
+                    'aws_endpoint': 'https://swift.example.com/auth/v1.0',
+                    'restore_object': True,
+                }]}
+        profiles = {
+            ('AUTH_a', 'sw\xc3\xa9ft'): {
+                'account': 'AUTH_a',
+                'container': 'sw\xc3\xa9ft'.decode('utf-8'),
+                'propagate_delete': False,
+                'protocol': 'swift',
+                'aws_bucket': 'dest-container',
+                'aws_identity': 'user',
+                'aws_secret': 'key',
+                'aws_endpoint': 'https://swift.example.com/auth/v1.0',
+                'restore_object': True,
+            }
+        }
+        with tempfile.NamedTemporaryFile() as fp:
+            json.dump(conf, fp)
+            fp.flush()
+            app = shunt.filter_factory(
+                {'conf_file': fp.name})(self.swift).shunted_app
+            self.assertEqual(app.sync_profiles, profiles)
+            self.assertEqual(app._mtime, 50)
+            self.assertEqual(app._rtime, 100 + app.reload_time)
+            conf['containers'][0]['aws_secret'] = 'key2'
+            fp.seek(0)
+            json.dump(conf, fp)
+            fp.flush()
+            app._reload()
+            self.assertEqual(app._mtime, 50)
+            self.assertEqual(app._rtime, 101 + app.reload_time)
+            self.assertEqual(app.sync_profiles, profiles)
+            app._reload()
+            self.assertEqual(app._mtime, 102)
+            self.assertEqual(app._rtime, 102 + app.reload_time)
+            profiles[('AUTH_a', 'sw\xc3\xa9ft')]['aws_secret'] = 'key2'
+            self.assertEqual(app.sync_profiles, profiles)
+            fp.seek(0)
+            json.dump({}, fp)
+            fp.flush()
+            app._reload()
+            self.assertEqual(app._mtime, 103)
+            self.assertEqual(app._rtime, 103 + app.reload_time)
+            self.assertEqual(app.sync_profiles, {})
+
     def test_unshunted_requests(self):
         def _do_test(path, method='GET'):
             req = swob.Request.blank(path, method=method, environ={
