@@ -17,8 +17,14 @@ limitations under the License.
 import json
 import os
 import pwd
+from six.moves.urllib.parse import urlparse
 import sys
 import urllib
+
+from swift3 import request as swift3_request
+from swift3 import controllers as swift3_controllers
+from swift3.controllers.multi_upload import MAX_COMPLETE_UPLOAD_BODY_SIZE
+from swift3.etree import Element, SubElement, tostring, fromstring
 
 from swift.common import swob, utils, wsgi
 from swift.proxy.controllers.base import Controller, get_cache_key
@@ -26,19 +32,19 @@ from swift.proxy.server import Application as ProxyApplication
 
 from s3_sync.cloud_connector.auth import S3_IDENTITY_ENV_KEY
 from s3_sync.cloud_connector.util import (
-    get_and_write_conf_file_from_s3, get_env_options)
+    get_and_write_conf_file_from_s3, get_env_options, ConfigReloaderMixin)
 from s3_sync.provider_factory import create_provider
 from s3_sync.shunt import maybe_munge_profile_for_all_containers
 from s3_sync.utils import (
     get_list_params, filter_hop_by_hop_headers, iter_listing, splice_listing,
-    format_listing_response, SHUNT_BYPASS_HEADER, get_listing_content_type)
+    format_listing_response, SHUNT_BYPASS_HEADER, get_listing_content_type,
+    SeekableFileLikeIter)
 
 
 CLOUD_CONNECTOR_CONF_PATH = os.path.sep + os.path.join(
     'tmp', 'cloud-connector.conf')
-CLOUD_CONNECTOR_SYNC_CONF_PATH = os.path.sep + os.path.join(
-    'tmp', 'sync.json')
 ROOT_UID = 0
+CC_SWIFT_REQ_KEY = 'cloud_connector.swift3_req'
 
 
 def safe_profile_config(profile):
@@ -132,11 +138,7 @@ class CloudConnectorController(Controller):
                 self.app.logger.debug('handle_object_listing: local-to-me '
                                       'for %s got %d', self.aco_str,
                                       local_resp.status)
-                headers = dict(filter_hop_by_hop_headers(
-                    local_resp.headers.items()))
-                return swob.Response(app_iter=iter(local_resp.body),
-                                     status=local_resp.status,
-                                     headers=headers, request=req)
+                return local_resp.to_swob_response(req=req)
             # This is ok because splice_listing() only iterates over the
             # local_iter--it doesn't try to call next() or anything if it's
             # empty.
@@ -156,11 +158,7 @@ class CloudConnectorController(Controller):
                     self.app.logger.debug('handle_object_listing: '
                                           'remote-to-me for %s got %d',
                                           self.aco_str, remote_resp.status)
-                headers = dict(filter_hop_by_hop_headers(
-                    remote_resp.headers.items()))
-                return swob.Response(app_iter=iter(remote_resp.body),
-                                     status=remote_resp.status,
-                                     headers=headers, request=req)
+                return remote_resp.to_swob_response(req=req)
             # This one does need to be an actual iterator and conform to the
             # contract of yielding (None, None) when it's "done".
             remote_iter = iter([(None, None)])
@@ -226,17 +224,16 @@ class CloudConnectorController(Controller):
 
     def GETorHEAD(self, req):
         # Note: account operations were already filtered out in
-        # get_controller(), and the only allowed container operation was GET.
+        # get_controller(), and container operations were already handled in
+        # GET() or HEAD().
         #
-        if not self.object_name:
-            return self.handle_object_listing(req)
 
         # Try local-to-me first, then fall back to remote-to-me on any
         # non-success.
         provider_fn_name = 'get_object' if req.method == 'GET' else \
             'head_object'
         provider_resp = self._provider_fn_with_fallback(
-            # Apparently boto wants Unicode?
+            # Apparently boto3 wants Unicode?
             provider_fn_name, self.object_name.decode('utf8'))
 
         # If we know the container ("bucket" if the request we're servicing
@@ -249,24 +246,24 @@ class CloudConnectorController(Controller):
                 self._cache_container_exists(req, self.account_name,
                                              self.container_name)
 
-        # Note convert_to_swift_headers() will have already been called on
-        # the returned S3 headers.
-        # ...but we should still call filter_hop_by_hop_headers()
-        headers = dict(filter_hop_by_hop_headers(
-            provider_resp.headers.items()))
-        return swob.Response(app_iter=iter(provider_resp.body),
-                             status=provider_resp.status,
-                             headers=headers, request=req)
+        return provider_resp.to_swob_response(req=req)
 
     @utils.public
     def GET(self, req):
         # Note: account GETs were already filtered out in get_controller()
+        if not self.object_name:
+            return self.handle_object_listing(req)
         return self.GETorHEAD(req)
 
     @utils.public
     def HEAD(self, req):
         # Note: account and container HEADs were already filtered out in
         # get_controller()
+        if not self.object_name:
+            # Try local-to-me first, then fall back to remote-to-me on any
+            # non-success.
+            provider_resp = self._provider_fn_with_fallback('head_bucket')
+            return provider_resp.to_swob_response(req=req)
         return self.GETorHEAD(req)
 
     def _handle_copy_put_from_swift3(self, req):
@@ -310,7 +307,10 @@ class CloudConnectorController(Controller):
         #     ('x-amz-copy-source', '<bucket>/<key>'),  (uri qutoed)
         #     ('kx-amz-metadata-directive', 'REPLACE')
         # )
-        if req.environ.get('swift.source') == 'S3' and \
+        if 'uploadId' in req.params:
+            # Multipart upload part
+            return self._handle_multipart_upload_part(req)
+        elif req.environ.get('swift.source') == 'S3' and \
                 'X-Amz-Metadata-Directive' in req.headers:
             provider_resp = self._handle_copy_put_from_swift3(req)
         else:
@@ -321,7 +321,7 @@ class CloudConnectorController(Controller):
                 self.object_name.decode('utf8'),
                 req.headers, req.body_file)
             provider_resp = self.local_to_me_provider.put_object(
-                self.object_name.decode('utf8'),  # boto wants Unicode?
+                self.object_name.decode('utf8'),  # boto3 wants Unicode?
                 req.headers, req.body_file,
             )
             self._log_provider_response(
@@ -335,11 +335,34 @@ class CloudConnectorController(Controller):
             # like that 201 and return 200 to the actual S3 client.
             provider_resp.status = 201
 
-        headers = dict(filter_hop_by_hop_headers(
-            provider_resp.headers.items()))
-        return swob.Response(app_iter=iter(provider_resp.body),
-                             status=provider_resp.status,
-                             headers=headers, request=req)
+        return provider_resp.to_swob_response(req=req)
+
+    def _handle_multipart_upload_part(self, req):
+        s3_key = self.local_to_me_provider.get_s3_name(self.object_name)
+        if 'x-copy-from' in req.headers:
+            # upload_part_copy
+            _, src_key = req.headers['x-copy-from'].split('/', 1)
+            s3_src_key = self.local_to_me_provider.get_s3_name(
+                urllib.unquote(src_key))
+            boto3_resp = self.local_to_me_provider._upload_part_copy(
+                s3_key, self.local_to_me_provider.aws_bucket,
+                s3_src_key, req.params['uploadId'],
+                req.params['partNumber'],
+                req.headers.get('x-amz-copy-source-range', None))
+            headers = {
+                'ETag': boto3_resp['CopyPartResult']['ETag'],
+                'Last-Modified': boto3_resp['CopyPartResult']['LastModified'],
+            }
+        else:
+            content_length = int(req.headers['content-length'])
+            body = SeekableFileLikeIter(req.body_file, length=content_length)
+            boto3_resp = self.local_to_me_provider._upload_part(
+                s3_key, body=body, content_length=content_length,
+                upload_id=req.params['uploadId'],
+                part_number=req.params['partNumber'])
+            headers = {'ETag': boto3_resp['ETag']}
+
+        return swob.HTTPCreated(headers=headers)
 
     @utils.public
     def DELETE(self, req):
@@ -348,23 +371,89 @@ class CloudConnectorController(Controller):
         self._log_provider_call('local_to_me_provider', 'delete_object',
                                 self.object_name.decode('utf8'))
         provider_resp = self.local_to_me_provider.delete_object(
-            self.object_name.decode('utf8'),  # boto wants Unicode?
+            self.object_name.decode('utf8'),  # boto3 wants Unicode?
         )
         self._log_provider_response('local_to_me_provider', 'delete_object',
                                     provider_resp,
                                     self.object_name.decode('utf8'))
 
-        headers = dict(filter_hop_by_hop_headers(
-            provider_resp.headers.items()))
-        return swob.Response(app_iter=iter(provider_resp.body),
-                             status=provider_resp.status,
-                             headers=headers, request=req)
+        return provider_resp.to_swob_response(req=req)
+
+    def _handle_create_multipart_upload(self, s3_key, req):
+        req.headers.setdefault('content-type', 'application/octet-stream')
+        boto3_resp = self.local_to_me_provider._create_multipart_upload(
+            req.headers, s3_key)
+
+        # NOTE: we forced swift3 to fully delegate to us, so we are
+        # responsible for returning a valid S3 API response.
+        result_elem = Element('InitiateMultipartUploadResult')
+        SubElement(result_elem, 'Bucket').text = self.container_name
+        SubElement(result_elem, 'Key').text = self.object_name
+        SubElement(result_elem, 'UploadId').text = boto3_resp['UploadId']
+        body = tostring(result_elem)
+
+        # Note: swift3 mw requires obj POST to return 202
+        return swob.HTTPAccepted(body=body, content_type='application/xml')
+
+    def _handle_complete_multipart_upload(self, s3_key, req):
+        upload_id = req.params['uploadId']
+
+        parts = []
+        xml = req.environ[CC_SWIFT_REQ_KEY].xml(MAX_COMPLETE_UPLOAD_BODY_SIZE)
+
+        complete_elem = fromstring(xml, 'CompleteMultipartUpload')
+        for part_elem in complete_elem.iterchildren('Part'):
+            part_number = int(part_elem.find('./PartNumber').text)
+            etag = part_elem.find('./ETag').text
+            parts.append({'ETag': etag, 'PartNumber': part_number})
+
+        boto3_resp = self.local_to_me_provider._complete_multipart_upload(
+            s3_key, upload_id, parts)
+
+        # NOTE: we forced swift3 to fully delegate to us, so we are
+        # responsible for returning a valid S3 API response.
+        # NOTE (for the note): this workaround for a client library (boto) was
+        # copied verbatim from the "swift3" codebase.  It may or may not be
+        # relevant (I think it is for any client talking to cloud-connector
+        # using boto and a non-default port number), but this comment and the
+        # workaround both come from "swift3" and should be safe for us as well.
+
+        # (sic) vvvvvvvvvvvvvvvvvvvvvvvvvv
+        # NOTE: boto with sig v4 appends port to HTTP_HOST value at the
+        # request header when the port is non default value and it
+        # makes req.host_url like as http://localhost:8080:8080/path
+        # that obviously invalid. Probably it should be resolved at
+        # swift.common.swob though, tentatively we are parsing and
+        # reconstructing the correct host_url info here.
+        # in detail, https://github.com/boto/boto/pull/3513
+        # (sic) ^^^^^^^^^^^^^^^^^^^^^^^^^^
+        parsed_url = urlparse(req.host_url)
+        host_url = '%s://%s' % (parsed_url.scheme, parsed_url.hostname)
+        if parsed_url.port:
+            host_url += ':%s' % parsed_url.port
+
+        result_elem = Element('CompleteMultipartUploadResult')
+        SubElement(result_elem, 'Location').text = host_url + req.path
+        SubElement(result_elem, 'Bucket').text = self.container_name
+        SubElement(result_elem, 'Key').text = self.object_name
+        SubElement(result_elem, 'ETag').text = boto3_resp['ETag']
+        body = tostring(result_elem)
+
+        # Note: swift3 mw requires obj POST to return 202
+        return swob.HTTPAccepted(body=body, content_type='application/xml')
 
     @utils.public
     def POST(self, req):
-        # TODO: implement this
         # NOTE: obj metadata update via S3 API (`swift3` middleware) is
         # implemented in the PUT method.
+        s3_key = self.local_to_me_provider.get_s3_name(self.object_name)
+        if 'uploads' in req.params:
+            # Multipart upload initiation
+            return self._handle_create_multipart_upload(s3_key, req)
+        elif 'uploadId' in req.params:
+            # Multipart upload completion
+            return self._handle_complete_multipart_upload(s3_key, req)
+
         return swob.HTTPNotImplemented()
 
     @utils.public
@@ -373,17 +462,19 @@ class CloudConnectorController(Controller):
         return swob.HTTPNotImplemented()
 
 
-class CloudConnectorApplication(ProxyApplication):
+class CloudConnectorApplication(ConfigReloaderMixin, ProxyApplication):
     """
-    Implements a Swift API endpoint (and eventually also a S3 API endpoint via
-    swift3 middleware) to run on cloud compute nodes and
-    seamlessly provide R/W access to the "cloud sync" data namespace.
+    Implements an S3 API endpoint (and eventually also a Swift endpoint)
+    to run on cloud compute nodes and seamlessly provide R/W access to the
+    1space data namespace.
     """
     # We're going to want fine-grained control over our pipeline and, for
     # example, don't want proxy code sticking the "copy" middleware back in
     # when we can't have it.  This setting disables automatic mucking with our
     # pipeline.
     modify_wsgi_pipeline = None
+    CHECK_PERIOD = 30  # seconds
+    CONF_FILES = None  # can't be known until __init__ runs
 
     def __init__(self, conf, logger=None):
         self.conf = conf
@@ -400,30 +491,25 @@ class CloudConnectorApplication(ProxyApplication):
         # from the env.
         self.memcache = 'look but dont touch'
 
-        # This gets called more than once on startup; first as root, then as
-        # the configured user.  If root writes conf files down, then when the
-        # 2nd invocation tries to write it down, it'll fail.  We solve this
-        # writing it down the first time (instantiation of our stuff will fail
-        # otherwise), but chowning the file to the final user if we're
-        # currently euid == ROOT_UID.
-        unpriv_user = conf.get('user', 'swift')
+        self.swift_baseurl = conf.get('swift_baseurl')
         sync_conf_obj_name = conf.get(
             'conf_file', '/etc/swift-s3-sync/sync.json').lstrip('/')
-        env_options = get_env_options()
-        get_and_write_conf_file_from_s3(
-            sync_conf_obj_name, CLOUD_CONNECTOR_SYNC_CONF_PATH, env_options,
-            user=unpriv_user)
 
+        self.CONF_FILES = [{
+            'key': sync_conf_obj_name,
+            'load_cb': self.load_sync_config,
+        }]
         try:
-            with open(CLOUD_CONNECTOR_SYNC_CONF_PATH, 'rb') as fp:
-                self.sync_conf = json.load(fp)
-        except (IOError, ValueError) as err:
+            self.reload_confs()
+        except Exception as e:
             # There's no sane way we should get executed without something
             # having fetched and placed a sync config where our config is
             # telling us to look.  So if we can't find it, there's nothing
             # better to do than to fully exit the process.
-            exit("Couldn't read sync_conf_path %r: %s; exiting" % (
-                CLOUD_CONNECTOR_SYNC_CONF_PATH, err))
+            exit("Couldn't load sync_conf: %s; exiting" % e)
+
+    def load_sync_config(self, sync_conf_contents):
+        self.sync_conf = json.loads(sync_conf_contents)
 
         self.sync_profiles = {}
         for cont in self.sync_conf['containers']:
@@ -431,7 +517,9 @@ class CloudConnectorApplication(ProxyApplication):
                    cont['container'].encode('utf-8'))
             self.sync_profiles[key] = cont
 
-        self.swift_baseurl = conf.get('swift_baseurl')
+    def __call__(self, *args, **kwargs):
+        self.reload_confs()
+        return super(CloudConnectorApplication, self).__call__(*args, **kwargs)
 
     def get_controller(self, req):
         # Maybe handle /info specially here, like our superclass'
@@ -448,10 +536,10 @@ class CloudConnectorApplication(ProxyApplication):
             raise swob.HTTPForbidden(body="Account operations are not "
                                      "supported.")
 
-        if not obj and req.method != 'GET':
+        if not obj and req.method not in ('GET', 'HEAD'):
             # We've decided to only support container listings (GET)
             raise swob.HTTPForbidden(body="The only supported container "
-                                     "operation is GET (listing).")
+                                     "operations are GET and HEAD.")
 
         profile_key1, profile_key2 = (acct, cont), (acct, '/*')
         profile = self.sync_profiles.get(
@@ -516,6 +604,121 @@ def app_factory(global_conf, **local_conf):
     return app
 
 
+class PassThroughController(swift3_controllers.Controller):
+    """
+    "Controller" class that just passes every verb we care about on to the
+    application.  This is used to let the cloud-connector application fully
+    handle multipart uploads.
+
+    We also faithfully pass through query parameters.
+    """
+
+    @utils.public
+    def GET(self, req):
+        try:
+            req.environ[CC_SWIFT_REQ_KEY] = req
+            return req.get_response(self.app, query=req.params)
+        finally:
+            req.environ.pop(CC_SWIFT_REQ_KEY, None)
+
+    @utils.public
+    def PUT(self, req):
+        try:
+            req.environ[CC_SWIFT_REQ_KEY] = req
+            resp = req.get_response(self.app, query=req.params)
+        finally:
+            req.environ.pop(CC_SWIFT_REQ_KEY, None)
+
+        # Just like the PartController.PUT() method does:
+        if 'X-Amz-Copy-Source' in req.headers:
+            resp.append_copy_resp_body('Part',
+                                       resp.headers.pop('Last-Modified'))
+
+        resp.status = 200
+        return resp
+
+    @utils.public
+    def POST(self, req):
+        try:
+            req.environ[CC_SWIFT_REQ_KEY] = req
+            return req.get_response(self.app, query=req.params)
+        finally:
+            req.environ.pop(CC_SWIFT_REQ_KEY, None)
+
+    @utils.public
+    def DELETE(self, req):
+        try:
+            req.environ[CC_SWIFT_REQ_KEY] = req
+            return req.get_response(self.app, query=req.params)
+        finally:
+            req.environ.pop(CC_SWIFT_REQ_KEY, None)
+
+
+class CloudConnectorS3RequestMixin(object):
+    @property
+    def controller(self):
+        cont_klass = super(CloudConnectorS3RequestMixin, self).controller
+        if cont_klass in (swift3_controllers.PartController,
+                          swift3_controllers.UploadsController,
+                          swift3_controllers.UploadController):
+            return PassThroughController
+        return cont_klass
+
+
+class CCRequest(CloudConnectorS3RequestMixin, swift3_request.Request):
+    pass
+
+
+class CCSigV4Request(CloudConnectorS3RequestMixin,
+                     swift3_request.SigV4Request):
+    pass
+
+
+class CCS3AclRequest(CloudConnectorS3RequestMixin,
+                     swift3_request.S3AclRequest):
+    pass
+
+
+class CCSigV4S3AclRequest(CloudConnectorS3RequestMixin,
+                          swift3_request.SigV4S3AclRequest):
+    pass
+
+
+def _cc_get_request_class(env):
+    """
+    Cough up request classes that we've modified (inserted a mixin into).
+    """
+    if swift3_request.CONF.s3_acl:
+        request_classes = (CCS3AclRequest, CCSigV4S3AclRequest)
+    else:
+        request_classes = (CCRequest, CCSigV4Request)
+
+    req = swob.Request(env)
+    if 'X-Amz-Credential' in req.params or \
+            req.headers.get('Authorization', '').startswith(
+                'AWS4-HMAC-SHA256 '):
+        # This is an Amazon SigV4 request
+        return request_classes[1]
+    else:
+        # The others using Amazon SigV2 class
+        return request_classes[0]
+
+
+def monkeypatch_swift3_requests():
+    swift3_request.get_request_class = _cc_get_request_class
+
+
+def monkeypatch_hash_validation():
+    def _new_validate_configuration():
+        try:
+            utils.validate_hash_conf()
+        except utils.InvalidHashPathConfigError:
+            pass
+
+    utils.validate_configuration = _new_validate_configuration
+    wsgi.validate_configuration = _new_validate_configuration
+
+
 def main():
     """
     cloud-connector daemon entry point.
@@ -525,14 +728,11 @@ def main():
     """
 
     # We need to monkeypatch out the hash validation stuff
-    def _new_validate_configuration():
-        try:
-            utils.validate_hash_conf()
-        except utils.InvalidHashPathConfigError:
-            pass
+    monkeypatch_hash_validation()
 
-    utils.validate_configuration = _new_validate_configuration
-    wsgi.validate_configuration = _new_validate_configuration
+    # We need to monkeypatch swift3 request class determination so we can
+    # override some behavior in multipart uploads
+    monkeypatch_swift3_requests()
 
     env_options = get_env_options()
 

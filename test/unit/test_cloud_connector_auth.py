@@ -17,10 +17,10 @@ limitations under the License.
 from contextlib import contextmanager
 import json
 import mock
-import os
 
 from swift.common import swob
 
+from s3_sync.base_sync import ProviderResponse
 from s3_sync.cloud_connector import auth
 
 from .test_cloud_connector_app import TestCloudConnectorBase
@@ -55,12 +55,6 @@ def make_req(path='/s3-sync/some/obj', key_id='test:tester', key_val='testing',
 class TestCloudConnectorAuth(TestCloudConnectorBase):
     def setUp(self):
         super(TestCloudConnectorAuth, self).setUp()
-
-        self.s3_passwd_path = os.path.join(self.tempdir, 's3_passwd.json')
-        patcher = mock.patch('s3_sync.cloud_connector.auth.S3_PASSWD_PATH',
-                             new=self.s3_passwd_path)
-        patcher.start()
-        self.addCleanup(patcher.stop)
 
         self.s3_passwd = [{
             "access_key": "admin:admin",
@@ -110,20 +104,19 @@ class TestCloudConnectorAuth(TestCloudConnectorBase):
             patchers.append(patcher)
 
             patcher = mock.patch(
-                's3_sync.cloud_connector.auth.get_env_options')
+                's3_sync.cloud_connector.util.get_env_options')
             mocks['get_env_options'] = patcher.start()
             mocks['get_env_options'].return_value = 'stub_env_options'
             patchers.append(patcher)
 
-            def _config_writer(*args, **kwargs):
-                with open(self.s3_passwd_path, 'wb') as fh:
-                    json.dump(self.s3_passwd, fh)
-                    fh.flush()
+            def _config_reader(*args, **kwargs):
+                return ProviderResponse(True, 200, {'etag': 'an_etag'},
+                                        iter([json.dumps(self.s3_passwd)]))
 
             patcher = mock.patch(
-                's3_sync.cloud_connector.auth.get_and_write_conf_file_from_s3')
-            mocks['get_and_write'] = patcher.start()
-            mocks['get_and_write'].side_effect = _config_writer
+                's3_sync.cloud_connector.util.get_conf_file_from_s3')
+            mocks['get_conf'] = patcher.start()
+            mocks['get_conf'].side_effect = _config_reader
             patchers.append(patcher)
 
             mw = factory(app)
@@ -138,7 +131,7 @@ class TestCloudConnectorAuth(TestCloudConnectorBase):
             for m in mw._mocks.values():
                 m.reset_mock()
 
-            mw._mocks['get_and_write'].side_effect = \
+            mw._mocks['get_conf'].side_effect = \
                 auth.GetAndWriteFileException
 
             factory = auth.filter_factory({})
@@ -156,12 +149,11 @@ class TestCloudConnectorAuth(TestCloudConnectorBase):
             for m in mw._mocks.values():
                 m.reset_mock()
 
-            def _config_writer(*args, **kwargs):
-                with open(self.s3_passwd_path, 'wb') as fh:
-                    fh.write("I ain't JSON, bro!")
-                    fh.flush()
+            def _config_reader(*args, **kwargs):
+                return ProviderResponse(True, 200, {'etag': 'an_etag'},
+                                        iter(["I ain't JSON, bro!"]))
 
-            mw._mocks['get_and_write'].side_effect = _config_writer
+            mw._mocks['get_conf'].side_effect = _config_reader
 
             factory = auth.filter_factory({})
             with self.assertRaises(SystemExit):
@@ -170,9 +162,8 @@ class TestCloudConnectorAuth(TestCloudConnectorBase):
             self.assertEqual([
                 mock.call({}, log_route='cloud_connect_auth'),
                 mock.call().fatal(
-                    "Couldn't read s3 passwd path %r: %s; exiting" % (
-                        self.s3_passwd_path,
-                        'No JSON object could be decoded')),
+                    '%s; no S3 API requests will work without the passwd DB.',
+                    'No JSON object could be decoded'),
             ], mw._mocks['get_logger'].mock_calls)
 
     def test_basic_success_with_defaults(self):
@@ -192,9 +183,8 @@ class TestCloudConnectorAuth(TestCloudConnectorBase):
                              mw.logger)
             self.assertEqual([
                 mock.call('etc/swift-s3-sync/s3-passwd.json',
-                          self.s3_passwd_path, 'stub_env_options',
-                          user='swift'),
-            ], mw._mocks['get_and_write'].mock_calls)
+                          'stub_env_options', if_none_match=''),
+            ], mw._mocks['get_conf'].mock_calls)
 
     def test_basic_success_with_unicodes(self):
         user_acct = u'\u062aacct:\u062auser'.encode('utf-8')
@@ -219,9 +209,8 @@ class TestCloudConnectorAuth(TestCloudConnectorBase):
                              mw.logger)
             self.assertEqual([
                 mock.call('etc/swift-s3-sync/s3-passwd.json',
-                          self.s3_passwd_path, 'stub_env_options',
-                          user='swift'),
-            ], mw._mocks['get_and_write'].mock_calls)
+                          'stub_env_options', if_none_match='')
+            ], mw._mocks['get_conf'].mock_calls)
 
     def test_basic_success_with_non_defaults(self):
         with self.auth_mw(global_conf={'user': 'nobody'},
@@ -242,9 +231,8 @@ class TestCloudConnectorAuth(TestCloudConnectorBase):
             self.assertEqual(mw._mocks['get_logger'].return_value,
                              mw.logger)
             self.assertEqual([
-                mock.call('tmp/foo.bar', self.s3_passwd_path,
-                          'stub_env_options', user='nobody'),
-            ], mw._mocks['get_and_write'].mock_calls)
+                mock.call('tmp/foo.bar', 'stub_env_options', if_none_match=''),
+            ], mw._mocks['get_conf'].mock_calls)
 
     def test_no_swift3_auth_details(self):
         with self.auth_mw() as mw:

@@ -568,18 +568,21 @@ class SyncS3(BaseSync):
                 return False
         return True
 
-    def _upload_slo(self, manifest, object_meta, s3_key, req_headers,
-                    internal_client):
+    def _create_multipart_upload(self, swift_meta, s3_key):
         with self.client_pool.get_client() as s3_client:
             params = dict(
                 Bucket=self.aws_bucket,
                 Key=s3_key,
-                Metadata=convert_to_s3_headers(object_meta),
-                ContentType=object_meta['content-type']
+                Metadata=convert_to_s3_headers(swift_meta),
+                ContentType=swift_meta['content-type']
             )
             if self._is_amazon() and self.encryption:
                 params['ServerSideEncryption'] = 'AES256'
-            multipart_resp = s3_client.create_multipart_upload(**params)
+            return s3_client.create_multipart_upload(**params)
+
+    def _upload_slo(self, manifest, object_meta, s3_key, req_headers,
+                    internal_client):
+        multipart_resp = self._create_multipart_upload(object_meta, s3_key)
         upload_id = multipart_resp['UploadId']
 
         work_queue = eventlet.queue.Queue(self.SLO_QUEUE_SIZE)
@@ -590,8 +593,8 @@ class SyncS3(BaseSync):
                 worker_pool.spawn(self._upload_part_worker, upload_id, s3_key,
                                   req_headers, work_queue, len(manifest),
                                   internal_client))
-        for segment_number, segment in enumerate(manifest):
-            work_queue.put((segment_number + 1, segment))
+        for segment_number, segment in enumerate(manifest, 1):
+            work_queue.put((segment_number, segment))
 
         work_queue.join()
         for _ in range(0, self.SLO_WORKERS):
@@ -607,30 +610,40 @@ class SyncS3(BaseSync):
             self._abort_upload(s3_key, upload_id)
             raise RuntimeError('Failed to upload an SLO as %s' % s3_key)
 
-        with self.client_pool.get_client() as s3_client:
+        parts = [{'PartNumber': number, 'ETag': segment['hash']}
+                 for number, segment in enumerate(manifest, 1)]
+        try:
             # TODO: Validate the response ETag
-            try:
-                s3_client.complete_multipart_upload(
-                    Bucket=self.aws_bucket,
-                    Key=s3_key,
-                    MultipartUpload={'Parts': [
-                        {'PartNumber': number + 1,
-                         'ETag': segment['hash']}
-                        for number, segment in enumerate(manifest)]
-                    },
-                    UploadId=upload_id)
-            except:
-                self._abort_upload(s3_key, upload_id, client=s3_client)
-                raise
+            self._complete_multipart_upload(s3_key, upload_id, parts)
+        except:
+            self._abort_upload(s3_key, upload_id)
+            raise
 
-    def _abort_upload(self, s3_key, upload_id, client=None):
-        if not client:
-            with self.client_pool.get_client() as s3_client:
-                s3_client.abort_multipart_upload(
-                    Bucket=self.aws_bucket, Key=s3_key, UploadId=upload_id)
-        else:
+    def _complete_multipart_upload(self, s3_key, upload_id, parts):
+        with self.client_pool.get_client() as s3_client:
+            return s3_client.complete_multipart_upload(
+                Bucket=self.aws_bucket,
+                Key=s3_key,
+                MultipartUpload={'Parts': parts},
+                UploadId=upload_id)
+
+    def _abort_upload(self, s3_key, upload_id):
+        with self.client_pool.get_client() as s3_client:
             s3_client.abort_multipart_upload(
                 Bucket=self.aws_bucket, Key=s3_key, UploadId=upload_id)
+
+    def _upload_part(self, s3_key, body, content_length, upload_id,
+                     part_number):
+        with self.client_pool.get_client() as s3_client:
+            return s3_client.upload_part(
+                Bucket=self.aws_bucket,
+                Body=body,
+                Key=s3_key,
+                ContentLength=content_length,
+                UploadId=upload_id,
+                # Allow caller to pass in a string part number, as might come
+                # in via an HTTP header (boto requires this to be `int`)
+                PartNumber=int(part_number))
 
     def _upload_part_worker(self, upload_id, s3_key, req_headers, queue,
                             part_count, internal_client):
@@ -644,26 +657,20 @@ class SyncS3(BaseSync):
             try:
                 part_number, segment = work
                 container, obj = segment['name'].split('/', 2)[1:]
-
-                with self.client_pool.get_client() as s3_client:
-                    self.logger.debug('Uploading part %d from %s: %s bytes' % (
-                        part_number, self.account + segment['name'],
-                        segment['bytes']))
-                    wrapper = FileWrapper(internal_client, self.account,
-                                          container, obj, req_headers)
-                    resp = s3_client.upload_part(
-                        Bucket=self.aws_bucket,
-                        Body=wrapper,
-                        Key=s3_key,
-                        ContentLength=len(wrapper),
-                        UploadId=upload_id,
-                        PartNumber=part_number)
-                    if not self.check_etag(segment['hash'], resp['ETag']):
-                        self.logger.error('Part %d ETag mismatch (%s): %s %s' %
-                                          (part_number,
-                                           self.account + segment['name'],
-                                           segment['hash'], resp['ETag']))
-                        errors.append(part_number)
+                self.logger.debug('Uploading part %d from %s: %s bytes' % (
+                    part_number, self.account + segment['name'],
+                    segment['bytes']))
+                wrapper = FileWrapper(internal_client, self.account,
+                                      container, obj, req_headers)
+                resp = self._upload_part(
+                    s3_key, body=wrapper, content_length=len(wrapper),
+                    upload_id=upload_id, part_number=part_number)
+                if not self.check_etag(segment['hash'], resp['ETag']):
+                    self.logger.error('Part %d ETag mismatch (%s): %s %s',
+                                      part_number,
+                                      self.account + segment['name'],
+                                      segment['hash'], resp['ETag'])
+                    errors.append(part_number)
             except:
                 self.logger.error('Failed to upload part %d for %s: %s' % (
                     part_number, self.account + segment['name'],
@@ -718,56 +725,50 @@ class SyncS3(BaseSync):
                     'Failed to fetch the manifest: %s' % e)
                 return None
 
+    def _upload_part_copy(self, s3_key, src_bucket, src_key, upload_id,
+                          part_number, src_range=None):
+        with self.client_pool.get_client() as s3_client:
+            params = dict(
+                Bucket=self.aws_bucket,
+                CopySource={'Bucket': src_bucket, 'Key': src_key},
+                Key=s3_key,
+                PartNumber=int(part_number),
+                UploadId=upload_id)
+            if src_range is not None:
+                params['CopySourceRange'] = src_range
+            return s3_client.upload_part_copy(**params)
+
     def update_slo_metadata(self, swift_meta, manifest, s3_key, req_headers,
                             internal_client):
         # For large objects, we should use the multipart copy, which means
         # creating a new multipart upload, with copy-parts
         # NOTE: if we ever stich MPU objects, we need to replicate the
         # stitching calculation to get the offset correctly.
-        with self.client_pool.get_client() as s3_client:
-            params = dict(
-                Bucket=self.aws_bucket,
-                Key=s3_key,
-                Metadata=convert_to_s3_headers(swift_meta),
-                ContentType=swift_meta['content-type']
-            )
-            if self._is_amazon() and self.encryption:
-                params['ServerSideEncryption'] = 'AES256'
-            multipart_resp = s3_client.create_multipart_upload(**params)
+        multipart_resp = self._create_multipart_upload(swift_meta, s3_key)
 
-            # The original manifest must match the MPU parts to ensure that
-            # ETags match
-            offset = 0
-            for part_number, segment in enumerate(manifest):
-                container, obj = segment['name'].split('/', 2)[1:]
-                segment_meta = internal_client.get_object_metadata(
-                    self.account, container, obj, headers=req_headers)
-                length = int(segment_meta['content-length'])
-                resp = s3_client.upload_part_copy(
-                    Bucket=self.aws_bucket,
-                    CopySource={'Bucket': self.aws_bucket, 'Key': s3_key},
-                    CopySourceRange='bytes=%d-%d' % (offset,
-                                                     offset + length - 1),
-                    Key=s3_key,
-                    PartNumber=part_number + 1,
-                    UploadId=multipart_resp['UploadId'])
-                s3_etag = resp['CopyPartResult']['ETag']
-                if not self.check_etag(segment['hash'], s3_etag):
-                    raise RuntimeError('Part %d ETag mismatch (%s): %s %s' % (
-                                       part_number + 1,
-                                       self.account + segment['name'],
-                                       segment['hash'], resp['ETag']))
-                offset += length
+        # The original manifest must match the MPU parts to ensure that
+        # ETags match
+        offset = 0
+        for part_number, segment in enumerate(manifest, 1):
+            container, obj = segment['name'].split('/', 2)[1:]
+            segment_meta = internal_client.get_object_metadata(
+                self.account, container, obj, headers=req_headers)
+            length = int(segment_meta['content-length'])
+            resp = self._upload_part_copy(s3_key, self.aws_bucket, s3_key,
+                                          multipart_resp['UploadId'],
+                                          part_number, 'bytes=%d-%d' % (
+                                              offset, offset + length - 1))
+            s3_etag = resp['CopyPartResult']['ETag']
+            if not self.check_etag(segment['hash'], s3_etag):
+                raise RuntimeError('Part %d ETag mismatch (%s): %s %s' % (
+                    part_number, self.account + segment['name'],
+                    segment['hash'], resp['ETag']))
+            offset += length
 
-            s3_client.complete_multipart_upload(
-                Bucket=self.aws_bucket,
-                Key=s3_key,
-                MultipartUpload={'Parts': [
-                    {'PartNumber': number + 1,
-                     'ETag': segment['hash']}
-                    for number, segment in enumerate(manifest)]
-                },
-                UploadId=multipart_resp['UploadId'])
+        parts = [{'PartNumber': number, 'ETag': segment['hash']}
+                 for number, segment in enumerate(manifest, 1)]
+        self._complete_multipart_upload(s3_key, multipart_resp['UploadId'],
+                                        parts)
 
     def update_metadata(self, swift_key, swift_meta):
         if not check_slo(swift_meta) or self._google():

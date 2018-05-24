@@ -16,9 +16,11 @@ limitations under the License.
 
 import json
 
+from os.path import getmtime
 from swift.common import constraints, swob, utils
 from swift.common.wsgi import make_subrequest
 from swift.proxy.controllers.base import get_account_info
+from time import time
 
 from .provider_factory import create_provider
 from .utils import (check_slo, SwiftPutWrapper, SwiftSloPutWrapper,
@@ -101,12 +103,27 @@ class S3SyncShunt(object):
             log_route='s3_sync.shunt')
 
         self.app = app
+        self.conf_file = conf_file
+        self.sync_profiles = {}
+        self.reload_time = 15
+        self._rtime = 0
+        self._mtime = 0
+        self._reload(True)
+
+    def _reload(self, force=False):
+        self._rtime = time() + self.reload_time
         try:
-            with open(conf_file, 'rb') as fp:
+            mtime = getmtime(self.conf_file)
+            if mtime == self._mtime and not force:
+                return
+
+            self._mtime = mtime
+
+            with open(self.conf_file, 'rb') as fp:
                 conf = json.load(fp)
-        except (IOError, ValueError) as err:
+        except (IOError, ValueError, OSError) as err:
             self.logger.warning("Couldn't read conf_file %r: %s; disabling",
-                                conf_file, err)
+                                self.conf_file, err)
             conf = {'containers': []}
 
         self.sync_profiles = {}
@@ -132,6 +149,9 @@ class S3SyncShunt(object):
             self.sync_profiles[key] = profile
 
     def __call__(self, env, start_response):
+        if time() > self._rtime:
+            self._reload()
+
         req = swob.Request(env)
         try:
             vers, acct, cont, obj = req.split_path(2, 4, True)
