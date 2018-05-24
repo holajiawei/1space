@@ -15,25 +15,24 @@ limitations under the License.
 """
 
 import json
-import os
 
 from swift.common.swob import HTTPBadRequest, HTTPUnauthorized
 from swift.common.utils import get_logger
 
 from s3_sync.cloud_connector.util import (
-    get_and_write_conf_file_from_s3, get_env_options, GetAndWriteFileException)
+    GetAndWriteFileException, ConfigReloaderMixin)
 
 
-S3_PASSWD_PATH = os.path.sep + os.path.join(
-    'tmp', 's3-passwd.json')
 S3_IDENTITY_ENV_KEY = 'cloud-connector.auth.s3-identity'
 
 
-class CloudConnectAuth(object):
+class CloudConnectAuth(ConfigReloaderMixin):
     """
     :param app: The next WSGI app in the pipeline
     :param conf: The dict of configuration values from the Paste config file
     """
+    CHECK_PERIOD = 30  # seconds
+    CONF_FILES = None  # can't be known until __init__ runs
 
     def __init__(self, app, conf):
         self.app = app
@@ -41,17 +40,14 @@ class CloudConnectAuth(object):
         self.logger = get_logger(conf, log_route='cloud_connect_auth')
         # TODO(darrell): add support for Swift v1 authen/authz
 
-        # Download and load the S3 user database
-        # TODO(darrell): refactor this when we add automatic
-        # new-file-download-and-config-refresh logic
-        unpriv_user = conf.get('user', 'swift')
         s3_passwd_obj_name = conf.get(
             's3_passwd_json', '/etc/swift-s3-sync/s3-passwd.json').lstrip('/')
-        env_options = get_env_options()
+        self.CONF_FILES = [{
+            'key': s3_passwd_obj_name,
+            'load_cb': self.load_passwd_json,
+        }]
         try:
-            get_and_write_conf_file_from_s3(
-                s3_passwd_obj_name, S3_PASSWD_PATH, env_options,
-                user=unpriv_user)
+            self.reload_confs()
         except GetAndWriteFileException as e:
             self.logger.fatal('%s; no S3 API requests will work without '
                               'the passwd DB.', e.message)
@@ -59,18 +55,12 @@ class CloudConnectAuth(object):
             # this non-fatal
             exit(e.message)
 
+    def load_passwd_json(self, passwd_json):
         try:
-            with open(S3_PASSWD_PATH, 'rb') as fp:
-                self.s3_users = {d['access_key'].encode('utf-8'): d
-                                 for d in json.load(fp)}
-        except (IOError, ValueError) as e:
-            # TODO(darrell): make this non-fatal when we add Swift API requests
-            # (if the config wasn't fetched--if a fetched config errors, we
-            # should probably abort)
-            msg = "Couldn't read s3 passwd path %r: %s; exiting" % (
-                S3_PASSWD_PATH, e)
-            self.logger.fatal(msg)
-            exit(msg)
+            self.s3_users = {d['access_key'].encode('utf-8'): d
+                             for d in json.loads(passwd_json)}
+        except ValueError as e:
+            raise GetAndWriteFileException(e.message)
 
     def __call__(self, env, start_response):
         """
@@ -83,6 +73,9 @@ class CloudConnectAuth(object):
         authorization for S3 API requests.
         """
         # TODO(darrell): sniff out and handle Swift v1 auth requests
+
+        # check-and-maybe-reload-db
+        self.reload_confs()
 
         s3 = env.get('swift3.auth_details')
         # TODO(darrell): look for and do something with X-Auth-Token (with

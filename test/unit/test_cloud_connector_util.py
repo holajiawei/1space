@@ -19,6 +19,7 @@ import mock
 import os
 import pwd
 
+from s3_sync.base_sync import ProviderResponse
 from s3_sync.cloud_connector import util as cc_util
 
 from .test_cloud_connector_app import TestCloudConnectorBase
@@ -61,12 +62,130 @@ class TestCloudConnectorUtil(TestCloudConnectorBase):
         self.mock_requests = patcher.start()
         self.addCleanup(patcher.stop)
 
+    @mock.patch('s3_sync.cloud_connector.util.time')
+    @mock.patch('s3_sync.cloud_connector.util.get_env_options')
+    @mock.patch('s3_sync.cloud_connector.util.get_conf_file_from_s3')
+    def test_reloader_mixin(self, mock_get_conf, mock_get_env, mock_time):
+        tags = ['etag1', 'etag2', 'etag3', 'etag4']
+
+        def getter(*args, **kwargs):
+            return ProviderResponse(
+                True, 200, {'etag': args[0] + '_' + tags.pop(0)},
+                iter([args[0], 'conf']))
+
+        mock_get_conf.side_effect = getter
+        mock_get_env.return_value = 'stub_env'
+        t0 = 100
+        mock_time.time.side_effect = [
+            t0,  # first load
+            t0 + 65,  # won't have been enough time passed to check S3
+            t0 + 66,  # check S3, load new
+            t0 + 2 * 66,  # check S3, but get ConfigUnchanged
+        ]
+
+        holder = []
+
+        def cb1(loaded):
+            holder.append(('cb1', loaded))
+
+        def cb2(loaded):
+            holder.append(('cb2', loaded))
+
+        class Jojo(cc_util.ConfigReloaderMixin):
+            CHECK_PERIOD = 66
+            CONF_FILES = [{'key': 'a', 'load_cb': cb1},
+                          {'key': 'b', 'load_cb': cb2}]
+
+        jojo = Jojo()
+        jojo.reload_confs()
+
+        self.assertEqual([('cb1', 'aconf'), ('cb2', 'bconf')], holder)
+        self.assertEqual([
+            mock.call('a', 'stub_env', if_none_match=''),
+            mock.call('b', 'stub_env', if_none_match=''),
+        ], mock_get_conf.mock_calls)
+        # get_env_options only called once, even though 2 confs
+        self.assertEqual([mock.call()], mock_get_env.mock_calls)
+
+        # Not enough time passed...
+        mock_get_conf.reset_mock()
+        mock_get_env.reset_mock()
+        jojo.reload_confs()
+
+        # No change here:
+        self.assertEqual([('cb1', 'aconf'), ('cb2', 'bconf')], holder)
+        self.assertEqual([], mock_get_conf.mock_calls)
+        self.assertEqual([], mock_get_env.mock_calls)
+
+        # Now it reloads
+        mock_get_conf.reset_mock()
+        mock_get_env.reset_mock()
+        jojo.reload_confs()
+
+        self.assertEqual([
+            ('cb1', 'aconf'), ('cb2', 'bconf'),
+            ('cb1', 'aconf'), ('cb2', 'bconf'),  # new
+        ], holder)
+        self.assertEqual([
+            # Note old etags plumbed in
+            mock.call('a', 'stub_env', if_none_match='a_etag1'),
+            mock.call('b', 'stub_env', if_none_match='b_etag2'),
+        ], mock_get_conf.mock_calls)
+        # get_env_options called every time we check
+        self.assertEqual([mock.call()], mock_get_env.mock_calls)
+
+        # Enough time has passed, check, but get_conf_file_from_s3() raises
+        # ConfigUnchanged.  No big deal, we just move on.
+        mock_get_conf.side_effect = cc_util.ConfigUnchanged
+        mock_get_conf.reset_mock()
+        mock_get_env.reset_mock()
+        jojo.reload_confs()
+
+        self.assertEqual([  # no change here
+            ('cb1', 'aconf'), ('cb2', 'bconf'),
+            ('cb1', 'aconf'), ('cb2', 'bconf'),
+        ], holder)
+        self.assertEqual([
+            mock.call('a', 'stub_env', if_none_match='a_etag3'),
+            mock.call('b', 'stub_env', if_none_match='b_etag4'),
+        ], mock_get_conf.mock_calls)
+        # get_env_options called every time we check
+        self.assertEqual([mock.call()], mock_get_env.mock_calls)
+
+    @mock.patch('s3_sync.cloud_connector.util.SyncS3')
+    def test_get_conf_file_from_s3_unchanged(self, mock_syncs3):
+        mock_syncs3().get_object.return_value = ProviderResponse(
+            False, 304, {}, iter(['']))
+
+        mock_syncs3.reset_mock()
+        with self.assertRaises(cc_util.ConfigUnchanged):
+            cc_util.get_conf_file_from_s3('fefee', {
+                'AWS_ACCESS_KEY_ID': "ASIAIYLSOW5USUQCZAAQ",
+                'AWS_SECRET_ACCESS_KEY': 'swell',
+                'CONF_BUCKET': 'abc',
+                'CONF_ENDPOINT': '',  # always set to at least this
+            }, if_none_match='nono')
+
+        self.assertEqual([
+            mock.call({
+                'aws_identity': 'ASIAIYLSOW5USUQCZAAQ',
+                'aws_secret': 'swell',
+                'encryption': False,
+                'custom_prefix': '',
+                'account': 'notused',
+                'container': 'notused',
+                'aws_bucket': 'abc',
+            }),
+            mock.call().get_object('fefee', IfNoneMatch='nono'),
+        ], mock_syncs3.mock_calls)
+
     @mock.patch('s3_sync.cloud_connector.util.os.geteuid')
     @mock.patch('s3_sync.cloud_connector.util.SyncS3')
     def test_get_and_write_bad_geteuid(self, mock_syncs3, mock_geteuid):
         target_path = os.path.join(self.tempdir, 'dlkfjke')
         resp = mock_syncs3().get_object.return_value
         resp.success = True
+        resp.status = 200
         resp.body = ['a', 'b', 'c']
         mock_geteuid.side_effect = Exception('JAMMY')
 
@@ -138,6 +257,7 @@ class TestCloudConnectorUtil(TestCloudConnectorBase):
         target_path = os.path.join(self.tempdir, 'dlkfjke')
         resp = mock_syncs3().get_object.return_value
         resp.success = True
+        resp.status = 200
         resp.body = ['a', 'b', 'c']
 
         mock_syncs3.reset_mock()
@@ -174,6 +294,7 @@ class TestCloudConnectorUtil(TestCloudConnectorBase):
         target_path = os.path.join(self.tempdir, 'dlkfjke')
         resp = mock_syncs3().get_object.return_value
         resp.success = True
+        resp.status = 200
         resp.body = ['a', 'b', 'c']
         mock_geteuid.return_value = 0
         mock_getpwnam.return_value = pwd.struct_passwd(
@@ -215,6 +336,7 @@ class TestCloudConnectorUtil(TestCloudConnectorBase):
         target_path = os.path.join(self.tempdir, 'dlkfjke')
         resp = mock_syncs3().get_object.return_value
         resp.success = True
+        resp.status = 200
         resp.body = ['a', 'b', 'c']
         mock_geteuid.return_value = 1
 

@@ -34,6 +34,7 @@ from swift3.controllers import ObjectController
 
 from s3_sync.base_sync import ProviderResponse
 from s3_sync.cloud_connector import app
+from s3_sync.cloud_connector.util import GetAndWriteFileException
 
 
 class TestCloudConnectorBase(unittest.TestCase):
@@ -43,13 +44,6 @@ class TestCloudConnectorBase(unittest.TestCase):
             self.tempdir, 'test.conf')
         patcher = mock.patch.object(app, 'CLOUD_CONNECTOR_CONF_PATH',
                                     self.cloud_connector_conf_path)
-        patcher.start()
-        self.addCleanup(patcher.stop)
-
-        self.cloud_connector_sync_conf_path = os.path.join(
-            self.tempdir, 'sync.json')
-        patcher = mock.patch.object(app, 'CLOUD_CONNECTOR_SYNC_CONF_PATH',
-                                    self.cloud_connector_sync_conf_path)
         patcher.start()
         self.addCleanup(patcher.stop)
 
@@ -126,21 +120,20 @@ class TestCloudConnectorApp(TestCloudConnectorBase):
             self.mock_ltm_provider, self.mock_rtm_provider])
 
         # Get ourselves an Application instance to play with
-        patcher = mock.patch('s3_sync.cloud_connector.app.get_env_options')
+        patcher = mock.patch('s3_sync.cloud_connector.util.get_env_options')
         patcher.start()
         self.addCleanup(patcher.stop)
 
         patcher = mock.patch(
-            's3_sync.cloud_connector.app.get_and_write_conf_file_from_s3')
-        mock_get_and_write = patcher.start()
+            's3_sync.cloud_connector.util.get_conf_file_from_s3')
+        mock_get_conf = patcher.start()
         self.addCleanup(patcher.stop)
 
-        def _config_writer(*args, **kwargs):
-            with open(self.cloud_connector_sync_conf_path, 'wb') as fh:
-                json.dump(self.sync_conf, fh)
-                fh.flush()
+        def _config_getter(*args, **kwargs):
+            return ProviderResponse(True, 200, {'etag': 'an_etag'},
+                                    iter([json.dumps(self.sync_conf)]))
 
-        mock_get_and_write.side_effect = _config_writer
+        mock_get_conf.side_effect = _config_getter
 
         conf = {'swift_baseurl': self.swift_baseurl}
         self.mock_logger = mock.MagicMock()
@@ -1532,38 +1525,37 @@ class TestCloudConnectorApp(TestCloudConnectorBase):
 
 
 class TestCloudConnectorAppConstruction(TestCloudConnectorBase):
-    @mock.patch('s3_sync.cloud_connector.app.get_env_options')
-    @mock.patch('s3_sync.cloud_connector.app.get_and_write_conf_file_from_s3')
-    def test_app_init_json_load_error(self, mock_get_and_write,
+    @mock.patch('s3_sync.cloud_connector.util.get_env_options')
+    @mock.patch('s3_sync.cloud_connector.util.get_conf_file_from_s3')
+    def test_app_init_json_load_error(self, mock_get_conf,
                                       mock_get_env_options):
         conf = {'swift_baseurl': 'abbc'}
 
-        # No file written to read
+        # Bad response
+        mock_get_conf.side_effect = GetAndWriteFileException()
         self.assertRaises(SystemExit, app.CloudConnectorApplication,
                           conf, logger='a')
 
         # Bad JSON in file
-        def _config_writer(*args, **kwargs):
-            with open(self.cloud_connector_sync_conf_path, 'wb') as fh:
-                fh.write("I ain't valid JSON!")
-                fh.flush()
+        def _config_getter_not_json(*args, **kwargs):
+            return ProviderResponse(True, 200, {'etag': 'f'},
+                                    iter(["I ain't valid JSON!"]))
 
-        mock_get_and_write.side_effect = _config_writer
+        mock_get_conf.side_effect = _config_getter_not_json
 
         self.assertRaises(SystemExit, app.CloudConnectorApplication,
                           conf, logger='a')
 
     @mock.patch('s3_sync.cloud_connector.app.utils.get_logger')
-    @mock.patch('s3_sync.cloud_connector.app.get_env_options')
-    @mock.patch('s3_sync.cloud_connector.app.get_and_write_conf_file_from_s3')
-    def test_app_init_defaults(self, mock_get_and_write, mock_get_env_options,
+    @mock.patch('s3_sync.cloud_connector.util.get_env_options')
+    @mock.patch('s3_sync.cloud_connector.util.get_conf_file_from_s3')
+    def test_app_init_defaults(self, mock_get_conf, mock_get_env_options,
                                mock_get_logger):
-        def _config_writer(*args, **kwargs):
-            with open(self.cloud_connector_sync_conf_path, 'wb') as fh:
-                json.dump(self.sync_conf, fh)
-                fh.flush()
+        def _config_getter(*args, **kwargs):
+            return ProviderResponse(True, 200, {'etag': 'a'},
+                                    iter([json.dumps(self.sync_conf)]))
 
-        mock_get_and_write.side_effect = _config_writer
+        mock_get_conf.side_effect = _config_getter
         conf = {'swift_baseurl': 'abbc'}
         mock_get_logger.return_value = 'stub_logger'
         mock_get_env_options.return_value = 'stub_env_opts'
@@ -1574,10 +1566,10 @@ class TestCloudConnectorAppConstruction(TestCloudConnectorBase):
         self.assertEqual([mock.call(conf, log_route='cloud-connector')],
                          mock_get_logger.mock_calls)
         self.assertEqual([], app_instance.deny_host_headers)
-        self.assertEqual([mock.call('etc/swift-s3-sync/sync.json',
-                                    self.cloud_connector_sync_conf_path,
-                                    'stub_env_opts', user='swift')],
-                         mock_get_and_write.mock_calls)
+        self.assertEqual([
+            mock.call('etc/swift-s3-sync/sync.json', 'stub_env_opts',
+                      if_none_match=''),
+        ], mock_get_conf.mock_calls)
         self.assertEqual({
             (u'AUTH_\u062aa'.encode('utf8'), u'sw\u00e9ft'.encode('utf8')):
             self.sync_conf['containers'][0],
@@ -1588,18 +1580,38 @@ class TestCloudConnectorAppConstruction(TestCloudConnectorBase):
         }, app_instance.sync_profiles)
         self.assertEqual('abbc', app_instance.swift_baseurl)
 
-    @mock.patch('s3_sync.cloud_connector.app.get_env_options')
-    @mock.patch('s3_sync.cloud_connector.app.get_and_write_conf_file_from_s3')
-    def test_app_init_non_defaults(self, mock_get_and_write,
-                                   mock_get_env_options):
-        def _config_writer(*args, **kwargs):
-            with open(self.cloud_connector_sync_conf_path, 'wb') as fh:
-                json.dump(self.sync_conf, fh)
-                fh.flush()
+    @mock.patch('s3_sync.cloud_connector.app.ProxyApplication.__call__')
+    @mock.patch('s3_sync.cloud_connector.app.ConfigReloaderMixin.reload_confs')
+    @mock.patch('s3_sync.cloud_connector.app.utils.get_logger')
+    def test_app_config_reload_plumbing(self, _, mock_reload_confs,
+                                        mock_proxy_app_call):
+        conf = {'swift_baseurl': 'abbc'}
+        app_instance = app.CloudConnectorApplication(conf)
 
-        mock_get_and_write.side_effect = _config_writer
+        self.assertEqual([mock.call()], mock_reload_confs.mock_calls)
+
+        mock_reload_confs.reset_mock()
+
+        mock_proxy_app_call.return_value = 'stub_superclass_call'
+        self.assertTrue(isinstance(app_instance, app.ConfigReloaderMixin))
+        self.assertEqual('stub_superclass_call',
+                         app_instance('foo', bar='baz'))
+        self.assertEqual([
+            mock.call('foo', bar='baz'),
+        ], mock_proxy_app_call.mock_calls)
+        self.assertEqual([mock.call()], mock_reload_confs.mock_calls)
+
+    @mock.patch('s3_sync.cloud_connector.util.get_env_options')
+    @mock.patch('s3_sync.cloud_connector.util.get_conf_file_from_s3')
+    def test_app_init_non_defaults(self, mock_get_conf,
+                                   mock_get_env_options):
+        def _config_getter(*args, **kwargs):
+            return ProviderResponse(True, 200, {'etag': 'a'},
+                                    iter([json.dumps(self.sync_conf)]))
+
+        mock_get_conf.side_effect = _config_getter
         conf = {'swift_baseurl': 'abbc', 'deny_host_headers': ' a , c,d ',
-                'user': 'stubb_user', 'conf_file': 'stub_conf_file_path'}
+                'user': 'stubb_user', 'conf_file': 'stub_conf_key'}
         mock_get_env_options.return_value = 'stub_env_opts'
 
         app_instance = app.CloudConnectorApplication(
@@ -1607,10 +1619,9 @@ class TestCloudConnectorAppConstruction(TestCloudConnectorBase):
 
         self.assertEqual('another_stub_logger', app_instance.logger)
         self.assertEqual(['a', 'c', 'd'], app_instance.deny_host_headers)
-        self.assertEqual([mock.call('stub_conf_file_path',
-                                    self.cloud_connector_sync_conf_path,
-                                    'stub_env_opts', user='stubb_user')],
-                         mock_get_and_write.mock_calls)
+        self.assertEqual([
+            mock.call('stub_conf_key', 'stub_env_opts', if_none_match=''),
+        ], mock_get_conf.mock_calls)
         self.assertEqual({
             (u'AUTH_\u062aa'.encode('utf8'), u'sw\u00e9ft'.encode('utf8')):
             self.sync_conf['containers'][0],
