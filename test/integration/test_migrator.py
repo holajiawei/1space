@@ -211,6 +211,9 @@ class TestMigrator(TestCloudSyncBase):
     def test_swift_large_objects(self):
         migration = self.swift_migration()
         conn_noshunt = self.conn_for_acct_noshunt(migration['account'])
+        status = migrator_utils.TempMigratorStatus(migration)
+        migrator = migrator_utils.MigratorFactory().get_migrator(
+            migration, status)
 
         segments_container = migration['aws_bucket'] + '_segments'
         content = ''.join([chr(97 + i) * 2**20 for i in range(10)])
@@ -239,31 +242,19 @@ class TestMigrator(TestCloudSyncBase):
             headers={'x-object-meta-slo': 'slo-meta'},
             query_string='multipart-manifest=put')
 
-        # Verify migration
-        def _check_objects_copied():
-            try:
-                self.local_swift('get_container', migration['container'])
-                self.local_swift('get_container', segments_container)
-            except swiftclient.exceptions.ClientException as e:
-                if e.http_status == 404:
-                    return False
-                else:
-                    raise
+        migrator.next_pass()
 
-            _, listing = conn_noshunt.get_container(migration['container'])
-            swift_names = [obj['name'] for obj in listing]
-            objects = ['dlo', 'slo']
-            if sorted(objects) != swift_names:
-                return False
-            _, listing = conn_noshunt.get_container(segments_container)
-            segments = [obj['name'] for obj in listing]
-            expected = sorted(
-                ['slo-part-%d' % i for i in range(10)] +
-                ['dlo-part-%d' % i for i in range(10)])
-            return expected == segments
+        _, listing = conn_noshunt.get_container(migration['container'])
+        swift_names = [obj['name'] for obj in listing]
+        objects = ['dlo', 'slo']
+        self.assertEqual(sorted(objects), swift_names)
 
-        with self.migrator_running():
-            wait_for_condition(5, _check_objects_copied)
+        _, listing = conn_noshunt.get_container(segments_container)
+        segments = [obj['name'] for obj in listing]
+        expected = sorted(
+            ['slo-part-%d' % i for i in range(10)] +
+            ['dlo-part-%d' % i for i in range(10)])
+        self.assertEqual(expected, segments)
 
         mismatched = []
 
