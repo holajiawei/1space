@@ -32,7 +32,7 @@ from swift.proxy.server import Application as ProxyApplication
 
 from s3_sync.cloud_connector.auth import S3_IDENTITY_ENV_KEY
 from s3_sync.cloud_connector.util import (
-    get_and_write_conf_file_from_s3, get_env_options)
+    get_and_write_conf_file_from_s3, get_env_options, ConfigReloaderMixin)
 from s3_sync.provider_factory import create_provider
 from s3_sync.shunt import maybe_munge_profile_for_all_containers
 from s3_sync.utils import (
@@ -43,8 +43,6 @@ from s3_sync.utils import (
 
 CLOUD_CONNECTOR_CONF_PATH = os.path.sep + os.path.join(
     'tmp', 'cloud-connector.conf')
-CLOUD_CONNECTOR_SYNC_CONF_PATH = os.path.sep + os.path.join(
-    'tmp', 'sync.json')
 ROOT_UID = 0
 CC_SWIFT_REQ_KEY = 'cloud_connector.swift3_req'
 
@@ -464,7 +462,7 @@ class CloudConnectorController(Controller):
         return swob.HTTPNotImplemented()
 
 
-class CloudConnectorApplication(ProxyApplication):
+class CloudConnectorApplication(ConfigReloaderMixin, ProxyApplication):
     """
     Implements an S3 API endpoint (and eventually also a Swift endpoint)
     to run on cloud compute nodes and seamlessly provide R/W access to the
@@ -475,6 +473,8 @@ class CloudConnectorApplication(ProxyApplication):
     # when we can't have it.  This setting disables automatic mucking with our
     # pipeline.
     modify_wsgi_pipeline = None
+    CHECK_PERIOD = 30  # seconds
+    CONF_FILES = None  # can't be known until __init__ runs
 
     def __init__(self, conf, logger=None):
         self.conf = conf
@@ -491,30 +491,25 @@ class CloudConnectorApplication(ProxyApplication):
         # from the env.
         self.memcache = 'look but dont touch'
 
-        # This gets called more than once on startup; first as root, then as
-        # the configured user.  If root writes conf files down, then when the
-        # 2nd invocation tries to write it down, it'll fail.  We solve this
-        # writing it down the first time (instantiation of our stuff will fail
-        # otherwise), but chowning the file to the final user if we're
-        # currently euid == ROOT_UID.
-        unpriv_user = conf.get('user', 'swift')
+        self.swift_baseurl = conf.get('swift_baseurl')
         sync_conf_obj_name = conf.get(
             'conf_file', '/etc/swift-s3-sync/sync.json').lstrip('/')
-        env_options = get_env_options()
-        get_and_write_conf_file_from_s3(
-            sync_conf_obj_name, CLOUD_CONNECTOR_SYNC_CONF_PATH, env_options,
-            user=unpriv_user)
 
+        self.CONF_FILES = [{
+            'key': sync_conf_obj_name,
+            'load_cb': self.load_sync_config,
+        }]
         try:
-            with open(CLOUD_CONNECTOR_SYNC_CONF_PATH, 'rb') as fp:
-                self.sync_conf = json.load(fp)
-        except (IOError, ValueError) as err:
+            self.reload_confs()
+        except Exception as e:
             # There's no sane way we should get executed without something
             # having fetched and placed a sync config where our config is
             # telling us to look.  So if we can't find it, there's nothing
             # better to do than to fully exit the process.
-            exit("Couldn't read sync_conf_path %r: %s; exiting" % (
-                CLOUD_CONNECTOR_SYNC_CONF_PATH, err))
+            exit("Couldn't load sync_conf: %s; exiting" % e)
+
+    def load_sync_config(self, sync_conf_contents):
+        self.sync_conf = json.loads(sync_conf_contents)
 
         self.sync_profiles = {}
         for cont in self.sync_conf['containers']:
@@ -522,7 +517,9 @@ class CloudConnectorApplication(ProxyApplication):
                    cont['container'].encode('utf-8'))
             self.sync_profiles[key] = cont
 
-        self.swift_baseurl = conf.get('swift_baseurl')
+    def __call__(self, *args, **kwargs):
+        self.reload_confs()
+        return super(CloudConnectorApplication, self).__call__(*args, **kwargs)
 
     def get_controller(self, req):
         # Maybe handle /info specially here, like our superclass'
