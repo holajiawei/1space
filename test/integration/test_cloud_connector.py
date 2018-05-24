@@ -43,7 +43,7 @@ class TestCloudConnector(TestCloudSyncBase):
             "account": u"AUTH_test",
             "container": "s3-restore",
             "aws_bucket": "s3-restore",
-            "aws_endpoint": "http://cloud-connector:8081",
+            "aws_endpoint": self.cc_endpoint,
             "aws_identity": u"test:tester",
             "aws_secret": u"testing",
             "protocol": "s3",
@@ -786,6 +786,8 @@ class TestCloudConnector(TestCloudSyncBase):
             obj_name, {'x-object-meta-jam': 'bamm',
                        'content-length': '3'}, ['a', 'bc'])
         self.assertEqual(200, resp.status)  # S3 sez 200
+        self.assertEqual(hashlib.md5('abc').hexdigest(),
+                         resp.headers['etag'])
         self.assertEqual('', ''.join(resp.body))
 
         resp = self.cc_provider.get_object(obj_name)
@@ -793,11 +795,179 @@ class TestCloudConnector(TestCloudSyncBase):
         self.assertEqual(200, resp.status)
         self.assertEqual('abc', ''.join(resp.body))
         self.assertEqual('bamm', resp.headers['x-object-meta-jam'])
+        self.assertEqual(hashlib.md5('abc').hexdigest(),
+                         resp.headers['etag'])
 
         # It doesn't actually get streamed into the Swift cluster
         with self.assertRaises(ClientException) as cm:
             self.conn_noshunt.head_object(self.mapping['container'], obj_name)
         self.assertEqual(404, cm.exception.http_status)
+
+    def test_obj_put_s3_multipart_upload(self):
+        # Not there yet...
+        obj_name = u'bigg\u062adogg'
+
+        # Sanity-check that it's not there to start
+        resp = self.cc_provider.get_object(obj_name)
+        self.assertEqual(404, resp.status)
+        self.assertEqual('The specified key does not exist.',
+                         ''.join(resp.body))
+
+        # Upload a 2-part file using S3 multipart upload API
+        session = boto3.session.Session(
+            aws_access_key_id=self.cc_mapping['aws_identity'],
+            aws_secret_access_key=self.cc_mapping['aws_secret'])
+        conf = boto3.session.Config(s3={'addressing_style': 'path'})
+        s3_client = session.client('s3', config=conf,
+                                   endpoint_url=self.cc_endpoint)
+
+        multipart_resp = s3_client.create_multipart_upload(
+            Bucket=self.cc_mapping['aws_bucket'],
+            Key=obj_name,
+            Metadata={'flim': 'flam'},
+            ContentType='text/shibby-jibby',
+        )
+        upload_id = multipart_resp['UploadId']
+
+        # We'll just do two parts for brevity
+        body_1 = ('A' * self.cc_provider.MIN_PART_SIZE) + "I am a "
+        body_2 = "little teapot!"  # last seg can be < min size
+        resp = s3_client.upload_part(
+            Bucket=self.cc_mapping['aws_bucket'],
+            Body=body_1,
+            Key=obj_name,
+            ContentLength=len(body_1),
+            UploadId=upload_id,
+            PartNumber=1)
+        etag1 = resp['ETag']
+
+        resp = s3_client.upload_part(
+            Bucket=self.cc_mapping['aws_bucket'],
+            Body=body_2,
+            Key=obj_name,
+            ContentLength=len(body_2),
+            UploadId=upload_id,
+            PartNumber=2)
+        etag2 = resp['ETag']
+
+        s3_client.complete_multipart_upload(
+            Bucket=self.cc_mapping['aws_bucket'],
+            Key=obj_name,
+            MultipartUpload={'Parts': [
+                {'PartNumber': 1, 'ETag': etag1},
+                {'PartNumber': 2, 'ETag': etag2}]},
+            UploadId=upload_id)
+
+        # Now let's see if we can get it back out?  GOSH, I HOPE SO!
+        resp = self.cc_provider.get_object(obj_name)
+
+        self.assertEqual(200, resp.status)
+        self.assertEqual(body_1 + body_2, ''.join(resp.body))
+        self.assertEqual('flam', resp.headers['x-object-meta-flim'])
+
+        # It doesn't actually get streamed into the Swift cluster
+        with self.assertRaises(ClientException) as cm:
+            self.conn_noshunt.head_object(self.mapping['container'], obj_name)
+        self.assertEqual(404, cm.exception.http_status)
+
+        # ... but if you ask for it via the onprem swift cluser, it comes out.
+        swift_conn = self.conn_for_acct(u'AUTH_test')
+        headers, body = swift_conn.get_object(self.mapping['container'],
+                                              obj_name)
+        self.assertEqual('flam', headers['x-object-meta-flim'])
+        self.assertEqual(body_1 + body_2, ''.join(body))
+
+    def test_obj_put_s3_multipart_upload_copies(self):
+        # Not there yet...
+        obj_name = u'shibby\u062adibby'
+
+        # Sanity-check that it's not there to start
+        resp = self.cc_provider.get_object(obj_name)
+        self.assertEqual(404, resp.status)
+        self.assertEqual('The specified key does not exist.',
+                         ''.join(resp.body))
+
+        # Upload a 2-part file using S3 multipart upload API
+        # But we first upload the chunky dudes and then reference them wtih
+        # copies.
+        # We'll just do two parts for brevity
+        name_1 = u'floo\u062aswhoo'
+        body_1 = ('B' * self.cc_provider.MIN_PART_SIZE) + "I am a "
+        name_2 = u'flee\u062afloo'
+        body_2 = "bigg teapot!"  # last seg can be < min size
+
+        resp = self.cc_provider.put_object(
+            name_1, {'content-length': str(len(body_1))}, [body_1])
+        self.assertEqual(200, resp.status)  # S3 sez 200
+        etag1 = '"' + resp.headers['etag'] + '"'
+
+        resp = self.cc_provider.put_object(
+            name_2, {'content-length': str(len(body_2))}, [body_2])
+        self.assertEqual(200, resp.status)  # S3 sez 200
+        etag2 = '"' + resp.headers['etag'] + '"'
+
+        session = boto3.session.Session(
+            aws_access_key_id=self.cc_mapping['aws_identity'],
+            aws_secret_access_key=self.cc_mapping['aws_secret'])
+        conf = boto3.session.Config(s3={'addressing_style': 'path'})
+        s3_client = session.client('s3', config=conf,
+                                   endpoint_url=self.cc_endpoint)
+
+        multipart_resp = s3_client.create_multipart_upload(
+            Bucket=self.cc_mapping['aws_bucket'],
+            Key=obj_name,
+            Metadata={'flim': 'flam'},
+            ContentType='text/shibby-jibby',
+        )
+        upload_id = multipart_resp['UploadId']
+
+        resp = s3_client.upload_part_copy(
+            Bucket=self.cc_mapping['aws_bucket'],
+            CopySource={'Bucket': self.cc_mapping['aws_bucket'],
+                        'Key': name_1},
+            CopySourceRange='bytes=0-%d' % (len(body_1) - 1),
+            Key=obj_name,
+            UploadId=upload_id,
+            PartNumber=1)
+        copy_etag1 = resp['CopyPartResult']['ETag']
+        self.assertEqual(etag1, copy_etag1)
+
+        resp = s3_client.upload_part_copy(
+            Bucket=self.cc_mapping['aws_bucket'],
+            CopySource={'Bucket': self.cc_mapping['aws_bucket'],
+                        'Key': name_2},
+            Key=obj_name,
+            UploadId=upload_id,
+            PartNumber=2)
+        copy_etag2 = resp['CopyPartResult']['ETag']
+        self.assertEqual(etag2, copy_etag2)
+
+        s3_client.complete_multipart_upload(
+            Bucket=self.cc_mapping['aws_bucket'],
+            Key=obj_name,
+            MultipartUpload={'Parts': [
+                {'PartNumber': 1, 'ETag': copy_etag1},
+                {'PartNumber': 2, 'ETag': copy_etag2}]},
+            UploadId=upload_id)
+
+        # Now let's see if we can get it back out?  GOSH, I HOPE SO!
+        resp = self.cc_provider.get_object(obj_name)
+
+        self.assertEqual(200, resp.status)
+        self.assertEqual(body_1 + body_2, ''.join(resp.body))
+        self.assertEqual('flam', resp.headers['x-object-meta-flim'])
+
+        # It doesn't actually get streamed into the Swift cluster
+        with self.assertRaises(ClientException) as cm:
+            self.conn_noshunt.head_object(self.mapping['container'], obj_name)
+        self.assertEqual(404, cm.exception.http_status)
+
+        # ... but if you ask for it via the onprem swift cluser, it comes out.
+        swift_conn = self.conn_for_acct(u'AUTH_test')
+        headers, body = swift_conn.get_object(self.mapping['container'],
+                                              obj_name)
+        self.assertEqual('flam', headers['x-object-meta-flim'])
+        self.assertEqual(body_1 + body_2, ''.join(body))
 
     def test_obj_post(self):
         # Not there yet...
