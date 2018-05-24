@@ -81,6 +81,9 @@ class SyncSwift(BaseSync):
             'post_object', self.remote_container, swift_key,
             headers=headers)
 
+    def head_account(self):
+        return self._call_swiftclient('head_account', None, None)
+
     def put_object(self, swift_key, headers, body_iter, query_string=None):
         return self._call_swiftclient('put_object', self.container, swift_key,
                                       contents=body_iter, headers=headers,

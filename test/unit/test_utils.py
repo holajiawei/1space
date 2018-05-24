@@ -138,6 +138,62 @@ class TestUtilsFunctions(unittest.TestCase):
             self.assertEqual(expected, utils.diff_container_headers(
                 remote, local))
 
+    def test_diff_account_headers(self):
+        tests = [
+            ({'boogaloo': 'bangarang',
+              u'x-account-meta-test-\u062a': u'remote-\u062a-new',
+              u'x-account-meta-keep-\u062a': u'keepval-\u062a',
+              u'x-account-meta-test-new-\u062a': u'myval\u062a',
+              utils.ACCOUNT_ACL_KEY: '{"read-only":["AUTH_test"]}',
+              'x-account-meta-temp-url-key': 'newsecret'},
+             {'poohbear': 'eeyore',
+              'x-account-meta-test-\xd8\xaa': 'remote-\xd8\xaa',
+              'x-account-meta-keep-\xd8\xaa': 'keepval-\xd8\xaa',
+              'x-account-meta-test-old-\xd8\xaa': 'myval\xd8\xaa-oldval'},
+             {'x-account-meta-test-\xd8\xaa': 'remote-\xd8\xaa-new',
+              'x-account-meta-test-new-\xd8\xaa': 'myval\xd8\xaa',
+              'x-account-meta-test-old-\xd8\xaa': '',
+              utils.SYSMETA_ACCOUNT_ACL_KEY: '{"read-only":["AUTH_test"]}',
+              'x-account-meta-temp-url-key': 'newsecret'}),
+            ({'boogaloo': 'bangarang',
+              u'x-account-meta-test-\u062a': u'remote-\u062a-new',
+              u'x-account-meta-keep-\u062a': u'keepval-\u062a',
+              u'x-account-meta-test-new-\u062a': u'myval\u062a',
+              'x-account-meta-temp-url-key': 'newsecret'},
+             {'poohbear': 'eeyore',
+              'x-account-meta-test-\xd8\xaa': 'remote-\xd8\xaa-new',
+              'x-account-meta-keep-\xd8\xaa': 'keepval-\xd8\xaa',
+              'x-account-meta-test-new-\xd8\xaa': 'myval\xd8\xaa',
+              utils.ACCOUNT_ACL_KEY: '{"read-only":["AUTH_test"]}',
+              'x-account-meta-temp-url-key': 'oldsecret'},
+             {utils.SYSMETA_ACCOUNT_ACL_KEY: '',
+              'x-account-meta-temp-url-key': 'newsecret'}),
+            ({'boogaloo': 'bangarang',
+              u'x-account-meta-test-\u062a': u'remote-\u062a-new',
+              u'x-account-meta-keep-\u062a': u'keepval-\u062a',
+              u'x-account-meta-test-new-\u062a': u'myval\u062a',
+              'x-account-meta-temp-url-key': 'secret'},
+             {'poohbear': 'eeyore',
+              'x-account-meta-test-\xd8\xaa': 'remote-\xd8\xaa-new',
+              'x-account-meta-keep-\xd8\xaa': 'keepval-\xd8\xaa',
+              'x-account-meta-test-new-\xd8\xaa': 'myval\xd8\xaa',
+              'x-account-meta-temp-url-key': 'secret'},
+             {}),
+            ({},
+             {},
+             {}),
+            ({'x-account-meta-temp-url-key': 'mysecret'},
+             {},
+             {'x-account-meta-temp-url-key': 'mysecret'}),
+            ({},
+             {'x-account-meta-temp-url-key': 'mysecret'},
+             {'x-account-meta-temp-url-key': ''}),
+        ]
+
+        for remote, local, expected in tests:
+            self.assertEqual(expected, utils.diff_account_headers(
+                remote, local))
+
     def test_sys_migrator_header(self):
         self.assertEqual(
             'x-account-sysmeta-' + utils.MIGRATOR_HEADER,

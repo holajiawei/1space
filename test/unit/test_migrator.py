@@ -950,6 +950,7 @@ class TestMigrator(unittest.TestCase):
             'migrated': ['foo', 'bar']
         }]
         config = self.migrator.config
+        self.migrator._read_account_headers = mock.Mock(return_value={})
 
         for test in tests:
             objects = test['objects']
@@ -967,6 +968,7 @@ class TestMigrator(unittest.TestCase):
             provider.reset_mock()
             self.swift_client.reset_mock()
             self.swift_client.container_exists.return_value = True
+            provider.head_account.return_value = {}
 
             local_objects = test.get('local_objects', [])
 
@@ -1123,12 +1125,14 @@ class TestMigrator(unittest.TestCase):
         ]
         provider = create_provider_mock.return_value
         config = self.migrator.config
+        self.migrator._read_account_headers = mock.Mock(return_value={})
 
         for test_config, container_headers in tests:
             self.migrator.config = dict(config, **test_config)
 
             provider.reset_mock()
             self.swift_client.reset_mock()
+            provider.head_account.return_value = {}
             provider.list_objects.return_value = ProviderResponse(
                 True, 200, {}, [{'name': 'test'}])
             provider.get_object.return_value = ProviderResponse(
@@ -1199,8 +1203,10 @@ class TestMigrator(unittest.TestCase):
         resp.status = 404
         resp.headers = {}
         provider.head_bucket.return_value = resp
+        provider.head_account.return_value = {}
         self.swift_client.iter_objects.return_value = iter([])
         self.swift_client.container_exists.return_value = False
+        self.migrator._read_account_headers = mock.Mock(return_value={})
 
         self.migrator.status.get_migration.return_value = {}
 
@@ -1342,11 +1348,13 @@ class TestMigrator(unittest.TestCase):
         self.swift_client.get_object_metadata.side_effect = UnexpectedResponse(
             '', swift_404_resp)
         self.swift_client.upload_object.side_effect = upload_object
+        self.migrator._read_account_headers = mock.Mock(return_value={})
 
         bucket_resp = mock.Mock()
         bucket_resp.status = 200
         bucket_resp.headers = {}
 
+        provider.head_account.return_value = {}
         provider.head_bucket.return_value = bucket_resp
         provider.list_objects.return_value = ProviderResponse(
             True, 200, {}, [{'name': 'slo'}])
@@ -1574,11 +1582,13 @@ class TestMigrator(unittest.TestCase):
         self.swift_client.app.side_effect = fake_app
         self.swift_client.make_path.side_effect = _make_path
         self.swift_client.upload_object.side_effect = upload_object
+        self.migrator._read_account_headers = mock.Mock(return_value={})
 
         bucket_resp = mock.Mock()
         bucket_resp.status = 200
         bucket_resp.headers = {}
 
+        provider.head_account.return_value = {}
         provider.head_bucket.return_value = bucket_resp
         provider.list_objects.side_effect = list_objects
         provider.get_object.side_effect = get_object
@@ -1676,6 +1686,7 @@ class TestMigrator(unittest.TestCase):
         self.swift_client.container_exists.return_value = True
         self.swift_client.get_object_metadata.side_effect =\
             _get_object_metadata
+        self.migrator._read_account_headers = mock.Mock(return_value={})
         self.swift_client.get_object.side_effect = _get_object
         provider.list_objects.return_value = ProviderResponse(
             True, 200, {},
@@ -1684,6 +1695,7 @@ class TestMigrator(unittest.TestCase):
         provider.head_object.side_effect = _head_object
         provider.head_bucket.return_value = mock.Mock(status=200, headers={})
         provider.get_manifest.return_value = {}
+        provider.head_account.return_value = {}
 
         self.migrator.next_pass()
         self.assertEqual('', self.stream.getvalue())

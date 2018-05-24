@@ -20,6 +20,7 @@ from functools import partial
 import hashlib
 import json
 import StringIO
+from swift.common.middleware.acl import format_acl
 import swiftclient
 import time
 import urllib
@@ -27,6 +28,7 @@ from . import (
     TestCloudSyncBase, clear_swift_container, wait_for_condition,
     clear_s3_bucket, clear_swift_account, WaitTimedOut)
 import migrator_utils
+from s3_sync.utils import ACCOUNT_ACL_KEY
 
 
 class TestMigrator(TestCloudSyncBase):
@@ -579,6 +581,74 @@ class TestMigrator(TestCloudSyncBase):
             'head_container', migration['container'])
         self.assertNotIn(u'x-container-meta-migrated-\u062a', new_hdrs)
 
+    def test_migrate_account_metadata(self):
+        migration = self.swift_migration()
+        conn_remote = self.conn_for_acct(migration['aws_account'])
+        conn_local = self.conn_for_acct(migration['account'])
+        status = migrator_utils.TempMigratorStatus(migration)
+        migrator = migrator_utils.MigratorFactory().get_migrator(
+            migration, status)
+
+        acl_dict = {'read-write': [u'AUTH_\u062aacct2']}
+        acl = format_acl(version=2, acl_dict=acl_dict)
+        expected_headers = {
+            'x-account-meta-test1': 'mytestval',
+            u'x-account-meta-\u062atest1': u'mytestval\u062a',
+            'x-account-meta-temp-url-key': 'mysecret',
+            ACCOUNT_ACL_KEY: acl
+        }
+
+        def validate_acct_metadata(assertit=False):
+            hdrs = conn_local.head_account()
+            for hdr in expected_headers:
+                if assertit:
+                    self.assertEqual(expected_headers[hdr], hdrs.get(hdr),
+                                     'value wrong for "%s" expected: "%s", '
+                                     'got: "%s"' % (hdr, expected_headers[hdr],
+                                                    hdrs.get(hdr)))
+                else:
+                    if expected_headers[hdr] != hdrs.get(hdr):
+                        return False
+            return True
+
+        def validate_no_metadata():
+            hdrs = conn_local.head_account()
+            for hdr in expected_headers:
+                if hdrs.get(hdr) is not None:
+                    return False
+            return True
+
+        if not validate_no_metadata():
+            # This can happen if the previous run failed and the clean up
+            # code at end of test doesn't run.
+            # TODO: make clean up account metadata part of tearDown
+            conn_local.post_account({
+                'x-account-meta-test1': '',
+                'x-account-meta-temp-url-key': '',
+                u'x-account-meta-\u062atest1': '',
+                ACCOUNT_ACL_KEY: '',
+            })
+            time.sleep(2)
+
+        conn_remote.post_account({
+            'x-account-meta-test1': 'mytestval',
+            'x-account-meta-temp-url-key': 'mysecret',
+            u'x-account-meta-\u062atest1': u'mytestval\u062a',
+            ACCOUNT_ACL_KEY: acl,
+        })
+
+        self.assertTrue(validate_no_metadata())
+        migrator.next_pass()
+        self.assertTrue(validate_acct_metadata())
+        conn_remote.post_account({
+            'x-account-meta-test1': '',
+            u'x-account-meta-\u062atest1': '',
+            'x-account-meta-temp-url-key': '',
+            ACCOUNT_ACL_KEY: '',
+        })
+        migrator.next_pass()
+        self.assertTrue(validate_no_metadata())
+
     def test_propagate_container_meta_changes(self):
         migration = self._find_migration(
             lambda cont: cont['aws_bucket'] == '/*')
@@ -672,6 +742,10 @@ class TestMigrator(TestCloudSyncBase):
         conn_remote = self.conn_for_acct(migration['aws_account'])
         conn_noshunt = self.conn_for_acct_noshunt(migration['account'])
 
+        status = migrator_utils.TempMigratorStatus(migration)
+        migrator = migrator_utils.MigratorFactory().get_migrator(
+            migration, status)
+
         mykey = 'x-container-meta-where'
 
         def is_where(val):
@@ -690,12 +764,8 @@ class TestMigrator(TestCloudSyncBase):
         time.sleep(1)
         conn_local.post_container(
             'prop_metadata_test', headers={mykey: 'local'})
-        with self.migrator_running():
-            # TODO (MSD): This should be replaced with a mechanism for
-            # executing the migrator once
-            with self.assertRaises(WaitTimedOut):
-                wait_for_condition(3, partial(is_where, 'remote'))
-            self.assertTrue(is_where('local'))
+        migrator.next_pass()
+        self.assertTrue(is_where('local'))
 
     def test_object_metadata_copied_only_when_newer(self):
         migration = self.swift_migration()
@@ -703,6 +773,10 @@ class TestMigrator(TestCloudSyncBase):
         content = 'test object'
 
         where_header = 'x-object-meta-where'
+
+        status = migrator_utils.TempMigratorStatus(migration)
+        migrator = migrator_utils.MigratorFactory().get_migrator(
+            migration, status)
 
         conn_local = self.conn_for_acct(migration['account'])
         conn_remote = self.conn_for_acct(migration['aws_account'])
@@ -730,12 +804,8 @@ class TestMigrator(TestCloudSyncBase):
         time.sleep(1)
         conn_local.post_object(
             migration['container'], key, headers={where_header: 'local'})
-        with self.migrator_running():
-            # TODO: Replace this silliness with a means of calling migrator
-            # run once.
-            with self.assertRaises(WaitTimedOut):
-                wait_for_condition(3, partial(is_where, 'remote'))
-            self.assertTrue(is_where('local'))
+        migrator.next_pass()
+        self.assertTrue(is_where('local'))
 
     def test_propagate_object_meta(self):
         migration = self.swift_migration()
