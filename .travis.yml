@@ -10,8 +10,20 @@ cache:
 
 before_cache:
     - >
-        mkdir -p $HOME/docker && docker images -a --filter='dangling=false' --format '{{.Repository}}:{{.Tag}} {{.ID}}'
-        | xargs -n 2 -t sh -c 'test -e $HOME/docker/$1.tar.gz || docker save $0 | gzip -2 > $HOME/docker/$1.tar.gz'
+        docker images -a --format '{{.Repository}}:{{.Tag}} {{.ID}}' &&
+        mkdir -p $HOME/docker &&
+        docker images -a --filter='dangling=false' --format '{{.Repository}}:{{.Tag}} {{.ID}}'
+        | xargs -n 2 -t sh -c 'test $0 = bouncestorage/swift-aio:latest ||
+                               test $0 = python:2-alpine3.7 ||
+                               test -e $HOME/docker/$1.tar.gz ||
+                               docker save $0 | gzip -2 > $HOME/docker/$1.tar.gz' &&
+        docker images -a --filter='dangling=true' --format '{{.ID}}'
+        | xargs -n 1 -t sh -c 'rm $HOME/docker/$0.tar.gz' &&
+        docker images -a --filter='dangling=false' --format '{{.Repository}}:{{.Tag}} {{.ID}}'
+        | xargs -n 2 -t sh -c 'test $0 = bouncestorage/swift-aio:latest ||
+                               test $0 = python:2-alpine3.7 &&
+                               test -e $HOME/docker/$1.tar.gz &&
+                               rm $HOME/docker/$1.tar.gz'
 
 before_install:
     - if [[ -d $HOME/docker ]]; then ls $HOME/docker/*.tar.gz | xargs -I {file} sh -c "zcat {file} | docker load"; fi
