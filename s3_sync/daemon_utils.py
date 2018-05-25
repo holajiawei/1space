@@ -45,12 +45,10 @@ def setup_logger(logger_name, config):
     handler.setFormatter(formatter)
     logger.addHandler(handler)
 
-    logger = logging.getLogger('boto3')
-    logger.setLevel(level)
-    logger.addHandler(handler)
-    logger = logging.getLogger('botocore')
-    logger.setLevel(level)
-    logger.addHandler(handler)
+    for logname in ['boto3', 'botocore', 's3_sync']:
+        logger = logging.getLogger(logname)
+        logger.setLevel(level)
+        logger.addHandler(handler)
 
 
 def load_swift(logger_name, once=False):
