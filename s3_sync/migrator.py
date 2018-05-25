@@ -1026,7 +1026,10 @@ def main():
         migrator_conf['log_level'] = args.log_level
     migrator_conf['console'] = args.console
 
-    setup_logger(LOGGER_NAME, migrator_conf)
+    handler = setup_logger(LOGGER_NAME, migrator_conf)
+    logger = logging.getLogger('s3_sync')
+    logger.addHandler(handler)
+
     load_swift(LOGGER_NAME, args.once)
 
     logger = logging.getLogger(LOGGER_NAME)

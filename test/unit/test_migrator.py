@@ -672,7 +672,7 @@ class TestMigrator(unittest.TestCase):
             ProviderResponse(True, 200, [], buckets),
             ProviderResponse(True, 200, [], [])]
 
-        def check_provider(config, conns, per_account):
+        def check_provider(config, conns, per_account, logger=None):
             # We have to check the arguments this way, as otherwise the
             # dictionary gets mutated and assert_called_once_with check will
             # fail.
@@ -704,7 +704,7 @@ class TestMigrator(unittest.TestCase):
             ProviderResponse(True, 200, [], [])]
         next_pass_call = [0]
 
-        def check_provider(config, conns, per_account):
+        def check_provider(config, conns, per_account, logger=None):
             # We have to check the arguments this way, as otherwise the
             # dictionary gets mutated and assert_called_once_with check will
             # fail.
