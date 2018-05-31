@@ -98,6 +98,7 @@ class TestShunt(unittest.TestCase):
                 {
                     'account': 'AUTH_a',
                     'container': u'sw\u00e9ft',
+                    'merge_namespaces': True,
                     'propagate_delete': False,
                     'protocol': 'swift',
                     'aws_bucket': 'dest-container',
@@ -109,14 +110,25 @@ class TestShunt(unittest.TestCase):
                 {
                     'account': 'AUTH_a',
                     'container': 's3',
+                    'merge_namespaces': True,
                     'propagate_delete': False,
                     'aws_bucket': 'dest-bucket',
                     'aws_identity': 'user',
                     'aws_secret': 'key',
                 },
                 {
+                    'account': 'AUTH_a',
+                    'container': 's3prop',
+                    'propagate_delete': True,
+                    'merge_namespaces': True,
+                    'aws_bucket': 'dest_prop',
+                    'aws_identity': 'user',
+                    'aws_secret': 'key',
+                },
+                {
                     'account': 'AUTH_b',
                     'container': '/*',
+                    'merge_namespaces': True,
                     'propagate_delete': False,
                     'aws_bucket': 'dest-bucket',
                     'aws_identity': 'user',
@@ -125,6 +137,7 @@ class TestShunt(unittest.TestCase):
                 {
                     'account': 'AUTH_tee',
                     'container': 'tee',
+                    'merge_namespaces': True,
                     'propagate_delete': False,
                     'restore_object': True,
                     'aws_bucket': 'dest-bucket',
@@ -168,6 +181,7 @@ class TestShunt(unittest.TestCase):
             ('AUTH_a', 'sw\xc3\xa9ft'): {
                 'account': 'AUTH_a',
                 'container': 'sw\xc3\xa9ft'.decode('utf-8'),
+                'merge_namespaces': True,
                 'propagate_delete': False,
                 'protocol': 'swift',
                 'aws_bucket': 'dest-container',
@@ -179,14 +193,25 @@ class TestShunt(unittest.TestCase):
             ('AUTH_a', 's3'): {
                 'account': 'AUTH_a',
                 'container': 's3',
+                'merge_namespaces': True,
                 'propagate_delete': False,
                 'aws_bucket': 'dest-bucket',
+                'aws_identity': 'user',
+                'aws_secret': 'key',
+            },
+            ('AUTH_a', 's3prop'): {
+                'account': 'AUTH_a',
+                'container': 's3prop',
+                'propagate_delete': True,
+                'merge_namespaces': True,
+                'aws_bucket': 'dest_prop',
                 'aws_identity': 'user',
                 'aws_secret': 'key',
             },
             ('AUTH_b', '/*'): {
                 'account': 'AUTH_b',
                 'container': '/*',
+                'merge_namespaces': True,
                 'propagate_delete': False,
                 'aws_bucket': 'dest-bucket',
                 'aws_identity': 'user',
@@ -195,6 +220,7 @@ class TestShunt(unittest.TestCase):
             ('AUTH_tee', 'tee'): {
                 'account': 'AUTH_tee',
                 'container': 'tee',
+                'merge_namespaces': True,
                 'propagate_delete': False,
                 'restore_object': True,
                 'aws_bucket': 'dest-bucket',
@@ -274,6 +300,7 @@ class TestShunt(unittest.TestCase):
                 {
                     'account': 'AUTH_a',
                     'container': u'sw\u00e9ft',
+                    'merge_namespaces': True,
                     'propagate_delete': False,
                     'protocol': 'swift',
                     'aws_bucket': 'dest-container',
@@ -286,6 +313,7 @@ class TestShunt(unittest.TestCase):
             ('AUTH_a', 'sw\xc3\xa9ft'): {
                 'account': 'AUTH_a',
                 'container': 'sw\xc3\xa9ft'.decode('utf-8'),
+                'merge_namespaces': True,
                 'propagate_delete': False,
                 'protocol': 'swift',
                 'aws_bucket': 'dest-container',
@@ -432,6 +460,7 @@ class TestShunt(unittest.TestCase):
                 self.mock_shunt_swift.reset_mock()
         _test_shunted(u'/v1/AUTH_a/sw\u00e9ft/o', False)
         _test_shunted('/v1/AUTH_a/s3/o', True)
+        _test_shunted('/v1/AUTH_a/s3prop/o', True)
         _test_shunted('/v1/AUTH_b/c1/o', True)
         _test_shunted('/v1/AUTH_b/c2/o', True)
 
@@ -753,6 +782,7 @@ class TestShunt(unittest.TestCase):
         create_mock.assert_called_once_with({
             'account': 'AUTH_b',
             'container': 's3',
+            'merge_namespaces': True,
             'propagate_delete': False,
             'aws_bucket': 'dest-bucket',
             'aws_identity': 'user',
@@ -770,6 +800,7 @@ class TestShunt(unittest.TestCase):
         create_mock.assert_called_once_with({
             'account': 'AUTH_b',
             'container': 's4',
+            'merge_namespaces': True,
             'propagate_delete': False,
             'aws_bucket': 'dest-bucket',
             'aws_identity': 'user',

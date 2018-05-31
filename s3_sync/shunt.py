@@ -128,8 +128,8 @@ class S3SyncShunt(object):
 
         self.sync_profiles = {}
         for cont in conf.get('containers', []):
-            if cont.get('propagate_delete', True):
-                # object shouldn't exist in remote
+            # ONLY use shunt if merge_namespaces is set to true for sync
+            if not cont.get('merge_namespaces', False):
                 continue
             key = (cont['account'].encode('utf-8'),
                    cont['container'].encode('utf-8'))
