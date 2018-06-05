@@ -46,7 +46,9 @@ from .utils import (convert_to_local_headers, convert_to_swift_headers,
 from swift.common.http import HTTP_NOT_FOUND, HTTP_CONFLICT
 from swift.common import swob
 from swift.common.internal_client import UnexpectedResponse
-from swift.common.utils import FileLikeIter, Timestamp, quote
+from swift.common.ring import Ring
+from swift.common.ring.utils import is_local_device
+from swift.common.utils import FileLikeIter, Timestamp, quote, whataremyips
 
 EQUAL = 0
 ETAG_DIFF = 1
@@ -57,10 +59,48 @@ LOGGER_NAME = 'swift-s3-migrator'
 
 IGNORE_KEYS = set(('status', 'aws_secret', 'all_buckets', 'custom_prefix'))
 
+SwitchQueue = namedtuple('SwitchQueue', 'queue')
 MigrateObjectWork = namedtuple('MigrateObjectWork', 'aws_bucket container key')
 UploadObjectWork = namedtuple('UploadObjectWork', 'container key object '
                               'headers aws_bucket')
 S3_MPU_RE = re.compile('[0-9a-z]+-(\d+)$')
+
+
+class Selector(object):
+    """Object and Container Selector Class
+
+    This class provides selector to determine if a given container is local
+    and also if an object should go into the primary or verify queue. This
+    implementation uses the container ring to determine these.
+
+    Container selection (is_local_container) returns true if the local server
+    should include the db for the container.
+
+    Object selection (is_primary) returns true if the container ring returns
+    the local server as the primary for the *object*.
+
+    All primary and hand off nodes should participate in migrating a given
+    container and each server will process approximately 1/N objects in
+    their primary queue (where N is the number of container servers). The
+    remaining objects will be in the verify queue.
+    """
+
+    def __init__(self, myips, ring):
+        self.myips = myips
+        self.ring = ring
+
+    def is_local_container(self, account, container):
+        _, container_nodes = self.ring.get_nodes(account.encode('utf-8'),
+                                                 container.encode('utf-8'))
+        return any(is_local_device(self.myips, None, node['ip'], node['port'])
+                   for node in container_nodes)
+
+    def is_primary(self, account, container, obj):
+        _, container_nodes = self.ring.get_nodes(account.encode('utf-8'),
+                                                 container.encode('utf-8'),
+                                                 obj.encode('utf-8'))
+        return is_local_device(self.myips, None, container_nodes[0]['ip'],
+                               container_nodes[0]['port'])
 
 
 class MigrationError(Exception):
@@ -284,7 +324,7 @@ class Status(object):
 class Migrator(object):
     '''List and move objects from a remote store into the Swift cluster'''
     def __init__(self, config, status, work_chunk, workers, swift_pool, logger,
-                 node_id, nodes, segment_size):
+                 selector, segment_size):
         self.config = dict(config)
         if 'container' not in self.config:
             # NOTE: in the future this may no longer be true, as we may allow
@@ -297,14 +337,15 @@ class Migrator(object):
         self.status = status
         self.work_chunk = work_chunk
         self.max_conns = swift_pool.max_size
-        self.object_queue = eventlet.queue.Queue(self.max_conns * 2)
+        self.verify_queue = eventlet.queue.Queue(work_chunk)
+        self.primary_queue = eventlet.queue.Queue(self.max_conns * 2)
+        self.object_queue = self.primary_queue
         self.container_queue = eventlet.queue.Queue()
         self.ic_pool = swift_pool
         self.errors = eventlet.queue.Queue()
         self.workers = workers
         self.logger = logger
-        self.node_id = node_id
-        self.nodes = nodes
+        self.selector = selector
         self.provider = None
         self.gthread_local = eventlet.corolocal.local()
         self.segment_size = segment_size
@@ -361,7 +402,8 @@ class Migrator(object):
                 self._maybe_delete_internal_container(local_container['name'])
                 local_container = next(local_iterator)
 
-            if index % self.nodes == self.node_id:
+            if self.selector.is_local_container(self.config['account'],
+                                                remote_container):
                 # NOTE: we cannot remap container names when migrating the
                 # entire account
                 self.config['aws_bucket'] = remote_container
@@ -401,31 +443,7 @@ class Migrator(object):
                         'Updated account metadata for %s: %s' %
                         (self.config['account'], header_changes.keys()))
 
-    def _next_pass(self):
-        self.stats = MigratorPassStats()
-        self._process_account_metadata()
-        worker_pool = eventlet.GreenPool(self.workers)
-        for _ in xrange(self.workers):
-            worker_pool.spawn_n(self._upload_worker)
-        is_reset = False
-        self._manifests = set()
-        marker = self.status.get_migration(self.config).get('marker', '')
-        try:
-            marker = self._process_container(marker=marker)
-            if self.stats.scanned == 0:
-                is_reset = True
-                if marker:
-                    marker = self._process_container(marker='')
-        except ContainerNotFound as e:
-            self.logger.error(unicode(e))
-        except Exception:
-            # We must catch any errors to make sure we stop our workers. This
-            # might be better with a context manager.
-            self.logger.error('Failed to migrate "%s"' %
-                              self.config['aws_bucket'])
-            self.logger.error(''.join(traceback.format_exc()))
-        self.object_queue.join()
-
+    def _process_dlos(self):
         while not self.container_queue.empty():
             # Additional containers that we have discovered we have to handle.
             # These are containers that hold DLOs. We process all objects in
@@ -452,11 +470,53 @@ class Migrator(object):
         for aws_bucket, container, dlo in self._manifests:
             self.object_queue.put(
                 MigrateObjectWork(aws_bucket, container, dlo))
+
+    def _next_pass(self):
+        self.object_queue = self.primary_queue
+        self.stats = MigratorPassStats()
+        self._process_account_metadata()
+        worker_pool = eventlet.GreenPool(self.workers)
+        for _ in xrange(self.workers):
+            worker_pool.spawn_n(self._upload_worker)
+        is_reset = False
+        self._manifests = set()
+        marker = self.status.get_migration(self.config).get('marker', '')
+        try:
+            marker = self._process_container(marker=marker)
+            if self.stats.scanned == 0:
+                is_reset = True
+                if marker:
+                    marker = self._process_container(marker='')
+        except ContainerNotFound as e:
+            self.logger.error(unicode(e))
+        except Exception:
+            # We must catch any errors to make sure we stop our workers.
+            # This might be better with a context manager.
+            self.logger.error('Failed to migrate "%s"' %
+                              self.config['aws_bucket'])
+            self.logger.error(''.join(traceback.format_exc()))
+
+        self.object_queue.join()
+
+        self._process_dlos()
+
+        self.object_queue.join()
+
+        for _ in xrange(self.workers):
+            self.primary_queue.put(SwitchQueue(self.verify_queue))
+
+        self.object_queue = self.verify_queue
+
+        self.object_queue.join()
+
+        self._process_dlos()
+
         self.object_queue.join()
 
         self._stop_workers(self.object_queue)
 
         self.check_errors()
+
         # TODO: record the number of errors, as well
         self.status.save_migration(
             self.config, marker, self.stats.copied, self.stats.scanned,
@@ -840,11 +900,14 @@ class Migrator(object):
             remote['last_modified'], SWIFT_TIME_FMT)
         return remote_time < now - older_than
 
-    def object_queue_put(self, aws_bucket, container, remote):
+    def object_queue_put(self, aws_bucket, container, remote, use_primary):
         if not self._old_enough(remote):
             return
         work = MigrateObjectWork(aws_bucket, container, remote['name'])
-        self.object_queue.put(work)
+        if use_primary:
+            self.primary_queue.put(work)
+        else:
+            self.verify_queue.put(work)
 
     def _find_missing_objects(
             self, container, aws_bucket, marker, prefix, list_all):
@@ -867,7 +930,10 @@ class Migrator(object):
             # the keys that were returned in the listing and restart on the
             # following iteration.
             if not local or local['name'] > remote['name']:
-                self.object_queue_put(aws_bucket, container, remote)
+                self.object_queue_put(
+                    aws_bucket, container, remote,
+                    list_all or self.selector.is_primary(
+                        self.config['account'], container, remote['name']))
                 scanned += 1
                 remote = next(source_iter)
                 if remote:
@@ -886,7 +952,12 @@ class Migrator(object):
                             aws_bucket, container, remote['name'], ic)
                 else:
                     if cmp_ret < 0:
-                        self.object_queue_put(aws_bucket, container, remote)
+                        self.object_queue_put(
+                            aws_bucket, container, remote,
+                            list_all or
+                            self.selector.is_primary(
+                                self.config['account'], container,
+                                remote['name']))
                 remote = next(source_iter)
                 local = next(local_iter)
                 scanned += 1
@@ -1147,15 +1218,21 @@ class Migrator(object):
                 result = ic.make_request(
                     'PUT', path, dict(headers), (2,), content)
             self.logger.debug('Copied "%s/%s"' % (container, key))
-        self.gthread_local.uploaded_objects += 1
-        self.gthread_local.bytes_copied += size
+        if result.status_int == 201:
+            self.gthread_local.uploaded_objects += 1
+            self.gthread_local.bytes_copied += size
         return result
 
     def _upload_worker(self):
         self.gthread_local.uploaded_objects = 0
         self.gthread_local.bytes_copied = 0
+        current_queue = self.primary_queue
         while True:
-            work = self.object_queue.get()
+            work = current_queue.get()
+            if isinstance(work, SwitchQueue):
+                current_queue.task_done()
+                current_queue = work[0]
+                continue
             try:
                 if not work:
                     break
@@ -1175,7 +1252,7 @@ class Migrator(object):
                 # workers quit, but the queue has not been drained.
                 self.errors.put((aws_bucket, key, sys.exc_info()))
             finally:
-                self.object_queue.task_done()
+                current_queue.task_done()
         self.stats.update(
             copied=self.gthread_local.uploaded_objects,
             bytes_copied=self.gthread_local.bytes_copied)
@@ -1188,10 +1265,11 @@ class Migrator(object):
 
 
 def process_migrations(migrations, migration_status, internal_pool, logger,
-                       items_chunk, workers, node_id, nodes, segment_size):
+                       items_chunk, workers, selector, segment_size):
     handled_containers = []
     for index, migration in enumerate(migrations):
-        if migration['aws_bucket'] == '/*' or index % nodes == node_id:
+        if migration['aws_bucket'] == '/*' or selector.is_local_container(
+                migration['account'], migration['aws_bucket']):
             if migration.get('remote_account'):
                 src_account = migration.get('remote_account')
             else:
@@ -1202,7 +1280,7 @@ def process_migrations(migrations, migration_status, internal_pool, logger,
             migrator = Migrator(migration, migration_status,
                                 items_chunk, workers,
                                 internal_pool, logger,
-                                node_id, nodes, segment_size)
+                                selector, segment_size)
             pass_containers = migrator.next_pass()
             if pass_containers is None:
                 # Happens if there is an error listing containers.
@@ -1216,11 +1294,12 @@ def process_migrations(migrations, migration_status, internal_pool, logger,
 
 
 def run(migrations, migration_status, internal_pool, logger, items_chunk,
-        workers, node_id, nodes, poll_interval, segment_size, once):
+        workers, selector, poll_interval, segment_size, once):
     while True:
         cycle_start = time.time()
         process_migrations(migrations, migration_status, internal_pool, logger,
-                           items_chunk, workers, node_id, nodes, segment_size)
+                           items_chunk, workers, selector,
+                           segment_size)
         elapsed = time.time() - cycle_start
         naptime = max(0, poll_interval - elapsed)
         msg = 'Finished cycle in %0.2fs' % elapsed
@@ -1266,20 +1345,18 @@ def main():
     internal_pool = create_ic_pool(conf, swift_dir, workers)
     segment_size = migrator_conf.get('segment_size', 100000000)
 
-    if 'process' not in migrator_conf or 'processes' not in migrator_conf:
-        print 'Missing "process" or "processes" settings in the config file'
-        exit(-1)
+    container_ring = Ring(swift_dir, ring_name='container')
+    myips = whataremyips('0.0.0.0')
+    selector = Selector(myips, container_ring)
 
     items_chunk = migrator_conf['items_chunk']
-    node_id = int(migrator_conf['process'])
-    nodes = int(migrator_conf['processes'])
     poll_interval = float(migrator_conf.get('poll_interval', 5))
 
     migrations = conf.get('migrations', [])
     migration_status = Status(migrator_conf['status_file'])
 
     run(migrations, migration_status, internal_pool, logger, items_chunk,
-        workers, node_id, nodes, poll_interval, segment_size, args.once)
+        workers, selector, poll_interval, segment_size, args.once)
 
 
 if __name__ == '__main__':

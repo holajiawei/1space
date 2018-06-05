@@ -214,6 +214,7 @@ class TestCloudSyncBase(unittest.TestCase):
         },
     }
     S3_CREDS = {}
+    counters = {}
 
     conn_by_acct = {}  # utf8_acct => Connection()
     conn_by_acct_noshunt = {}  # as above, but bypasses any shunt
@@ -483,7 +484,10 @@ class TestCloudSyncBase(unittest.TestCase):
         if old_migrator_pid:
             kill_a_pid(old_migrator_pid)
 
-        devnull = open('/dev/null', 'wb')
+        c = self.counters.get('msd', 0)
+        c += 1
+        self.counters['msd'] = c
+        devnull = open('/tmp/MSD%d' % c, 'wb')
         proc = subprocess.Popen(
             ['/usr/bin/python', '/usr/local/bin/swift-s3-migrator',
              '--config',
