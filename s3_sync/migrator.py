@@ -526,25 +526,25 @@ class Migrator(object):
         # Simplifies the bookkeeping
         yield None
 
-    def _reconcile_deleted_objects(self, internal_client, container, key):
+    def _reconcile_deleted_objects(self, container, key):
         # NOTE: to handle the case of objects being deleted from the source
         # cluster after they've been migrated, we have to HEAD the object to
         # check for the migration header.
-        try:
-            hdrs = internal_client.get_object_metadata(
-                self.config['account'], container, key)
-        except UnexpectedResponse as e:
-            # This may arise if there an eventual consistency issue between the
-            # container database and the object server state.
-            if e.resp.status_int == HTTP_NOT_FOUND:
-                return
-            raise
-        if get_sys_migrator_header('object') in hdrs:
-            self.logger.info(
-                'Detected removed object %s. Removing from %s/%s' % (
-                    key, self.config['account'], container))
-            internal_client.delete_object(
-                self.config['account'], container, key)
+        with self.ic_pool.item() as ic:
+            try:
+                hdrs = ic.get_object_metadata(
+                    self.config['account'], container, key)
+            except UnexpectedResponse as e:
+                # This may arise if there an eventual consistency issue between
+                # the container database and the object server state.
+                if e.resp.status_int == HTTP_NOT_FOUND:
+                    return
+                raise
+            if get_sys_migrator_header('object') in hdrs:
+                self.logger.info(
+                    'Detected removed object %s. Removing from %s/%s' % (
+                        key, self.config['account'], container))
+                ic.delete_object(self.config['account'], container, key)
 
     def _maybe_delete_internal_container(self, container):
         '''Delete a specified internal container.
@@ -584,8 +584,7 @@ class Migrator(object):
         for obj in listing:
             if not obj:
                 break
-            with self.ic_pool.item() as ic:
-                self._reconcile_deleted_objects(ic, container, obj['name'])
+            self._reconcile_deleted_objects(container, obj['name'])
 
         state_meta = {get_sys_migrator_header('container'):
                       MigrationContainerStates.SRC_DELETED}
@@ -785,9 +784,7 @@ class Migrator(object):
                 if remote:
                     marker = remote['name']
             elif local['name'] < remote['name']:
-                with self.ic_pool.item() as ic:
-                    self._reconcile_deleted_objects(
-                        ic, container, local['name'])
+                self._reconcile_deleted_objects(container, local['name'])
                 local = next(local_iter)
             else:
                 try:
@@ -812,8 +809,7 @@ class Migrator(object):
 
         while local and (not marker or local['name'] < marker or scanned == 0):
             # We may have objects left behind that need to be removed
-            with self.ic_pool.item() as ic:
-                self._reconcile_deleted_objects(ic, container, local['name'])
+            self._reconcile_deleted_objects(container, local['name'])
             local = next(local_iter)
         return marker, scanned, copied
 
