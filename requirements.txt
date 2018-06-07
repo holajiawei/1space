@@ -3,6 +3,5 @@ git+https://github.com/swiftstack/botocore.git@1.4.32.6#egg=botocore
 git+https://github.com/swiftstack/container-crawler.git@0.0.12#egg=container-crawler
 requests
 python-swiftclient
-urllib3
 lxml
 eventlet<0.23.0
