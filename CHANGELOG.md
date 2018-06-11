@@ -1,3 +1,23 @@
+## 0.1.36 (2018-06-11)
+
+Features:
+    - `merge_namespaces` flag now controls shunt behavior as opposed to just
+      looking at the `propagate_delete` flag. This means that configuration
+      MUST BE UPDATED to maintain same behavior.
+    - Migrator can now propagate account metadata from a swift source,
+      including account ACL's.
+    - The shunt will now automatically detect changed configuration file and
+      reload configuration.
+
+Improvements:
+    - The migrator now initializes the provider loggers correctly for better/
+      more logging.
+    - Some improvements and changes to the test container management.
+
+Bug fixes:
+    - Migrator will not fail out on failed deletion of source object that is
+      already deleted.
+
 ## 0.1.35 (2018-05-16)
 
 Feature:
