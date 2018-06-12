@@ -1944,8 +1944,8 @@ class TestMain(unittest.TestCase):
         }
 
     @contextmanager
-    def patch(self, name):
-        with mock.patch('s3_sync.migrator.' + name) as mocked:
+    def patch(self, name, **kwargs):
+        with mock.patch('s3_sync.migrator.' + name, **kwargs) as mocked:
             yield mocked
 
     def pop_log_lines(self):
@@ -1990,7 +1990,7 @@ class TestMain(unittest.TestCase):
                 'workers': 1337,
                 'items_chunk': 42,
                 'status_file': '/test/status',
-                'poll_interval': 5,
+                'poll_interval': 60,
                 'process': 0,
                 'processes': 15,
             },
@@ -2003,9 +2003,15 @@ class TestMain(unittest.TestCase):
             ],
             'swift_dir': '/foo/bar/swift',
         }
+
+        old_run = s3_sync.migrator.run
         with self.patch('setup_context') as mock_setup_context,\
                 self.patch('Migrator') as mock_migrator,\
-                self.patch('Status') as mock_status:
+                self.patch('Status') as mock_status,\
+                self.patch(
+                    'run',
+                    new_callable=lambda: mock.Mock(side_effect=old_run))\
+                as mock_run:
             mock_setup_context.return_value = (
                 mock.Mock(log_level='warn', console=True, once=True),
                 config)
@@ -2015,3 +2021,6 @@ class TestMain(unittest.TestCase):
             mock_migrator.assert_called_once_with(
                 config['migrations'][0], mock_status.return_value, 42, 1337,
                 mock.ANY, mock.ANY, 0, 15)
+            mock_run.assert_called_once_with(
+                config['migrations'], mock_status.return_value, mock.ANY,
+                mock.ANY, 42, 1337, 0, 15, 60, True)

@@ -1047,7 +1047,7 @@ def main():
     items_chunk = migrator_conf['items_chunk']
     node_id = int(migrator_conf['process'])
     nodes = int(migrator_conf['processes'])
-    poll_interval = float(conf.get('poll_interval', 5))
+    poll_interval = float(migrator_conf.get('poll_interval', 5))
 
     migrations = conf.get('migrations', [])
     migration_status = Status(migrator_conf['status_file'])
