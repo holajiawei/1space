@@ -1027,7 +1027,19 @@ class TestMigrator(unittest.TestCase):
         status_file = os.path.join(temp_dir, 'migrator.status')
         self.migrator.status = s3_sync.migrator.Status(status_file)
         with mock.patch('time.time', return_value=100.0):
-            self.migrator.next_pass()
+            handled_containers = self.migrator.next_pass()
+
+        self.assertEqual(
+            [{'aws_bucket': 'bucket1',
+              'account': 'AUTH_dev',
+              'container': 'bucket1',
+              'all_buckets': True},
+             {'aws_bucket': 'bucket2',
+              'account': 'AUTH_dev',
+              'container': 'bucket2',
+              'all_buckets': True}],
+            handled_containers)
+
         self.assertEqual(['Copied "bucket1/obj"',
                           'Copied "bucket2/obj"'],
                          self.stream.getvalue().splitlines())
@@ -1932,7 +1944,7 @@ class TestMain(unittest.TestCase):
         self.logger.addHandler(logging.StreamHandler(self.stream))
         self.conf = {
             'migrations': [],
-            'migration_status': None,
+            'migration_status': mock.Mock(),
             'internal_pool': None,
             'logger': self.logger,
             'items_chunk': None,
@@ -2024,3 +2036,37 @@ class TestMain(unittest.TestCase):
             mock_run.assert_called_once_with(
                 config['migrations'], mock_status.return_value, mock.ANY,
                 mock.ANY, 42, 1337, 0, 15, 60, True)
+
+    @mock.patch('s3_sync.migrator.create_provider')
+    def test_migrate_all_containers_error(self, create_provider_mock):
+        provider_mock = mock.Mock()
+        provider_mock.list_buckets.side_effect = RuntimeError('Failed to list')
+        create_provider_mock.return_value = provider_mock
+        migrations = [
+            {'account': 'AUTH_dev',
+             'aws_bucket': '/*',
+             'aws_identity': 'identity',
+             'aws_secret': 'secret'}
+        ]
+
+        status = s3_sync.migrator.Status('status-path')
+        old_list = [
+            {'account': 'AUTH_dev',
+             'aws_bucket': 'bucket1',
+             'container': 'bucket1',
+             'aws_identity': 'identity'},
+            {'account': 'AUTH_dev',
+             'aws_bucket': 'bucket2',
+             'container': 'bucket2',
+             'aws_identity': 'identity'}]
+
+        def fake_load_list():
+            status.status_list = [dict(entry) for entry in old_list]
+
+        status.save_status_list = mock.Mock()
+        status.load_status_list = mock.Mock(side_effect=fake_load_list)
+
+        s3_sync.migrator.run(
+            migrations, status, mock.Mock(max_size=10), logging.getLogger(),
+            1000, 10, 0, 1, 10, True)
+        self.assertEqual(old_list, status.status_list)

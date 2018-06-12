@@ -255,14 +255,14 @@ class Migrator(object):
             self.provider = create_provider(
                 self.config, self.max_conns, False)
             self._next_pass()
-            return
+            return [dict(self.config)]
 
         self.config['all_buckets'] = True
         self.config['container'] = '.'
         self.provider = create_provider(
             self.config, self.max_conns, False)
         try:
-            self._reconcile_containers()
+            return self._reconcile_containers()
         except Exception:
             # Any exception raised will terminate the migrator process. As the
             # process should be going around in a loop through the configured
@@ -271,6 +271,7 @@ class Migrator(object):
             self.logger.error('Failed to list containers for "%s"' %
                               (self.config['account']))
             self.logger.error(''.join(traceback.format_exc()))
+            return None
 
     def _reconcile_containers(self):
         resp, iterator = iter_listing(
@@ -281,7 +282,9 @@ class Migrator(object):
             self.logger.error(
                 'Failed to list source buckets/containers: "%s"' %
                 ''.join(resp.body))
-            return
+            return None
+
+        handled_containers = []
 
         # TODO: this is very similar to the code in _splice_listing() and
         # _find_missing_objects(). We might be able to provide a utility
@@ -305,6 +308,7 @@ class Migrator(object):
                 self.config['aws_bucket'] = remote_container
                 self.config['container'] = remote_container
                 self.provider.aws_bucket = remote_container
+                handled_containers.append(dict(self.config))
                 self._next_pass()
             if local_container and local_container['name'] == remote_container:
                 local_container = next(local_iterator)
@@ -312,6 +316,7 @@ class Migrator(object):
         while local_container:
             self._maybe_delete_internal_container(local_container['name'])
             local_container = next(local_iterator)
+        return handled_containers
 
     def _process_account_metadata(self):
         if self.config.get('protocol') != 'swift':
@@ -697,6 +702,8 @@ class Migrator(object):
                     # This diverts from our usual strategy of splitting up
                     # the work, but we cannot migrate the main container
                     # until the versions container is migrated.
+                    # NOTE: currently, this container's statistics are rolled
+                    # into the parent container.
                     self._process_container(
                         container=versioned_container,
                         aws_bucket=versioned_container, marker='',
@@ -971,6 +978,7 @@ class Migrator(object):
 
 def process_migrations(migrations, migration_status, internal_pool, logger,
                        items_chunk, workers, node_id, nodes):
+    handled_containers = []
     for index, migration in enumerate(migrations):
         if migration['aws_bucket'] == '/*' or index % nodes == node_id:
             if migration.get('remote_account'):
@@ -984,8 +992,16 @@ def process_migrations(migrations, migration_status, internal_pool, logger,
                                 items_chunk, workers,
                                 internal_pool, logger,
                                 node_id, nodes)
-            migrator.next_pass()
+            pass_containers = migrator.next_pass()
+            if pass_containers is None:
+                # Happens if there is an error listing containers.
+                # Inserting the migration we attempted to process will ensure
+                # we don't prune it (or the related containers).
+                handled_containers.append(migration)
+            else:
+                handled_containers += pass_containers
             migrator.close()
+    migration_status.prune(handled_containers)
 
 
 def run(migrations, migration_status, internal_pool, logger, items_chunk,
@@ -1051,7 +1067,6 @@ def main():
 
     migrations = conf.get('migrations', [])
     migration_status = Status(migrator_conf['status_file'])
-    migration_status.prune(migrations)
 
     run(migrations, migration_status, internal_pool, logger, items_chunk,
         workers, node_id, nodes, poll_interval, args.once)
