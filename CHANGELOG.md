@@ -1,6 +1,20 @@
+## 0.1.37 (2018-06-12)
+
+Features:
+
+    - Added a "cloud connector" feature. It allows for setting up a docker
+      container in AWS that can serve S3 requests from S3, but fall back to the
+      on-premises Swift cluster when necessary.
+
+Bug fixes:
+
+    - The migrator honors the `poll_interval` setting set in the
+      `migrator_settings` portion of the configuration file.
+
 ## 0.1.36 (2018-06-11)
 
 Features:
+
     - `merge_namespaces` flag now controls shunt behavior as opposed to just
       looking at the `propagate_delete` flag. This means that configuration
       MUST BE UPDATED to maintain same behavior.
@@ -10,11 +24,13 @@ Features:
       reload configuration.
 
 Improvements:
+
     - The migrator now initializes the provider loggers correctly for better/
       more logging.
     - Some improvements and changes to the test container management.
 
 Bug fixes:
+
     - Migrator will not fail out on failed deletion of source object that is
       already deleted.
 
