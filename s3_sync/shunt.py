@@ -185,7 +185,9 @@ class S3SyncShunt(object):
         sync_profile, per_account = maybe_munge_profile_for_all_containers(
             sync_profile, cont)
 
-        if req.method == 'DELETE' and sync_profile.get('migration'):
+        if req.method == 'DELETE' and (
+                sync_profile.get('migration') or
+                sync_profile.get('allow_delete_remote_from_local')):
             return self.handle_delete(
                 req, start_response, sync_profile, obj, per_account)
 
@@ -436,18 +438,16 @@ class S3SyncShunt(object):
             self, req, start_response, sync_profile, obj, per_account):
         status, headers, app_iter = req.call_application(self.app)
 
-        if sync_profile.get('protocol') != 'swift':
-            start_response(status, headers)
-            return app_iter
+        if sync_profile.get('protocol') == 'swift' or\
+                sync_profile.get('allow_delete_remote_from_local'):
 
-        if sync_profile.get('migration'):
             provider = create_provider(sync_profile, max_conns=1,
                                        per_account=per_account)
             remote_resp = provider.shunt_delete(req, obj)
 
-        if status.startswith('404'):
-            start_response(remote_resp[0], remote_resp[1])
-            return remote_resp[2]
+            if status.startswith('404'):
+                start_response(remote_resp[0], remote_resp[1])
+                return remote_resp[2]
 
         start_response(status, headers)
         return app_iter

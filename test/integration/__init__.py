@@ -111,7 +111,8 @@ def clear_swift_account(client):
 
 
 def s3_prefix(account, container, key):
-    md5_prefix = hashlib.md5('%s/%s' % (account, container))
+    md5_prefix = hashlib.md5('%s/%s' % (account.encode('utf-8'),
+                                        container.encode('utf-8')))
     return hex(long(md5_prefix.hexdigest(), 16) % 16 ** 6)[2:-1]
 
 
@@ -485,6 +486,13 @@ class TestCloudSyncBase(unittest.TestCase):
     def s3_archive_mapping(klass):
         return klass._find_mapping(
             lambda cont: cont['protocol'] == 's3' and not cont['retain_local'])
+
+    @classmethod
+    def s3_archive_del_mapping(klass):
+        return klass._find_mapping(
+            lambda cont:
+                cont['protocol'] == 's3' and
+                cont.get('allow_delete_remote_from_local'))
 
     @classmethod
     def s3_restore_mapping(klass):

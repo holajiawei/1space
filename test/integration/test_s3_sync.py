@@ -27,16 +27,15 @@ from . import TestCloudSyncBase, clear_swift_container, wait_for_condition, \
 class TestCloudSync(TestCloudSyncBase):
     def _test_archive(
             self, key, content, mapping, get_etag, expected_location):
-        etag = self.local_swift(
-            'put_object', mapping['container'], key,
-            content.encode('utf-8'))
+        conn = self.conn_for_acct(mapping['account'])
+        etag = conn.put_object(mapping['container'], key,
+                               content.encode('utf-8'))
         self.assertEqual(
             hashlib.md5(content.encode('utf-8')).hexdigest(), etag)
 
         def _check_expired():
             # wait for the shunt to return the results for the object
-            hdrs, listing = self.local_swift(
-                'get_container', mapping['container'])
+            hdrs, listing = conn.get_container(mapping['container'])
             if int(hdrs['x-container-object-count']) != 0:
                 return False
             if any(map(lambda entry: 'content_location' not in entry,
@@ -120,7 +119,7 @@ class TestCloudSync(TestCloudSyncBase):
             s3_key = s3_key_name(s3_mapping, key)
             expected_location = '%s;%s;%s/' % (
                 s3_mapping['aws_endpoint'],
-                s3_mapping['aws_identity'],
+                s3_mapping['aws_bucket'],
                 s3_key[:-1 * (len(key) + 1)])
 
             def etag_func(key):
@@ -130,6 +129,32 @@ class TestCloudSync(TestCloudSyncBase):
 
             self._test_archive(key, content, s3_mapping, etag_func,
                                expected_location)
+
+    def test_s3_archive_del(self):
+        s3_mapping = self.s3_archive_del_mapping()
+
+        conn = self.conn_for_acct(s3_mapping['account'])
+        test_args = [
+            (u'test_archive', u'testing archive put'),
+            (u'unicod\u00e9', u'unicod\u00e9 blob')]
+        for key, content in test_args:
+            s3_key = s3_key_name(s3_mapping, key)
+            expected_location = '%s;%s;%s/' % (
+                s3_mapping['aws_endpoint'],
+                s3_mapping['aws_bucket'],
+                s3_key[:-1 * (len(key) + 1)])
+
+            def etag_func(key):
+                hdrs = self.s3(
+                    'head_object', Bucket=s3_mapping['aws_bucket'], Key=s3_key)
+                return hdrs['ETag'][1:-1]
+
+            self._test_archive(key, content, s3_mapping, etag_func,
+                               expected_location)
+            conn.delete_object(s3_mapping['container'], key)
+            hdrs, listing = conn.get_container(s3_mapping['container'])
+            self.assertFalse(
+                any(entry['name'] == key for entry in listing))
 
     def test_swift_sync(self):
         mapping = self.swift_sync_mapping()

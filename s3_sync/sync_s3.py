@@ -200,6 +200,27 @@ class SyncS3(BaseSync):
 
         return resp
 
+    def shunt_delete(self, req, swift_key):
+        """Propagate delete to the remote store
+
+           :returns: (status, headers, body_iter) tuple
+        """
+        if not swift_key:
+            raise NotImplemented
+        else:
+            s3_key = self.get_s3_name(swift_key)
+            self.logger.debug('Deleting object %s' % s3_key)
+            resp = self._call_boto('delete_object', Bucket=self.aws_bucket,
+                                   Key=s3_key)
+        if resp.success:
+            # If there is a manifest uploaded for this object, remove it also
+            s3_manifest = self.get_manifest_name(s3_key)
+            self.logger.debug('Deleting manifest %s' % s3_manifest)
+            self._call_boto('delete_object',
+                            Bucket=self.aws_bucket,
+                            Key=s3_manifest)
+        return resp.to_wsgi()
+
     def shunt_object(self, req, swift_key):
         """Fetch an object from the remote cluster to stream back to a client.
 
