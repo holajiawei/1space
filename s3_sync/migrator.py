@@ -111,7 +111,7 @@ def cmp_meta(dest, source):
 
 def _update_status_counts(status, moved_count, scanned_count, reset):
     """
-    Update counts and finished keys in status.  On reset copy existing counts
+    Update counts and finished keys in status. On reset copy existing counts
     to last_ counts if they've changed.
     """
     now = time.time()
@@ -349,18 +349,21 @@ class Migrator(object):
             worker_pool.spawn_n(self._upload_worker)
         is_reset = False
         self._manifests = set()
+        scanned = 0
+        copied = 0
+        marker = self.status.get_migration(self.config).get('marker', '')
         try:
-            marker, scanned, copied = self._process_container()
-            if scanned == 0 and marker:
+            marker, scanned, copied = self._process_container(marker=marker)
+            if scanned == 0:
                 is_reset = True
-                marker, scanned, copied = self._process_container(marker='')
+                if marker:
+                    marker, scanned, copied = self._process_container(
+                        marker='')
         except ContainerNotFound as e:
-            scanned = 0
             self.logger.error(unicode(e))
         except Exception:
             # We must catch any errors to make sure we stop our workers. This
             # might be better with a context manager.
-            scanned = 0
             self.logger.error('Failed to migrate "%s"' %
                               self.config['aws_bucket'])
             self.logger.error(''.join(traceback.format_exc()))
@@ -399,9 +402,6 @@ class Migrator(object):
         self._stop_workers(self.object_queue)
 
         self.check_errors()
-        if scanned == 0:
-            return
-
         copied -= self.errors.qsize()
         # TODO: record the number of errors, as well
         self.status.save_migration(

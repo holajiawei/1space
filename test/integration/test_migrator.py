@@ -901,6 +901,9 @@ class TestMigrator(TestCloudSyncBase):
     def test_swift_history_location(self):
         migration = self._find_migration(
             lambda cont: cont['container'] == 'no-auto-history')
+        status = migrator_utils.TempMigratorStatus(migration)
+        migrator = migrator_utils.MigratorFactory().get_migrator(
+            migration, status)
 
         history_container = migration['aws_bucket'] + '_history'
         self.remote_swift(
@@ -929,41 +932,20 @@ class TestMigrator(TestCloudSyncBase):
         self.assertEqual(hashlib.md5('A' * 2**20).hexdigest(),
                          listing[0]['hash'])
 
-        def _check_objects_copied():
-            try:
-                hdrs, listing = self.local_swift(
-                    'get_container', migration['container'])
-                if hdrs.get('x-history-location') != history_container:
-                    return False
-                if len(listing) == 0:
-                    return False
-                if 'swift' not in listing[0].get('content_location', []):
-                    return False
-                # TravisCI had the listing of the versions container assert,
-                # down below, fail (empty listing), which seems crazy, but we
-                # might as well synchronize on that as well, here.
-                hdrs, listing = self.local_swift(
-                    'get_container', history_container)
-                if len(listing) == 0:
-                    return False
-                return True
-            except swiftclient.exceptions.ClientException as e:
-                if e.http_status == 404:
-                    return False
-                raise
-
-        with self.migrator_running():
-            wait_for_condition(5, _check_objects_copied)
+        migrator.next_pass()
 
         hdrs, listing = self.local_swift(
             'get_container', migration['container'])
-        self.assertEqual(history_container, hdrs['x-history-location'])
+        self.assertEqual(history_container, hdrs.get('x-history-location'))
         self.assertEqual(1, len(listing))
+        self.assertIn('swift', listing[0].get('content_location'))
         self.assertEqual('object', listing[0]['name'])
         self.assertEqual(hashlib.md5('B' * 2**20).hexdigest(),
                          listing[0]['hash'])
-        hdrs, listing = self.local_swift(
+
+        _, listing = self.local_swift(
             'get_container', history_container)
+        self.assertTrue(len(listing) > 0)
         self.assertEqual(hashlib.md5('A' * 2**20).hexdigest(),
                          listing[0]['hash'])
 

@@ -651,6 +651,32 @@ class TestMigrator(unittest.TestCase):
         self.migrator._next_pass.assert_called_once_with()
 
     @mock.patch('s3_sync.migrator.create_provider')
+    def test_empty_container_status(self, create_provider_mock):
+        provider_mock = mock.Mock()
+        provider_mock.list_objects.return_value = ProviderResponse(
+            True, 200, [], [])
+        create_provider_mock.return_value = provider_mock
+        self.migrator.status = s3_sync.migrator.Status('file-path')
+        self.migrator.status.save_status_list = mock.Mock()
+        self.migrator.status.status_list = [
+            {'aws_bucket': 'bucket',
+             'account': 'AUTH_test',
+             'aws_identity': 'source-account',
+             'status': {
+                 'moved_count': 1000,
+                 'scanned_count': 1000,
+                 'finished': 15000000}}
+        ]
+
+        status_entry = self.migrator.status.status_list[0]
+        self.migrator.next_pass()
+        self.assertEqual(0, status_entry['status']['moved_count'])
+        self.assertEqual(0, status_entry['status']['scanned_count'])
+        self.assertEqual(15000000, status_entry['status']['last_finished'])
+        self.assertEqual(1000, status_entry['status']['last_moved_count'])
+        self.assertEqual(1000, status_entry['status']['last_scanned_count'])
+
+    @mock.patch('s3_sync.migrator.create_provider')
     def test_all_buckets_next_pass_fails(self, create_provider_mock):
         self.migrator.config['aws_bucket'] = '/*'
         self.migrator._process_container = mock.Mock(
