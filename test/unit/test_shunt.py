@@ -88,7 +88,8 @@ class TestShunt(unittest.TestCase):
                 ('trailer', 'bad'),
                 ('Transfer-Encoding', 'bad'),
                 ('Upgrade', 'bad'),
-                ('Content-Length', len('remote swift'))
+                ('Content-Length', len('remote swift')),
+                ('etag', 'deadbeef')
             ], StringIO.StringIO('remote swift'))
         self.mock_shunt_s3 = self.patchers[1].__enter__()
         self.mock_shunt_s3.return_value = (
@@ -102,7 +103,8 @@ class TestShunt(unittest.TestCase):
                 ('te', 'bad'),
                 ('trailer', 'bad'),
                 ('Transfer-Encoding', 'bad'),
-                ('Upgrade', 'bad')], ['remote s3'])
+                ('Upgrade', 'bad'),
+                ('etag', 'deadbeef')], ['remote s3'])
 
         self.mock_list_swift = self.patchers[2].__enter__()
         self.mock_list_s3 = self.patchers[3].__enter__()
@@ -480,6 +482,7 @@ class TestShunt(unittest.TestCase):
                 self.assertEqual(headers, [
                     ('Remote-x-amz-id-2', 'also some trans id'),
                     ('Remote-x-amz-request-id', 'some trans id'),
+                    ('etag', 'deadbeef'),
                 ])
                 self.assertEqual(b''.join(body_iter), b'remote s3')
                 self.mock_shunt_s3.reset_mock()
@@ -494,7 +497,8 @@ class TestShunt(unittest.TestCase):
                 self.assertEqual(headers, [
                     ('Remote-x-openstack-request-id', 'also some trans id'),
                     ('Remote-x-trans-id', 'some trans id'),
-                    ('Content-Length', '12')
+                    ('Content-Length', '12'),
+                    ('etag', 'deadbeef'),
                 ])
                 self.assertEqual(b''.join(body_iter), b'remote swift')
                 self.mock_shunt_swift.reset_mock()

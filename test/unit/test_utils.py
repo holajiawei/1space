@@ -82,12 +82,21 @@ class TestUtilsFunctions(unittest.TestCase):
                           'x-object-meta': 'object-meta',
                           'etag': 'deadbeef'}.items()))
         self.assertEqual(
-            {'content-type': 'application/test', 'x-timestamp': '12345'},
+            {'content-type': 'application/test',
+             'x-timestamp': '12345',
+             'etag': 'deadbeef'},
             utils.convert_to_local_headers(
                 {'Remote-x-object-meta': 'foo',
                  'x-timestamp': 12345,
-                 'content-type': 'application/test'}.items(),
+                 'content-type': 'application/test',
+                 'etag': 'deadbeef'}.items(),
                 remove_timestamp=False))
+
+        self.assertEqual(
+            {'content-type': 'application/test'},
+            utils.convert_to_local_headers(
+                {'etag': '"pfs-etag-some-value"',
+                 'content-type': 'application/test'}.items()))
 
     def test_diff_container_headers(self):
         # old swifts don't have the versioning constants defined
