@@ -933,6 +933,7 @@ class Migrator(object):
             _create_x_timestamp_from_hdrs(headers)).internal
         del headers['last-modified']
         headers[get_sys_migrator_header('object')] = headers['x-timestamp']
+        self.logger.debug('upload headers: %s' % headers)
         with self.ic_pool.item() as ic:
             try:
                 ic.upload_object(

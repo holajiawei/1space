@@ -75,6 +75,7 @@ SHUNT_BYPASS_HEADER = 'x-cloud-sync-shunt-bypass'
 ACCOUNT_ACL_KEY = 'x-account-access-control'
 SYSMETA_ACCOUNT_ACL_KEY = \
     get_sys_meta_prefix('account') + 'core-access-control'
+PFS_ETAG_PREFIX = 'pfs'
 
 
 class MigrationContainerStates(object):
@@ -870,6 +871,10 @@ def convert_to_local_headers(headers, remove_timestamp=True):
     # restoring from Swift.
     if 'x-timestamp' in put_headers and remove_timestamp:
         del put_headers['x-timestamp']
+    if put_headers['etag'].startswith('"%s' % PFS_ETAG_PREFIX):
+        # ProxyFS does not store a valid etag and we cannot use it to validate
+        # the upload.
+        del put_headers['etag']
     return put_headers
 
 
