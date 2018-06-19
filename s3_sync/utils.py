@@ -669,7 +669,7 @@ class ClosingResourceIterable(object):
 
     def next(self):
         if self.closed:
-            raise ValueError()
+            raise StopIteration()
         try:
             if self.iterable:
                 return next(self.data_src)
