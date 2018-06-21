@@ -21,6 +21,151 @@ import sys
 import unittest
 
 
+class TestMatchers(unittest.TestCase):
+    def test_matchall(self):
+        metadata = {'k1': 'v1', 'k2': 'v2', 'k3': 'v3'}
+        testcases = [
+            ([{'k1': 'v1'}, {'k2': 'v2'}, {'k3': 'v3'}], True),
+            ([{'k1': 'v1'}, {'k2': 'v2'}, {'k3': 'v2'}], False),
+            ([{'k1': 'v1'}, {'k4': 'v2'}, {'k3': 'v3'}], False),
+            ([{'k1': 'v1'}, {'k2': 'v5'}, {'k3': 'v5'}], False),
+            ([{'k1': 'v5'}, {'k2': 'v2'}, {'k5': 'v3'}], False),
+            ([{'k1': 'v5'}, {'k2': 'v5'}, {'k3': 'v3'}], False),
+            ([{'k5': 'v1'}, {'k4': 'v2'}, {'k3': 'v3'}], False),
+            ([{'k5': 'v1'}, {'k2': 'v5'}, {'k3': 'v5'}], False),
+        ]
+        for i, (test_dict, expected_res) in enumerate(testcases):
+            self.assertEqual(
+                base_sync.match_all(metadata, test_dict),
+                expected_res, "Failed test %d" % i)
+
+    def test_matchany(self):
+        metadata = {'k1': 'v1', 'k2': 'v2', 'k3': 'v3'}
+        testcases = [
+            ([{'k1': 'v1'}, {'k2': 'v2'}, {'k3': 'v3'}], True),
+            ([{'k1': 'v1'}, {'k2': 'v2'}, {'k3': 'v2'}], True),
+            ([{'k1': 'v1'}, {'k4': 'v2'}, {'k3': 'v3'}], True),
+            ([{'k1': 'v1'}, {'k2': 'v5'}, {'k3': 'v5'}], True),
+            ([{'k1': 'v5'}, {'k2': 'v2'}, {'k5': 'v3'}], True),
+            ([{'k1': 'v5'}, {'k2': 'v5'}, {'k3': 'v3'}], True),
+            ([{'k5': 'v1'}, {'k4': 'v2'}, {'k3': 'v3'}], True),
+            ([{'k5': 'v1'}, {'k2': 'v5'}, {'k3': 'v5'}], False),
+        ]
+        for i, (test_dict, expected_res) in enumerate(testcases):
+            self.assertEqual(
+                base_sync.match_any(metadata, test_dict),
+                expected_res, "Failed test %d" % i)
+
+    def test_match_item(self):
+        default_metadata = {'k1': 'v1', 'k2': 'v2', 'k3': 'v3'}
+        testcases = [
+            ({'OR': [
+                {'AND': [
+                    {'NOT': {'k1': 'v1'}},
+                    {'k2': 'v2'}
+                ]},
+                {'AND': [
+                    {'k1': 'v1'},
+                    {'NOT': {'k3': 'v4'}}
+                ]}
+            ]}, True),
+            ({'OR': [
+                {'AND': [
+                    {'NOT': {'k1': 'v4'}},
+                    {'k2': 'v2'},
+                ]},
+                {'AND': [
+                    {'k1': 'v1'},
+                    {'NOT': {'k3': 'v3'}},
+                ]}
+            ]}, True),
+            ({'OR': [
+                {'AND': [
+                    {'NOT': {'k1': 'v1'}},
+                    {'k2': 'v2'},
+                ]},
+                {'AND': [
+                    {'k1': 'v1'},
+                    {'k3': 'v4'}
+                ]},
+            ]}, False),
+            ({'AND': [
+                {'AND': [
+                    {'NOT': {'k1': 'v1'}},
+                    {'k2': 'v2'},
+                ]},
+                {'AND': [
+                    {'k1': 'v1'},
+                    {'NOT': {'k3': 'v4'}}
+                ]}
+            ]}, False),
+            ({'k1': 'v1'},
+             {'k2': 'v2', 'k3': 'v3', 'k1': 'v1'},
+             True),
+            ({'k1': 'v1'},
+             {},
+             False),
+            ({'k1': 'v1'},
+             {'k2': 'v2', 'k3': 'v3'},
+             False),
+            ({'k1': 'v1'},
+             {'k1': None},
+             False),
+            ({'k1': 'v1'},
+             {'k1': 'v3'},
+             False),
+            ({'k1': 'v1'},
+             {'k2': 'v2', 'k3': 'v3', 'k1': 'v3'},
+             False),
+            ({'AND': [{'k1': 'v1'}, {'k2': 'v2'}]},
+             {'k2': 'v2', 'k3': 'v3', 'k1': 'v1'},
+             True),
+            ({'AND': [{'k1': 'v1'}, {'k2': 'v2'}]},
+             {},
+             False),
+            ({'AND': [{'k1': 'v1'}, {'k2': 'v2'}]},
+             {'k2': 'v2', 'k3': 'v3'},
+             False),
+            ({'AND': [{'k1': 'v1'}, {'k2': 'v2'}]},
+             {'k1': None},
+             False),
+            ({'AND': [{'k1': 'v1'}, {'k2': 'v2'}]},
+             {'k1': 'v3'},
+             False),
+            ({'AND': [{'k1': 'v1'}, {'k2': 'v2'}]},
+             {'k2': 'v2', 'k3': 'v3', 'k1': 'v3'},
+             False),
+            ({'OR': [{'k1': 'v1'}, {'k2': 'v2'}]},
+             {'k2': 'v2', 'k3': 'v3', 'k1': 'v1'},
+             True),
+            ({'OR': [{'k1': 'v1'}, {'k2': 'v2'}]},
+             {'k2': 'v2', 'k3': 'v3'},
+             True),
+            ({'OR': [{'k1': 'v1'}, {'k2': 'v2'}]},
+             {'k2': 'v2', 'k3': 'v3', 'k1': 'v3'},
+             True),
+            ({'OR': [{'k1': 'v1'}, {'k2': 'v2'}]},
+             {},
+             False),
+            ({'OR': [{'k1': 'v1'}, {'k2': 'v2'}]},
+             {'k1': None},
+             False),
+            ({'OR': [{'k1': 'v1'}, {'k2': 'v2'}]},
+             {'k1': 'v3'},
+             False)
+        ]
+        for i, testcase in enumerate(testcases):
+            if len(testcase) < 3:
+                test_meta = default_metadata
+            else:
+                test_meta = testcase[1]
+            test_dict = testcase[0]
+            expected = testcase[-1]
+            self.assertEqual(
+                base_sync.match_item(test_meta, test_dict),
+                expected, "Failed test %d" % i)
+
+
 class TestBaseSync(unittest.TestCase):
     def setUp(self):
         self.settings = {

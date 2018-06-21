@@ -109,11 +109,11 @@ class SyncContainer(container_crawler.base_sync.BaseSync):
             _, _, meta_ts = decode_timestamps(row['created_at'])
             if time.time() <= self.copy_after + meta_ts.timestamp:
                 raise RetryError('Object is not yet eligible for archive')
-            self.provider.upload_object(row['name'],
-                                        row['storage_policy_index'],
-                                        swift_client)
+            uploaded = self.provider.upload_object(row['name'],
+                                                   row['storage_policy_index'],
+                                                   swift_client)
 
-            if not self.retain_local:
+            if not self.retain_local and uploaded:
                 # NOTE: We rely on the DELETE object X-Timestamp header to
                 # mitigate races where the object may be overwritten. We
                 # increment the offset to ensure that we never remove new

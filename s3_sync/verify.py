@@ -52,9 +52,7 @@ def validate_bucket(provider, swift_key, create_bucket):
             return result
 
     internal_client = FakeInternalClient('cloud sync test', {})
-    result = provider.upload_object(swift_key, 0, internal_client)
-    if result is not None:
-        return result
+    provider.upload_object(swift_key, 0, internal_client)
 
     result = provider.update_metadata(swift_key, {
         'X-Object-Meta-Cloud-Sync': 'fabcab',

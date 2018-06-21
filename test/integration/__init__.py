@@ -484,7 +484,9 @@ class TestCloudSyncBase(unittest.TestCase):
     @classmethod
     def s3_archive_mapping(klass):
         return klass._find_mapping(
-            lambda cont: cont['protocol'] == 's3' and not cont['retain_local'])
+            lambda cont: cont['protocol'] == 's3' and
+            not cont['retain_local'] and
+            not cont.get('selection_criteria'))
 
     @classmethod
     def s3_restore_mapping(klass):

@@ -24,7 +24,7 @@ import sys
 import traceback
 import urllib
 
-from .base_sync import BaseSync, ProviderResponse
+from .base_sync import BaseSync, ProviderResponse, match_item
 from .utils import (FileWrapper, ClosingResourceIterable, check_slo,
                     SWIFT_USER_META_PREFIX, SWIFT_TIME_FMT)
 
@@ -124,8 +124,11 @@ class SyncSwift(BaseSync):
                 headers=swift_req_hdrs)
         except UnexpectedResponse as e:
             if '404 Not Found' in e.message:
-                return
+                return True
             raise
+
+        if not match_item(metadata, self.selection_criteria):
+            return False
 
         if check_slo(metadata):
             try:
@@ -142,17 +145,17 @@ class SyncSwift(BaseSync):
                 if headers['etag'] == metadata['etag']:
                     if not self._is_meta_synced(metadata, headers):
                         self.update_metadata(swift_key, metadata)
-                    return
+                    return True
             except swiftclient.exceptions.ClientException as e:
                 if e.http_status != 404:
-                    raise
+                    raise True
             self._upload_slo(swift_key, swift_req_hdrs, internal_client)
-            return
+            return True
 
         if remote_meta and metadata['etag'] == remote_meta['etag']:
             if not self._is_meta_synced(metadata, remote_meta):
                 self.update_metadata(swift_key, metadata)
-            return
+            return True
 
         with self.client_pool.get_client() as swift_client:
             wrapper_stream = FileWrapper(internal_client,
@@ -170,6 +173,7 @@ class SyncSwift(BaseSync):
                                     etag=wrapper_stream.get_headers()['etag'],
                                     headers=self._client_headers(headers),
                                     content_length=len(wrapper_stream))
+        return True
 
     def delete_object(self, swift_key):
         """Delete an object from the remote cluster.

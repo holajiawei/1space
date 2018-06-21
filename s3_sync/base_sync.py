@@ -22,6 +22,36 @@ from s3_sync.utils import filter_hop_by_hop_headers
 from swift.common import swob
 
 
+def match_item(metadata, matchdict):
+    if len(matchdict) == 0:  # No criteria matches all
+        return True
+    if len(matchdict) != 1:
+        raise ValueError('Invalid Match dictionary: %s' % (matchdict,))
+    key = matchdict.keys()[0]
+    val = matchdict[key]
+    if key == 'AND':
+        return match_all(metadata, val)
+    if key == 'OR':
+        return match_any(metadata, val)
+    if key == 'NOT':
+        return not match_item(metadata, val)
+    return metadata.get(key) == val.encode('utf-8')
+
+
+def match_all(metadata, criteria):
+    for matchdict in criteria:
+        if not match_item(metadata, matchdict):
+            return False
+    return True
+
+
+def match_any(metadata, criteria):
+    for matchdict in criteria:
+        if match_item(metadata, matchdict):
+            return True
+    return False
+
+
 class ProviderResponse(object):
     def __init__(self, success, status, headers, body, exc_info=None):
         self.success = success
@@ -171,6 +201,8 @@ class BaseSync(object):
         # cluster and the "bucket" is a container.
         self.endpoint = settings.get('aws_endpoint', None)
         self.aws_bucket = settings['aws_bucket']
+
+        self.selection_criteria = settings.get('selection_criteria', {})
 
         # custom prefix can potentially cause conflicts/data over write,
         # be VERY CAREFUL with this.

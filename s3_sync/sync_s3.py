@@ -27,8 +27,7 @@ import traceback
 import urllib
 
 from swift.common.internal_client import UnexpectedResponse
-from .base_sync import BaseSync
-from .base_sync import ProviderResponse
+from .base_sync import BaseSync, ProviderResponse, match_item
 from .utils import (
     convert_to_s3_headers, convert_to_swift_headers, FileWrapper,
     SLOFileWrapper, ClosingResourceIterable, get_slo_etag, check_slo,
@@ -144,20 +143,23 @@ class SyncS3(BaseSync):
         except UnexpectedResponse as e:
             if '404 Not Found' in e.message:
                 return
-            raise
+            raise False
+
+        if not match_item(metadata, self.selection_criteria):
+            return False
 
         self.logger.debug("Metadata: %s" % str(metadata))
         if check_slo(metadata):
             self.upload_slo(swift_key, storage_policy_index, s3_meta,
                             internal_client)
-            return
+            return True
 
         if s3_meta and self.check_etag(metadata['etag'], s3_meta['ETag']):
             if self.is_object_meta_synced(s3_meta, metadata):
-                return
+                return True
             elif not self.in_glacier(s3_meta):
                 self.update_metadata(swift_key, metadata)
-                return
+                return True
 
         with self.client_pool.get_client() as s3_client:
             wrapper_stream = FileWrapper(internal_client,
@@ -179,6 +181,7 @@ class SyncS3(BaseSync):
             if self._is_amazon() and self.encryption:
                 params['ServerSideEncryption'] = 'AES256'
             s3_client.put_object(**params)
+        return True
 
     def delete_object(self, swift_key):
         s3_key = self.get_s3_name(swift_key)
