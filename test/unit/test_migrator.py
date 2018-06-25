@@ -1305,7 +1305,9 @@ class TestMigrator(unittest.TestCase):
                 'remote_headers': {
                     'x-object-meta-custom': 'slo-meta',
                     'last-modified': create_timestamp(1.5e9),
-                    'x-static-large-object': 'True'},
+                    'x-static-large-object': 'True',
+                    'Content-Length': str(len(json.dumps(manifest))),
+                    'etag': manifest_etag},
                 'expected_headers': {
                     'x-object-meta-custom': 'slo-meta',
                     'x-timestamp': Timestamp(1.5e9).internal,
@@ -1360,6 +1362,10 @@ class TestMigrator(unittest.TestCase):
         def get_object(name, **args):
             if name not in objects.keys():
                 raise RuntimeError('Unknown object: %s' % name)
+            if name == 'slo':
+                return ProviderResponse(
+                    True, 200, objects[name]['remote_headers'],
+                    StringIO(json.dumps(manifest)))
             return ProviderResponse(
                 True, 200, objects[name]['remote_headers'],
                 StringIO('object body'))
@@ -1398,7 +1404,6 @@ class TestMigrator(unittest.TestCase):
             True, 200, {}, [{'name': 'slo'}])
         provider.get_object.side_effect = get_object
         provider.head_object.side_effect = head_object
-        provider.get_manifest.return_value = manifest
         self.swift_client.iter_objects.return_value = iter([])
 
         self.migrator.next_pass()
