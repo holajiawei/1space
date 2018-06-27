@@ -828,6 +828,9 @@ class TestMigrator(TestCloudSyncBase):
     def test_swift_versions_location(self):
         migration = self._find_migration(
             lambda cont: cont['container'] == 'no-auto-versioning')
+        status = migrator_utils.TempMigratorStatus(migration)
+        migrator = migrator_utils.MigratorFactory().get_migrator(
+            migration, status)
 
         versions_container = migration['aws_bucket'] + '_versions'
         self.remote_swift(
@@ -855,43 +858,28 @@ class TestMigrator(TestCloudSyncBase):
         self.assertEqual(hashlib.md5('A' * 2**20).hexdigest(),
                          listing[0]['hash'])
 
-        def _check_objects_copied():
-            try:
-                hdrs, listing = self.local_swift(
-                    'get_container', migration['container'])
-                if hdrs.get('x-versions-location') != versions_container:
-                    return False
-                if len(listing) == 0:
-                    return False
-                if 'swift' not in listing[0].get('content_location', []):
-                    return False
-                # I had the listing of the versions container assert, down
-                # below, fail (empty listing), which seems crazy, but we might
-                # as well synchronize on that as well, here.
-                hdrs, listing = self.local_swift(
-                    'get_container', versions_container)
-                if len(listing) == 0:
-                    return False
-                return True
-            except swiftclient.exceptions.ClientException as e:
-                if e.http_status == 404:
-                    return False
-                raise
-
-        with self.migrator_running():
-            wait_for_condition(5, _check_objects_copied)
+        migrator.next_pass()
 
         hdrs, listing = self.local_swift(
             'get_container', migration['container'])
-        self.assertEqual(versions_container, hdrs['x-versions-location'])
+        self.assertEqual(versions_container, hdrs.get('x-versions-location'))
+        self.assertIn('swift', listing[0].get('content_location', []))
         self.assertEqual(1, len(listing))
         self.assertEqual('object', listing[0]['name'])
         self.assertEqual(hashlib.md5('B' * 2**20).hexdigest(),
                          listing[0]['hash'])
-        hdrs, listing = self.local_swift(
-            'get_container', versions_container)
+
+        hdrs, listing = self.local_swift('get_container', versions_container)
         self.assertEqual(hashlib.md5('A' * 2**20).hexdigest(),
                          listing[0]['hash'])
+
+        # TODO: this will be no longer necessary once we go back to always
+        # using the X-Timestamp and not the rounded up last-modified date.
+        hdrs = self.local_swift(
+            'head_object', migration['container'], 'object')
+        now = time.time()
+        if float(hdrs['x-timestamp']) > now:
+            time.sleep(float(hdrs['x-timestamp']) - now)
 
         clear_swift_container(self.swift_dst, versions_container)
         clear_swift_container(self.swift_dst, migration['container'])
@@ -948,6 +936,14 @@ class TestMigrator(TestCloudSyncBase):
         self.assertTrue(len(listing) > 0)
         self.assertEqual(hashlib.md5('A' * 2**20).hexdigest(),
                          listing[0]['hash'])
+
+        # TODO: this will be no longer necessary once we go back to always
+        # using the X-Timestamp and not the rounded up last-modified date.
+        hdrs = self.local_swift(
+            'head_object', migration['container'], 'object')
+        now = time.time()
+        if float(hdrs['x-timestamp']) > now:
+            time.sleep(float(hdrs['x-timestamp']) - now)
 
         clear_swift_container(self.swift_dst, migration['container'])
         clear_swift_container(self.swift_dst, history_container)
