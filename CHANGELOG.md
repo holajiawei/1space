@@ -1,3 +1,18 @@
+## 0.1.38 (2018-06-27)
+
+Features:
+
+    - 1space can now migrate objects based on their metadata. The metadata
+      conditions can be a combination of AND, NOT, OR of metadata keys and
+      values.
+
+Bug fixes:
+
+    - Removed an extra GET request when migrating SLOs/DLOs.
+    - Fixed migrator statistics handling for source containers that were emptied
+      and containers that were added or removed (causing a different migrator
+      process to handle them).
+
 ## 0.1.37 (2018-06-12)
 
 Features:
