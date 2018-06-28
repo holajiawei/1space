@@ -1,3 +1,10 @@
+## 0.1.39 (2018-06-28)
+
+Bug fixes:
+
+    - Fixed an issue with metadata keys that contain non-ASCII characters and
+      are used for selecting objects to migrate.
+
 ## 0.1.38 (2018-06-27)
 
 Features:
