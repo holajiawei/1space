@@ -128,6 +128,9 @@ class SyncSwift(BaseSync):
             raise
 
         if not match_item(metadata, self.selection_criteria):
+            self.logger.debug(
+                'Not archiving %s as metadata does not match: %s %s' % (
+                    swift_key, metadata, self.selection_criteria))
             return False
 
         if check_slo(metadata):

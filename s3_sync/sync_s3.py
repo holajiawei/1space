@@ -146,6 +146,9 @@ class SyncS3(BaseSync):
             raise False
 
         if not match_item(metadata, self.selection_criteria):
+            self.logger.debug(
+                'Not archiving %s as metadata does not match: %s %s' % (
+                    swift_key, metadata, self.selection_criteria))
             return False
 
         self.logger.debug("Metadata: %s" % str(metadata))

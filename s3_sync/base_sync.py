@@ -35,7 +35,7 @@ def match_item(metadata, matchdict):
         return match_any(metadata, val)
     if key == 'NOT':
         return not match_item(metadata, val)
-    return metadata.get(key) == val.encode('utf-8')
+    return metadata.get(key.encode('utf-8')) == val.encode('utf-8')
 
 
 def match_all(metadata, criteria):

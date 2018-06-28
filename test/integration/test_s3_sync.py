@@ -133,7 +133,9 @@ class TestCloudSync(TestCloudSyncBase):
 
     def test_s3_archive_by_metadata(self):
         s3_mapping = self._find_mapping(
-            lambda cont: cont.get('selection_criteria') is not None)
+            lambda cont:
+                cont.get('selection_criteria') is not None and
+                cont.get('protocol') == 's3')
         test_data = [
             (u'test_archive', u'testing archive put',
              {'x-object-meta-msd': 'foo'}, False),
@@ -173,6 +175,57 @@ class TestCloudSync(TestCloudSyncBase):
                     s3_mapping['aws_endpoint'],
                     s3_mapping['aws_bucket'],
                     s3_key[:-1 * (len(key) + 1)])
+                self.assertEqual(
+                    [expected_location],
+                    entry['content_location'])
+            else:
+                self.assertEqual(None, entry.get('expected_location'))
+
+    def test_swift_archive_by_metadata(self):
+        mapping = self._find_mapping(
+            lambda cont:
+                cont.get('selection_criteria') is not None and
+                cont.get('protocol') == 'swift')
+        test_data = [
+            (u'test_archive', u'testing archive put',
+             {'x-object-meta-msd': 'foo'}, False),
+            (u'test_\u00ear', u'testing \u00eae put', {}, False),
+            (u'west_archive', u'testing archive put',
+             {'x-object-meta-msd': 'boo'}, True),
+            (u'zest_archive', u'testing archive put',
+             {'x-object-meta-msd': u'b\u00e1r'}, True),
+            (u'jest_archive', u'testing archive put',
+             {'x-object-meta-msd': 'baz'}, False),
+            ('unicode meta archive', 'put content',
+             {u'x-object-meta-un\u00edcode': u'v\u00e1l'}, True)
+        ]
+        count_not_archived = 0
+        for key, content, headers, sb_archived in test_data:
+            etag = self.local_swift(
+                'put_object', mapping['container'], key,
+                content.encode('utf-8'), headers=headers)
+            self.assertEqual(
+                hashlib.md5(content.encode('utf-8')).hexdigest(), etag)
+            if not sb_archived:
+                count_not_archived += 1
+
+        def _check_expired():
+            hdrs, listing = self.local_swift(
+                'get_container', mapping['container'])
+            if int(hdrs['x-container-object-count']) != count_not_archived:
+                return False
+            return (hdrs, listing)
+
+        swift_hdrs, listing = wait_for_condition(5, _check_expired)
+        for key, content, headers, sb_archived in test_data:
+            for entry in listing:
+                if entry['name'] == key:
+                    break
+            if sb_archived:
+                expected_location = '%s;%s;%s' % (
+                    mapping['aws_endpoint'],
+                    mapping['aws_identity'],
+                    mapping['aws_bucket'])
                 self.assertEqual(
                     [expected_location],
                     entry['content_location'])
