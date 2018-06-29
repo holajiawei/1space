@@ -258,7 +258,6 @@ class S3SyncShunt(object):
         status, headers, app_iter = req.call_application(self.app)
 
         if not status.startswith('404 '):
-            status, headers, app_iter = req.call_application(self.app)
             start_response(status, headers)
             return app_iter
 
@@ -272,7 +271,6 @@ class S3SyncShunt(object):
                 self.logger.warning(
                     'Failed to query the remote container (%d): %s' % (
                         e.resp.status, e.resp.body))
-                status, headers, app_iter = req.call_application(self.app)
                 start_response(status, headers)
                 return app_iter
 

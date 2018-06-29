@@ -41,10 +41,20 @@ class FakeSwift(object):
             resp_dict = env['__test__.response_dict']
             method = env['REQUEST_METHOD']
             if method in resp_dict:
-                status = resp_dict[method].get('status', '200 OK')
-                headers = resp_dict[method].get('headers', [])
+                if (isinstance(resp_dict[method], dict) and
+                        env['PATH_INFO'] in resp_dict[method]):
+                    responses = resp_dict[method][env['PATH_INFO']]
+                else:
+                    responses = resp_dict[method]
+
+                if isinstance(responses, list):
+                    entry = responses.pop(0)
+                else:
+                    entry = responses
+                status = entry.get('status', '200 OK')
+                headers = entry.get('headers', [])
                 start_response(status, headers)
-                return resp_dict[method].get('body', '')
+            return resp_dict[method].get('body', '')
 
         status = env.get('__test__.status', '200 OK')
         headers = env.get('__test__.headers', [])
@@ -143,7 +153,14 @@ class TestShunt(unittest.TestCase):
                     'aws_bucket': 'dest-bucket',
                     'aws_identity': 'user',
                     'aws_secret': 'key',
-                }]
+                }],
+            'migrations': [{
+                'account': 'AUTH_migrate',
+                'container': 'destination',
+                'aws_bucket': 'source',
+                'aws_identity': 'migration',
+                'aws_secret': 'migration'
+            }]
         }
 
         with tempfile.NamedTemporaryFile() as fp:
@@ -216,6 +233,16 @@ class TestShunt(unittest.TestCase):
                 'aws_bucket': 'dest-bucket',
                 'aws_identity': 'user',
                 'aws_secret': 'key',
+            },
+            ('AUTH_migrate', 'destination'): {
+                'account': 'AUTH_migrate',
+                'container': 'destination',
+                'migration': True,
+                'restore_object': True,
+                'aws_bucket': 'source',
+                'aws_identity': 'migration',
+                'aws_secret': 'migration',
+                'custom_prefix': '',
             },
             ('AUTH_tee', 'tee'): {
                 'account': 'AUTH_tee',
@@ -882,3 +909,42 @@ class TestShunt(unittest.TestCase):
         self.assertEqual(names, [
             'a', 'a/', u'unicod\xe9'.encode('utf-8'), 'z/',
         ])
+
+    def test_shunt_migration_put_object_missing_container(self):
+        responses = {'PUT': {
+            '/v1/AUTH_migrate/destination/object': [
+                {'status': '404 Not Found'},
+                {'status': '200 OK'}],
+            '/v1/AUTH_migrate/destination': [{'status': '200 OK'}]
+        }}
+
+        req = swob.Request.blank(
+            '/v1/AUTH_migrate/destination/object',
+            method='PUT',
+            environ={'swift.trans_id': 'id',
+                     '__test__.response_dict': responses})
+
+        status, headers, body_iter = req.call_application(self.app)
+        expected_calls = [
+            ('PUT', '/v1/AUTH_migrate/destination/object'),
+            ('PUT', '/v1/AUTH_migrate/destination'),
+            ('PUT', '/v1/AUTH_migrate/destination/object')]
+        for index, env in enumerate(self.app.base_app.calls[1:]):
+            call_id = (env['REQUEST_METHOD'], env['PATH_INFO'])
+            self.assertEqual(expected_calls[index], call_id)
+
+    def test_shunt_migration_put_object(self):
+        responses = {'PUT': {
+            '/v1/AUTH_migrate/destination/object': {'status': '200 OK'}}}
+
+        req = swob.Request.blank(
+            '/v1/AUTH_migrate/destination/object',
+            method='PUT',
+            environ={'swift.trans_id': 'id',
+                     '__test__.response_dict': responses})
+
+        status, headers, body_iter = req.call_application(self.app)
+        expected_calls = [('PUT', '/v1/AUTH_migrate/destination/object')]
+        for index, env in enumerate(self.app.base_app.calls[1:]):
+            call_id = (env['REQUEST_METHOD'], env['PATH_INFO'])
+            self.assertEqual(expected_calls[index], call_id)
