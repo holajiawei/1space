@@ -1,3 +1,11 @@
+## 0.1.40 (2018-06-29)
+
+Bug fixes:
+
+    - Migrator shunt would double PUT objects in the destination cluster if the
+      container already exists.
+    - Metadata selectors should be case-insensitive, as the HTTP headers are.
+
 ## 0.1.39 (2018-06-28)
 
 Bug fixes:
