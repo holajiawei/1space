@@ -152,7 +152,10 @@ class TestMatchers(unittest.TestCase):
              False),
             ({'OR': [{'k1': 'v1'}, {'k2': 'v2'}]},
              {'k1': 'v3'},
-             False)
+             False),
+            ({u'FO\u00d3': u'B\u00c1R'},
+             {u'fo\u00f3'.encode('utf-8'): u'b\u00e1r'.encode('utf-8')},
+             True)
         ]
         for i, testcase in enumerate(testcases):
             if len(testcase) < 3:
@@ -163,7 +166,7 @@ class TestMatchers(unittest.TestCase):
             expected = testcase[-1]
             self.assertEqual(
                 base_sync.match_item(test_meta, test_dict),
-                expected, "Failed test %d" % i)
+                expected, "Failed test %s" % str(testcase))
 
 
 class TestBaseSync(unittest.TestCase):
