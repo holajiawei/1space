@@ -143,7 +143,9 @@ def _update_status_counts(status, moved_count, scanned_count, reset):
     status['finished'] = now
 
 
-def _create_x_timestamp_from_hdrs(hdrs):
+def _create_x_timestamp_from_hdrs(hdrs, use_x_timestamp=True):
+    if use_x_timestamp and 'x-timestamp' in hdrs:
+        return float(hdrs['x-timestamp'])
     if 'last-modified' in hdrs:
         ts = datetime.datetime.strptime(hdrs['last-modified'],
                                         LAST_MODIFIED_FMT)
@@ -722,8 +724,10 @@ class Migrator(object):
                     else:
                         raise
                 if resp.headers and local_headers:
-                    local_ts = _create_x_timestamp_from_hdrs(local_headers)
-                    remote_ts = _create_x_timestamp_from_hdrs(resp.headers)
+                    local_ts = _create_x_timestamp_from_hdrs(
+                        local_headers, use_x_timestamp=False)
+                    remote_ts = _create_x_timestamp_from_hdrs(
+                        resp.headers, use_x_timestamp=False)
                     header_changes = {}
 
                     if local_ts is not None and remote_ts is not None and \

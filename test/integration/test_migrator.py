@@ -526,19 +526,6 @@ class TestMigrator(TestCloudSyncBase):
             'get_container', migration['container'])
         self.assertEqual(key, listing[0]['name'])
         self.assertIn('swift', listing[0]['content_location'])
-        # When copying objects, the destination object's timestamp may drift
-        # into the future, as Swift computes last-modified time as
-        # math.ceil(timestamp). If we attempt to delete an object with a
-        # timestamp in the future, Swift will return a 409.
-        sleep_timeout = 0
-        for swift in [self.local_swift, self.remote_swift]:
-            hdrs, body = swift('get_object', migration['container'], key)
-            self.assertEqual(content, body)
-            if swift == self.local_swift:
-                now = time.time()
-                if float(hdrs['x-timestamp']) > now:
-                    sleep_timeout = float(hdrs['x-timestamp']) - now
-        time.sleep(sleep_timeout)
 
         self.local_swift('delete_object', migration['container'], key)
         for swift in [self.local_swift, self.remote_swift]:
@@ -797,11 +784,9 @@ class TestMigrator(TestCloudSyncBase):
         conn_local.put_object(
             migration['container'], key, StringIO.StringIO(content),
             headers={where_header: 'local'})
-        time.sleep(1)
         conn_remote.put_object(
             migration['aws_bucket'], key, StringIO.StringIO(content),
             headers={where_header: 'remote'})
-        time.sleep(1)
         conn_local.post_object(
             migration['container'], key, headers={where_header: 'local'})
         migrator.next_pass()
@@ -873,14 +858,6 @@ class TestMigrator(TestCloudSyncBase):
         self.assertEqual(hashlib.md5('A' * 2**20).hexdigest(),
                          listing[0]['hash'])
 
-        # TODO: this will be no longer necessary once we go back to always
-        # using the X-Timestamp and not the rounded up last-modified date.
-        hdrs = self.local_swift(
-            'head_object', migration['container'], 'object')
-        now = time.time()
-        if float(hdrs['x-timestamp']) > now:
-            time.sleep(float(hdrs['x-timestamp']) - now)
-
         clear_swift_container(self.swift_dst, versions_container)
         clear_swift_container(self.swift_dst, migration['container'])
         clear_swift_container(self.swift_src, versions_container)
@@ -936,14 +913,6 @@ class TestMigrator(TestCloudSyncBase):
         self.assertTrue(len(listing) > 0)
         self.assertEqual(hashlib.md5('A' * 2**20).hexdigest(),
                          listing[0]['hash'])
-
-        # TODO: this will be no longer necessary once we go back to always
-        # using the X-Timestamp and not the rounded up last-modified date.
-        hdrs = self.local_swift(
-            'head_object', migration['container'], 'object')
-        now = time.time()
-        if float(hdrs['x-timestamp']) > now:
-            time.sleep(float(hdrs['x-timestamp']) - now)
 
         clear_swift_container(self.swift_dst, migration['container'])
         clear_swift_container(self.swift_dst, history_container)

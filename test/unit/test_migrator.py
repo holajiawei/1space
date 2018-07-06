@@ -786,12 +786,13 @@ class TestMigrator(unittest.TestCase):
                 'foo': {
                     'remote_headers': {
                         'x-object-meta-custom': 'custom',
-                        'last-modified': create_timestamp(1.5e9)},
+                        'last-modified': create_timestamp(1.5e9),
+                        'x-timestamp': 1499999999.66},
                     'expected_headers': {
                         'x-object-meta-custom': 'custom',
-                        'x-timestamp': Timestamp(1.5e9).internal,
+                        'x-timestamp': Timestamp(1499999999.66).internal,
                         s3_sync.utils.get_sys_migrator_header('object'): str(
-                            Timestamp(1.5e9).internal)},
+                            Timestamp(1499999999.66).internal)},
                     'list-time': create_list_timestamp(1.5e9),
                     'hash': 'etag'
                 },
