@@ -9,10 +9,11 @@ class TempMigratorStatus(object):
         self.config = config
         self.status = {}
 
-    def save_migration(self, config, marker, copied, scanned, is_reset):
+    def save_migration(self, config, marker, copied, scanned, bytes_count,
+                       is_reset):
         self.status['marker'] = marker
         s3_sync.migrator._update_status_counts(
-            self.status, copied, scanned, is_reset)
+            self.status, copied, scanned, bytes_count, is_reset)
 
     def get_migration(self, config):
         # Currently, we only support a single migration configuration

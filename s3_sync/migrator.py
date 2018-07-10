@@ -15,6 +15,7 @@ limitations under the License.
 """
 
 import eventlet
+import eventlet.corolocal
 import eventlet.pools
 eventlet.patcher.monkey_patch(all=True)
 
@@ -32,6 +33,7 @@ import traceback
 from container_crawler.utils import create_internal_client
 from .daemon_utils import load_swift, setup_context, setup_logger
 from .provider_factory import create_provider
+from .stats import MigratorPassStats
 from .utils import (convert_to_local_headers, convert_to_swift_headers,
                     get_container_headers, iter_listing, RemoteHTTPError,
                     SWIFT_TIME_FMT, diff_container_headers,
@@ -109,7 +111,8 @@ def cmp_meta(dest, source):
     return TIME_DIFF
 
 
-def _update_status_counts(status, moved_count, scanned_count, reset):
+def _update_status_counts(status, moved_count, scanned_count, bytes_count,
+                          reset):
     """
     Update counts and finished keys in status. On reset copy existing counts
     to last_ counts if they've changed.
@@ -133,13 +136,16 @@ def _update_status_counts(status, moved_count, scanned_count, reset):
         if overwrite_last:
             status['last_moved_count'] = status['moved_count']
             status['last_scanned_count'] = status['scanned_count']
+            status['last_bytes_count'] = status.get('bytes_count', 0)
             status['last_finished'] = status['finished']
         status['moved_count'] = moved_count
         status['scanned_count'] = scanned_count
+        status['bytes_count'] = bytes_count
     else:
         status['moved_count'] = status.get('moved_count', 0) + moved_count
         status['scanned_count'] = status.get('scanned_count', 0) + \
             scanned_count
+        status['bytes_count'] = status.get('bytes_count', 0) + bytes_count
     # this is the end of this current pass
     status['finished'] = now
 
@@ -223,7 +229,12 @@ class Status(object):
                 raise
 
     def save_migration(self, migration, marker, moved_count, scanned_count,
-                       stats_reset=False):
+                       bytes_count, stats_reset=False):
+        if not isinstance(stats_reset, bool):
+            raise ValueError('stats_reset must be a boolean')
+        if not all(map(lambda k: type(k) is int,
+                       [moved_count, scanned_count, bytes_count])):
+            raise ValueError('counts must be integers')
         for entry in self.status_list:
             if equal_migration(entry, migration):
                 if 'status' not in entry:
@@ -240,7 +251,8 @@ class Status(object):
             status = entry['status']
 
         status['marker'] = marker
-        _update_status_counts(status, moved_count, scanned_count, stats_reset)
+        _update_status_counts(
+            status, moved_count, scanned_count, bytes_count, stats_reset)
         self.save_status_list()
 
     def prune(self, migrations):
@@ -280,6 +292,7 @@ class Migrator(object):
         self.node_id = node_id
         self.nodes = nodes
         self.provider = None
+        self.gthread_local = eventlet.corolocal.local()
 
     def next_pass(self):
         if self.config['aws_bucket'] != '/*':
@@ -374,22 +387,20 @@ class Migrator(object):
                         (self.config['account'], header_changes.keys()))
 
     def _next_pass(self):
+        self.stats = MigratorPassStats()
         self._process_account_metadata()
         worker_pool = eventlet.GreenPool(self.workers)
         for _ in xrange(self.workers):
             worker_pool.spawn_n(self._upload_worker)
         is_reset = False
         self._manifests = set()
-        scanned = 0
-        copied = 0
         marker = self.status.get_migration(self.config).get('marker', '')
         try:
-            marker, scanned, copied = self._process_container(marker=marker)
-            if scanned == 0:
+            marker = self._process_container(marker=marker)
+            if self.stats.scanned == 0:
                 is_reset = True
                 if marker:
-                    marker, scanned, copied = self._process_container(
-                        marker='')
+                    marker = self._process_container(marker='')
         except ContainerNotFound as e:
             self.logger.error(unicode(e))
         except Exception:
@@ -408,14 +419,12 @@ class Migrator(object):
             # all of the referenced objects.
             refd_container, prefix = self.container_queue.get()
             try:
-                _, refd_scanned, refd_copied = self._process_container(
+                self._process_container(
                     container=refd_container,
                     aws_bucket=refd_container,
                     marker='',
                     prefix=prefix,
                     list_all=True)
-                scanned += refd_scanned
-                copied += refd_copied
             except Exception:
                 self.logger.error(
                     'Failed to process referenced container: "%s"' %
@@ -433,10 +442,10 @@ class Migrator(object):
         self._stop_workers(self.object_queue)
 
         self.check_errors()
-        copied -= self.errors.qsize()
         # TODO: record the number of errors, as well
         self.status.save_migration(
-            self.config, marker, copied, scanned, is_reset)
+            self.config, marker, self.stats.copied, self.stats.scanned,
+            self.stats.bytes_copied, is_reset)
 
     def check_errors(self):
         while not self.errors.empty():
@@ -821,7 +830,6 @@ class Migrator(object):
         except StopIteration:
             source_iter = iter([])
 
-        copied = 0
         scanned = 0
         local_iter = self._iterate_internal_listing(container, marker, prefix)
         local = next(local_iter)
@@ -838,7 +846,6 @@ class Migrator(object):
                     work = MigrateObjectWork(aws_bucket, container,
                                              remote['name'])
                     self.object_queue.put(work)
-                    copied += 1
                 scanned += 1
                 remote = next(source_iter)
                 if remote:
@@ -860,18 +867,18 @@ class Migrator(object):
                         work = MigrateObjectWork(aws_bucket, container,
                                                  remote['name'])
                         self.object_queue.put(work)
-                        copied += 1
                 remote = next(source_iter)
                 local = next(local_iter)
                 scanned += 1
                 if remote:
                     marker = remote['name']
 
+        self.stats.update(scanned=scanned)
         while local and (not marker or local['name'] < marker or scanned == 0):
             # We may have objects left behind that need to be removed
             self._reconcile_deleted_objects(container, local['name'])
             local = next(local_iter)
-        return marker, scanned, copied
+        return marker
 
     def _migrate_object(self, aws_bucket, container, key):
         args = {'bucket': aws_bucket,
@@ -983,6 +990,7 @@ class Migrator(object):
             _create_x_timestamp_from_hdrs(headers)).internal
         del headers['last-modified']
         headers[get_sys_migrator_header('object')] = headers['x-timestamp']
+        size = int(headers['Content-Length'])
         with self.ic_pool.item() as ic:
             try:
                 ic.upload_object(
@@ -997,8 +1005,12 @@ class Migrator(object):
                     content, self.config['account'], container, key,
                     headers)
                 self.logger.debug('Copied "%s/%s"' % (container, key))
+        self.gthread_local.uploaded_objects += 1
+        self.gthread_local.bytes_copied += size
 
     def _upload_worker(self):
+        self.gthread_local.uploaded_objects = 0
+        self.gthread_local.bytes_copied = 0
         while True:
             work = self.object_queue.get()
             try:
@@ -1010,7 +1022,10 @@ class Migrator(object):
                 if isinstance(work, MigrateObjectWork):
                     self._migrate_object(aws_bucket, container, key)
                 else:
+                    size = int(work.headers['Content-Length'])
                     self._upload_object(work)
+                    self.gthread_local.uploaded_objects += 1
+                    self.gthread_local.bytes_copied += size
             except Exception:
                 # Avoid killing the worker, as it should only quit explicitly
                 # when we initiate it. Otherwise, we might deadlock if all
@@ -1018,6 +1033,9 @@ class Migrator(object):
                 self.errors.put((aws_bucket, key, sys.exc_info()))
             finally:
                 self.object_queue.task_done()
+        self.stats.update(
+            copied=self.gthread_local.uploaded_objects,
+            bytes_copied=self.gthread_local.bytes_copied)
 
     def close(self):
         if not self.provider:

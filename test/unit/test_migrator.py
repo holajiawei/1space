@@ -257,10 +257,47 @@ class TestMigratorUtils(unittest.TestCase):
                'status': {
                    'finished': start - 1,
                    'moved_count': 10,
-                   'scanned_count': 20}}],
+                   'scanned_count': 20,
+                   'bytes_count': 1017}}],
              {'marker': 'marker', 'moved_count': 1000, 'scanned_count': 1000,
+              'bytes_count': 7, 'reset_stats': False},
+             {'finished': start, 'moved_count': 1010, 'scanned_count': 1020,
+              'bytes_count': 1024}),
+            ([{'aws_bucket': 'testbucket',
+               'aws_endpoint': '',
+               'aws_identity': 'identity',
+               'aws_secret': 'secret',
+               'account': 'AUTH_test',
+               'protocol': 's3',
+               'status': {
+                   'finished': start - 1,
+                   'moved_count': 10,
+                   'scanned_count': 20,
+                   'bytes_count': 42}}],
+             {'marker': 'marker',
+              'moved_count': 1000,
+              'scanned_count': 1000,
+              'bytes_count': 256,
+              'reset_stats': True},
+             {'finished': start,
+              'moved_count': 1000,
+              'scanned_count': 1000,
+              'bytes_count': 256,
+              'last_finished': start - 1,
+              'last_moved_count': 10,
+              'last_scanned_count': 20,
+              'last_bytes_count': 42}),
+            ([],
+             {'marker': 'marker',
+              'finished': start,
+              'moved_count': 1000,
+              'scanned_count': 1000,
+              'bytes_count': 1337,
               'reset_stats': False},
-             {'finished': start, 'moved_count': 1010, 'scanned_count': 1020}),
+             {'finished': start,
+              'moved_count': 1000,
+              'scanned_count': 1000,
+              'bytes_count': 1337}),
             ([{'aws_bucket': 'testbucket',
                'aws_endpoint': '',
                'aws_identity': 'identity',
@@ -271,15 +308,16 @@ class TestMigratorUtils(unittest.TestCase):
                    'finished': start - 1,
                    'moved_count': 10,
                    'scanned_count': 20}}],
-             {'marker': 'marker', 'moved_count': 1000,
-              'scanned_count': 1000, 'reset_stats': True},
-             {'finished': start, 'moved_count': 1000, 'scanned_count': 1000,
-              'last_finished': start - 1, 'last_moved_count': 10,
-              'last_scanned_count': 20}),
-            ([],
-             {'marker': 'marker', 'finished': start, 'moved_count': 1000,
-              'scanned_count': 1000, 'reset_stats': False},
-             {'finished': start, 'moved_count': 1000, 'scanned_count': 1000}),
+             {'marker': 'marker',
+              'finished': start,
+              'moved_count': 1000,
+              'scanned_count': 1000,
+              'bytes_count': 1337,
+              'reset_stats': False},
+             {'finished': start,
+              'moved_count': 1010,
+              'scanned_count': 1020,
+              'bytes_count': 1337}),
         ]
         for status_list, test_params, write_status in test_cases:
             status = s3_sync.migrator.Status(
@@ -297,6 +335,7 @@ class TestMigratorUtils(unittest.TestCase):
                     migration, test_params['marker'],
                     test_params['moved_count'],
                     test_params['scanned_count'],
+                    test_params['bytes_count'],
                     test_params['reset_stats'])
             write_status['marker'] = test_params['marker']
             migration['status'] = write_status
@@ -322,7 +361,7 @@ class TestMigratorUtils(unittest.TestCase):
             mock_time.return_value = start
             status.save_migration(
                 {'aws_identity': 'aws id', 'aws_secret': 'secret'},
-                'marker', 100, 100, False)
+                'marker', 100, 100, 1024, False)
         self.assertTrue(
             os.path.exists(os.path.dirname(status.status_location)))
         with open(status.status_location) as fh:
@@ -330,7 +369,8 @@ class TestMigratorUtils(unittest.TestCase):
         self.assertEqual(written_conf, [
             {'aws_identity': 'aws id',
              'status': {'marker': 'marker', 'moved_count': 100,
-                        'scanned_count': 100, 'finished': start}}])
+                        'scanned_count': 100, 'finished': start,
+                        'bytes_count': 1024}}])
 
     @mock.patch('s3_sync.migrator.os.mkdir')
     @mock.patch('s3_sync.migrator.tempfile.NamedTemporaryFile')
@@ -343,7 +383,7 @@ class TestMigratorUtils(unittest.TestCase):
         with self.assertRaises(IOError) as cm:
             status.save_migration(
                 {'aws_identity': 'aws id', 'aws_secret': 'secret'},
-                'marker', 100, 100, False)
+                'marker', 100, 100, 42, False)
         mock_mkdir.assert_called_once_with('/fake', 0755)
         self.assertEqual(errno.EPERM, cm.exception.errno)
 
@@ -355,7 +395,7 @@ class TestMigratorUtils(unittest.TestCase):
         with self.assertRaises(OSError) as err:
             status.save_migration(
                 {'aws_identity': 'aws id', 'aws_secret': 'secret'},
-                'marker', 100, 100, False)
+                'marker', 100, 100, 42, False)
         self.assertEqual(errno.EPERM, err.exception.errno)
 
     def setup_status_file_path(self):
@@ -529,7 +569,8 @@ class TestMigratorUtils(unittest.TestCase):
             config, status, 10, 5, mock.Mock(max_size=1), None, 0, 1)
         self.assertIn('custom_prefix', migrator.config)
         self.assertEqual('', migrator.config['custom_prefix'])
-        status.save_migration(migrator.config, 'new-marker', 10, 100, False)
+        status.save_migration(
+            migrator.config, 'new-marker', 10, 100, 1337, False)
         status.prune([config])
         with open(self.status_file_path) as rf:
             self.assertEqual(json.load(rf), json.loads(json.dumps([{
@@ -548,7 +589,8 @@ class TestMigratorUtils(unittest.TestCase):
                     "last_scanned_count": 1,
                     "marker": "new-marker",
                     "moved_count": 10,
-                    "scanned_count": 101
+                    "scanned_count": 101,
+                    "bytes_count": 1337
                 }
             }])))
 
@@ -567,8 +609,8 @@ class TestMigratorUtils(unittest.TestCase):
         self.setup_status_file_path()
         status = s3_sync.migrator.Status(self.status_file_path)
         status.load_status_list()
-        status.save_migration(config, 'end', 0, 1000, stats_reset=True)
-        status.save_migration(config, 'end', 0, 1000, stats_reset=True)
+        status.save_migration(config, 'end', 0, 1000, 42, stats_reset=True)
+        status.save_migration(config, 'end', 0, 1000, 42, stats_reset=True)
         with open(self.status_file_path) as rf:
             self.assertEqual(1, len(json.load(rf)))
 
@@ -794,13 +836,15 @@ class TestMigrator(unittest.TestCase):
                         'x-object-meta-custom': 'custom',
                         'last-modified': create_timestamp(1.5e9),
                         'x-timestamp': 1499999999.66,
-                        'etag': 'f001a4'},
+                        'etag': 'f001a4',
+                        'Content-Length': '1024'},
                     'expected_headers': {
                         'x-object-meta-custom': 'custom',
                         'x-timestamp': Timestamp(1499999999.66).internal,
                         'etag': 'f001a4',
                         s3_sync.utils.get_sys_migrator_header('object'): str(
-                            Timestamp(1499999999.66).internal)},
+                            Timestamp(1499999999.66).internal),
+                        'Content-Length': '1024'},
                     'list-time': create_list_timestamp(1.5e9),
                     'hash': 'etag'
                 },
@@ -808,13 +852,15 @@ class TestMigrator(unittest.TestCase):
                     'remote_headers': {
                         'x-object-meta-custom': 'custom',
                         'last-modified': create_timestamp(1.4e9),
-                        'etag': 'ba3'},
+                        'etag': 'ba3',
+                        'Content-Length': '1024'},
                     'expected_headers': {
                         'x-object-meta-custom': 'custom',
                         'x-timestamp': Timestamp(1.4e9).internal,
                         'etag': 'ba3',
                         s3_sync.utils.get_sys_migrator_header('object'): str(
-                            Timestamp(1.4e9).internal)},
+                            Timestamp(1.4e9).internal),
+                        'Content-Length': '1024'},
                     'list-time': create_list_timestamp(1.4e9),
                     'hash': 'etag'
                 }
@@ -825,13 +871,15 @@ class TestMigrator(unittest.TestCase):
                     'remote_headers': {
                         'x-object-meta-custom': 'custom',
                         'last-modified': create_timestamp(1.5e9),
-                        'etag': 'f001a4'},
+                        'etag': 'f001a4',
+                        'Content-Length': '1024'},
                     'expected_headers': {
                         'x-object-meta-custom': 'custom',
                         'x-timestamp': Timestamp(1.5e9).internal,
                         'etag': 'f001a4',
                         s3_sync.utils.get_sys_migrator_header('object'): str(
-                            Timestamp(1.5e9).internal)},
+                            Timestamp(1.5e9).internal),
+                        'Content-Length': '1024'},
                     'list-time': create_list_timestamp(1.5e9),
                     'hash': 'etag'
                 },
@@ -839,13 +887,15 @@ class TestMigrator(unittest.TestCase):
                     'remote_headers': {
                         'x-object-meta-custom': 'custom',
                         'last-modified': create_timestamp(1.4e9),
-                        'etag': 'ba3'},
+                        'etag': 'ba3',
+                        'Content-Length': '1024'},
                     'expected_headers': {
                         'x-object-meta-custom': 'custom',
                         'x-timestamp': Timestamp(1.4e9).internal,
                         'etag': 'ba3',
                         s3_sync.utils.get_sys_migrator_header('object'): str(
-                            Timestamp(1.4e9).internal)},
+                            Timestamp(1.4e9).internal),
+                        'Content-Length': '1024'},
                     'list-time': create_list_timestamp(1.4e9),
                     'hash': 'etag'
                 }
@@ -860,13 +910,15 @@ class TestMigrator(unittest.TestCase):
                     'remote_headers': {
                         'x-object-meta-custom': 'custom',
                         'last-modified': create_timestamp(1.5e9),
-                        'etag': 'f001a4'},
+                        'etag': 'f001a4',
+                        'Content-Length': '1024'},
                     'expected_headers': {
                         'x-object-meta-custom': 'custom',
                         'x-timestamp': Timestamp(1.5e9).internal,
                         'etag': 'f001a4',
                         s3_sync.utils.get_sys_migrator_header('object'): str(
-                            Timestamp(1.5e9).internal)},
+                            Timestamp(1.5e9).internal),
+                        'Content-Length': '1024'},
                     'list-time': create_list_timestamp(1.5e9),
                     'hash': 'etag'
                 },
@@ -874,11 +926,13 @@ class TestMigrator(unittest.TestCase):
                     'remote_headers': {
                         'x-object-meta-custom': 'custom',
                         'last-modified': create_timestamp(1.4e9),
-                        'etag': 'ba3'},
+                        'etag': 'ba3',
+                        'Content-Length': '1024'},
                     'expected_headers': {
                         'x-object-meta-custom': 'custom',
                         'x-timestamp': Timestamp(1.4e9).internal,
                         'etag': 'ba3',
+                        'Content-Length': '1024',
                         s3_sync.utils.get_sys_migrator_header('object'): str(
                             Timestamp(1.4e9).internal)},
                     'list-time': create_list_timestamp(1.4e9),
@@ -904,11 +958,13 @@ class TestMigrator(unittest.TestCase):
                     'remote_headers': {
                         'x-object-meta-custom': 'custom',
                         'last-modified': create_timestamp(1.5e9),
-                        'etag': 'f001a4'},
+                        'etag': 'f001a4',
+                        'Content-Length': '1024'},
                     'expected_headers': {
                         'x-object-meta-custom': 'custom',
                         'x-timestamp': Timestamp(1.5e9).internal,
                         'etag': 'f001a4',
+                        'Content-Length': '1024',
                         s3_sync.utils.get_sys_migrator_header('object'): str(
                             Timestamp(1.5e9).internal)},
                     'list-time': create_list_timestamp(1.5e9),
@@ -918,11 +974,13 @@ class TestMigrator(unittest.TestCase):
                     'remote_headers': {
                         'x-object-meta-custom': 'custom',
                         'last-modified': create_timestamp(1.4e9),
-                        'etag': 'ba3'},
+                        'etag': 'ba3',
+                        'Content-Length': '1024'},
                     'expected_headers': {
                         'x-object-meta-custom': 'custom',
                         'x-timestamp': Timestamp(1.4e9).internal,
                         'etag': 'ba3',
+                        'Content-Length': '1024',
                         s3_sync.utils.get_sys_migrator_header('object'): str(
                             Timestamp(1.4e9).internal)},
                     'list-time': create_list_timestamp(1.4e9),
@@ -948,11 +1006,13 @@ class TestMigrator(unittest.TestCase):
                     'remote_headers': {
                         'x-object-meta-custom': 'custom',
                         'last-modified': create_timestamp(1.5e9),
-                        'etag': 'f001a4'},
+                        'etag': 'f001a4',
+                        'Content-Length': '1024'},
                     'expected_headers': {
                         'x-object-meta-custom': 'custom',
                         'x-timestamp': Timestamp(1.5e9).internal,
                         'etag': 'f001a4',
+                        'Content-Length': '1024',
                         s3_sync.utils.get_sys_migrator_header('object'): str(
                             Timestamp(1.5e9).internal)},
                     'list-time': create_list_timestamp(1.5e9),
@@ -962,12 +1022,14 @@ class TestMigrator(unittest.TestCase):
                     'remote_headers': {
                         'x-object-meta-custom': 'custom',
                         'last-modified': create_timestamp(now - 35.0),
-                        'etag': 'ba3'},
+                        'etag': 'ba3',
+                        'Content-Length': '1024'},
                     'expected_headers': {
                         'x-object-meta-custom': 'custom',
                         'etag': 'ba3',
                         'x-timestamp':
                             Timestamp(math.floor(now - 35.0)).internal,
+                        'Content-Length': '1024',
                         s3_sync.utils.get_sys_migrator_header('object'): str(
                             Timestamp(math.floor(now - 35.0)).internal)},
                     'list-time': create_list_timestamp(now - 35.0),
@@ -978,11 +1040,13 @@ class TestMigrator(unittest.TestCase):
                         'x-object-meta-custom': 'custom',
                         'last-modified': create_timestamp(now),
                         'etag': 'ba33',
+                        'Content-Length': '1024',
                     },
                     'expected_headers': {
                         'x-object-meta-custom': 'custom',
                         'etag': 'ba33',
                         'x-timestamp': Timestamp(math.floor(now)).internal,
+                        'Content-Length': '1024',
                         s3_sync.utils.get_sys_migrator_header('object'): str(
                             Timestamp(math.floor(now)).internal)},
                     'list-time': create_list_timestamp(math.floor(now)),
@@ -1070,7 +1134,8 @@ class TestMigrator(unittest.TestCase):
             True, 200, {}, [{'name': 'obj'}])
         provider_mock.get_object.return_value = ProviderResponse(
             True, 200, {'last-modified': create_timestamp(1.5e9),
-                        'etag': 'deadbeef'},
+                        'etag': 'deadbeef',
+                        'Content-Length': '1337'},
             StringIO(''))
         self.swift_client.iter_objects.return_value = iter([])
         create_provider_mock.return_value = provider_mock
@@ -1107,6 +1172,7 @@ class TestMigrator(unittest.TestCase):
                 'moved_count': 1,
                 'finished': 100.0,
                 'scanned_count': 1,
+                'bytes_count': 1337,
             },
             'account': 'AUTH_dev',
             'container': 'bucket1',
@@ -1118,6 +1184,7 @@ class TestMigrator(unittest.TestCase):
                 'moved_count': 1,
                 'finished': 100.0,
                 'scanned_count': 1,
+                'bytes_count': 1337,
             },
             'account': 'AUTH_dev',
             'container': 'bucket2',
@@ -1139,6 +1206,7 @@ class TestMigrator(unittest.TestCase):
                 'moved_count': 1,
                 'finished': 100.0,
                 'scanned_count': 1,
+                'bytes_count': 1337,
             },
             'account': 'AUTH_dev',
             'container': 'bucket1',
@@ -1150,6 +1218,7 @@ class TestMigrator(unittest.TestCase):
                 'moved_count': 1,
                 'finished': 100.0,
                 'scanned_count': 1,
+                'bytes_count': 1337,
             },
             'account': 'AUTH_dev',
             'container': 'bucket2',
@@ -1161,6 +1230,7 @@ class TestMigrator(unittest.TestCase):
                 'moved_count': 1,
                 'finished': 100.0,
                 'scanned_count': 1,
+                'bytes_count': 1337,
             },
             'account': 'AUTH_dev',
             'container': 'bucket3',
@@ -1351,25 +1421,29 @@ class TestMigrator(unittest.TestCase):
                 'remote_headers': {
                     'x-object-meta-part': 'part-1',
                     'last-modified': create_timestamp(1.4e9),
-                    'etag': 'part1'},
+                    'etag': 'part1',
+                    'Content-Length': '1024'},
                 'expected_headers': {
                     'x-object-meta-part': 'part-1',
                     'x-timestamp': Timestamp(1.4e9).internal,
                     'etag': 'part1',
                     s3_sync.utils.get_sys_migrator_header('object'): str(
-                        Timestamp(1.4e9).internal)}
+                        Timestamp(1.4e9).internal),
+                    'Content-Length': '1024'}
             },
             'part2': {
                 'remote_headers': {
                     'x-object-meta-part': 'part-2',
                     'last-modified': create_timestamp(1.1e9),
-                    'etag': 'part2'},
+                    'etag': 'part2',
+                    'Content-Length': '1024'},
                 'expected_headers': {
                     'x-object-meta-part': 'part-2',
                     'x-timestamp': Timestamp(1.1e9).internal,
                     'etag': 'part2',
                     s3_sync.utils.get_sys_migrator_header('object'): str(
-                        Timestamp(1.1e9).internal)}
+                        Timestamp(1.1e9).internal),
+                    'Content-Length': '1024'}
             }
         }
 
@@ -1568,12 +1642,14 @@ class TestMigrator(unittest.TestCase):
                     'x-object-meta-custom': 'dlo-meta',
                     'last-modified': create_timestamp(1.5e9),
                     'x-object-manifest': '%s/' % segments_container,
-                    'etag': 'd10'},
+                    'etag': 'd10',
+                    'Content-Length': '10'},
                 'expected_headers': {
                     'x-object-meta-custom': 'dlo-meta',
                     'x-timestamp': Timestamp(1.5e9).internal,
                     'x-object-manifest': '%s/' % segments_container,
                     'etag': 'd10',
+                    'Content-Length': '10',
                     s3_sync.utils.get_sys_migrator_header('object'): str(
                         Timestamp(1.5e9).internal)}
             },
@@ -1581,11 +1657,13 @@ class TestMigrator(unittest.TestCase):
                 'remote_headers': {
                     'x-object-meta-part': 'part-1',
                     'last-modified': create_timestamp(1.4e9),
-                    'etag': '3e41'},
+                    'etag': '3e41',
+                    'Content-Length': '1'},
                 'expected_headers': {
                     'x-object-meta-part': 'part-1',
                     'etag': '3e41',
                     'x-timestamp': Timestamp(1.4e9).internal,
+                    'Content-Length': '1',
                     s3_sync.utils.get_sys_migrator_header('object'): str(
                         Timestamp(1.4e9).internal)}
             },
@@ -1593,11 +1671,13 @@ class TestMigrator(unittest.TestCase):
                 'remote_headers': {
                     'x-object-meta-part': 'part-2',
                     'last-modified': create_timestamp(1.1e9),
-                    'etag': '3e42'},
+                    'etag': '3e42',
+                    'Content-Length': '2'},
                 'expected_headers': {
                     'x-object-meta-part': 'part-2',
                     'etag': '3e42',
                     'x-timestamp': Timestamp(1.1e9).internal,
+                    'Content-Length': '2',
                     s3_sync.utils.get_sys_migrator_header('object'): str(
                         Timestamp(1.1e9).internal)}
             },
@@ -1605,11 +1685,13 @@ class TestMigrator(unittest.TestCase):
                 'remote_headers': {
                     'x-object-meta-part': 'part-3',
                     'last-modified': create_timestamp(1.2e9),
-                    'etag': '3e43'},
+                    'etag': '3e43',
+                    'Content-Length': '3'},
                 'expected_headers': {
                     'x-object-meta-part': 'part-3',
                     'etag': '3e43',
                     'x-timestamp': Timestamp(1.2e9).internal,
+                    'Content-Length': '3',
                     s3_sync.utils.get_sys_migrator_header('object'): str(
                         Timestamp(1.2e9).internal)}
             }
@@ -1794,7 +1876,8 @@ class TestMigrator(unittest.TestCase):
         provider_mock.get_object.return_value = ProviderResponse(
             True, 200,
             {'last-modified': create_timestamp(1.5e9),
-             'etag': 'deadbeef'},
+             'etag': 'deadbeef',
+             'Content-Length': str(2**10)},
             [])
         swift_404_resp = mock.Mock()
         swift_404_resp.status_int = 404
@@ -1816,7 +1899,8 @@ class TestMigrator(unittest.TestCase):
             'qux',
             {internal_header: '1500000000.00000',
              'x-timestamp': '1500000000.00000',
-             'etag': 'deadbeef'})
+             'etag': 'deadbeef',
+             'Content-Length': str(2**10)})
 
     def test_reconcile_deleted_timestamps(self):
         internal_header = s3_sync.utils.get_sys_migrator_header('object')
@@ -1881,11 +1965,12 @@ class TestStatus(unittest.TestCase):
     def test_update_status_fresh(self):
         status = {}
         # initial pass
-        s3_sync.migrator._update_status_counts(status, 10, 10, True)
+        s3_sync.migrator._update_status_counts(status, 10, 10, 100, True)
         self.assertEqual({
             'finished': self.start,
             'moved_count': 10,
             'scanned_count': 10,
+            'bytes_count': 100,
         }, status)
 
     def test_update_status_update(self):
@@ -1894,12 +1979,14 @@ class TestStatus(unittest.TestCase):
             'finished': self.start - 1,
             'moved_count': 10,
             'scanned_count': 10,
+            'bytes_count': 13,
         }
-        s3_sync.migrator._update_status_counts(status, 8, 8, False)
+        s3_sync.migrator._update_status_counts(status, 8, 8, 37, False)
         self.assertEqual({
             'finished': self.start,
             'moved_count': 18,
             'scanned_count': 18,
+            'bytes_count': 50,
         }, status)
 
     def test_update_status_set_last(self):
@@ -1908,15 +1995,37 @@ class TestStatus(unittest.TestCase):
             'finished': self.start - 1,
             'moved_count': 18,
             'scanned_count': 18,
+            'bytes_count': 25,
         }
-        s3_sync.migrator._update_status_counts(status, 0, 10, True)
+        s3_sync.migrator._update_status_counts(status, 0, 10, 37, True)
         self.assertEqual({
             'finished': self.start,
             'moved_count': 0,
             'scanned_count': 10,
+            'bytes_count': 37,
             'last_finished': self.start - 1,
             'last_moved_count': 18,
             'last_scanned_count': 18,
+            'last_bytes_count': 25
+        }, status)
+
+    def test_update_status_set_last_no_bytes(self):
+        # next pass has nothing to move
+        status = {
+            'finished': self.start - 1,
+            'moved_count': 18,
+            'scanned_count': 18,
+        }
+        s3_sync.migrator._update_status_counts(status, 0, 10, 37, True)
+        self.assertEqual({
+            'finished': self.start,
+            'moved_count': 0,
+            'scanned_count': 10,
+            'bytes_count': 37,
+            'last_finished': self.start - 1,
+            'last_moved_count': 18,
+            'last_scanned_count': 18,
+            'last_bytes_count': 0,
         }, status)
 
     def test_update_status_update_current_maintains_last(self):
@@ -1924,19 +2033,23 @@ class TestStatus(unittest.TestCase):
         status = {
             'finished': self.start - 1,
             'moved_count': 0,
+            'bytes_count': 0,
             'scanned_count': 10,
             'last_finished': self.start - 2,
             'last_moved_count': 18,
             'last_scanned_count': 18,
+            'last_bytes_count': 100,
         }
-        s3_sync.migrator._update_status_counts(status, 0, 8, False)
+        s3_sync.migrator._update_status_counts(status, 0, 8, 0, False)
         self.assertEqual({
             'finished': self.start,
             'moved_count': 0,
             'scanned_count': 18,
+            'bytes_count': 0,
             'last_finished': self.start - 2,
             'last_moved_count': 18,
             'last_scanned_count': 18,
+            'last_bytes_count': 100,
         }, status)
 
     def test_update_status_finished_resets_last(self):
@@ -1948,15 +2061,18 @@ class TestStatus(unittest.TestCase):
             'last_finished': self.start - 3,
             'last_moved_count': 18,
             'last_scanned_count': 18,
+            'last_bytes_count': 1024,
         }
-        s3_sync.migrator._update_status_counts(status, 0, 10, True)
+        s3_sync.migrator._update_status_counts(status, 0, 10, 0, True)
         self.assertEqual({
             'finished': self.start,
             'moved_count': 0,
             'scanned_count': 10,
+            'bytes_count': 0,
             'last_finished': self.start - 1,
             'last_moved_count': 0,
             'last_scanned_count': 18,
+            'last_bytes_count': 0,
         }, status)
 
     def test_update_status_update_with_new_move(self):
@@ -1965,15 +2081,17 @@ class TestStatus(unittest.TestCase):
             'finished': self.start - 3,
             'moved_count': 0,
             'scanned_count': 10,
+            'bytes_count': 5,
             'last_finished': self.start - 4,
             'last_moved_count': 0,
             'last_scanned_count': 18,
         }
-        s3_sync.migrator._update_status_counts(status, 1, 9, False)
+        s3_sync.migrator._update_status_counts(status, 1, 9, 50, False)
         self.assertEqual({
             'finished': self.start,
             'moved_count': 1,
             'scanned_count': 19,
+            'bytes_count': 55,
             'last_finished': self.start - 4,
             'last_moved_count': 0,
             'last_scanned_count': 18,
@@ -1985,18 +2103,22 @@ class TestStatus(unittest.TestCase):
             'finished': self.start - 3,
             'moved_count': 1,
             'scanned_count': 19,
+            'bytes_count': 1024,
             'last_finished': self.start - 5,
             'last_moved_count': 0,
             'last_scanned_count': 18,
+            'last_bytes_count': 0,
         }
-        s3_sync.migrator._update_status_counts(status, 0, 10, True)
+        s3_sync.migrator._update_status_counts(status, 0, 10, 0, True)
         self.assertEqual({
             'finished': self.start,
             'moved_count': 0,
             'scanned_count': 10,
+            'bytes_count': 0,
             'last_finished': self.start - 3,
             'last_moved_count': 1,
             'last_scanned_count': 19,
+            'last_bytes_count': 1024,
         }, status)
 
     def test_update_status_finished_no_moves_resets_last(self):
@@ -2005,18 +2127,22 @@ class TestStatus(unittest.TestCase):
             'finished': self.start - 5,
             'moved_count': 0,
             'scanned_count': 19,
+            'bytes_count': 0,
             'last_finished': self.start - 7,
             'last_moved_count': 1,
             'last_scanned_count': 19,
+            'last_bytes_count': 1024,
         }
-        s3_sync.migrator._update_status_counts(status, 0, 10, True)
+        s3_sync.migrator._update_status_counts(status, 0, 10, 0, True)
         self.assertEqual({
             'finished': self.start,
             'moved_count': 0,
             'scanned_count': 10,
+            'bytes_count': 0,
             'last_finished': self.start - 5,
             'last_moved_count': 0,
             'last_scanned_count': 19,
+            'last_bytes_count': 0,
         }, status)
 
     def test_update_status_clean_finish_does_not_reset_last(self):
@@ -2025,18 +2151,22 @@ class TestStatus(unittest.TestCase):
             'finished': self.start - 2,
             'moved_count': 0,
             'scanned_count': 19,
+            'bytes_count': 0,
             'last_finished': self.start - 7,
             'last_moved_count': 0,
             'last_scanned_count': 19,
+            'last_bytes_count': 0,
         }
-        s3_sync.migrator._update_status_counts(status, 0, 10, True)
+        s3_sync.migrator._update_status_counts(status, 0, 10, 0, True)
         self.assertEqual({
             'finished': self.start,
             'moved_count': 0,
             'scanned_count': 10,
+            'bytes_count': 0,
             'last_finished': self.start - 7,
             'last_moved_count': 0,
             'last_scanned_count': 19,
+            'last_bytes_count': 0,
         }, status)
 
     def test_update_legacy(self):
@@ -2045,21 +2175,55 @@ class TestStatus(unittest.TestCase):
             'moved_count': 0,
             'scanned_count': 8,
         }
-        s3_sync.migrator._update_status_counts(status, 0, 8, True)
+        s3_sync.migrator._update_status_counts(status, 0, 8, 0, True)
         self.assertEqual({
             'finished': self.start,
             'moved_count': 0,
             'scanned_count': 8,
+            'bytes_count': 0,
         }, status)
-        s3_sync.migrator._update_status_counts(status, 0, 8, True)
+        s3_sync.migrator._update_status_counts(status, 0, 8, 0, True)
         # ... but we get there eventually
         self.assertEqual({
             'finished': self.start + 1,
             'moved_count': 0,
             'scanned_count': 8,
+            'bytes_count': 0,
             'last_finished': self.start,
             'last_moved_count': 0,
             'last_scanned_count': 8,
+            'last_bytes_count': 0,
+        }, status)
+
+    def test_update_without_bytes(self):
+        status = {
+            'finished': self.start,
+            'moved_count': 0,
+            'scanned_count': 8,
+            'last_finished': self.start,
+            'last_moved_count': 0,
+            'last_scanned_count': 8,
+        }
+        s3_sync.migrator._update_status_counts(status, 1, 8, 100, False)
+        self.assertEqual({
+            'finished': self.start,
+            'moved_count': 1,
+            'scanned_count': 16,
+            'bytes_count': 100,
+            'last_finished': self.start,
+            'last_moved_count': 0,
+            'last_scanned_count': 8,
+        }, status)
+        s3_sync.migrator._update_status_counts(status, 1, 1, 1000, True)
+        self.assertEqual({
+            'finished': self.start + 1,
+            'moved_count': 1,
+            'scanned_count': 1,
+            'bytes_count': 1000,
+            'last_finished': self.start,
+            'last_moved_count': 1,
+            'last_bytes_count': 100,
+            'last_scanned_count': 16,
         }, status)
 
 
