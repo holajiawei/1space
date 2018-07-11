@@ -65,6 +65,17 @@ class S3SyncProxyFSSwitch(object):
             'proxyfs-bimodal'))
 
 
+SECRETS = ('aws_secret',)
+
+
+def redact_secrets(profile):
+    newdict = dict(profile)
+    for key in newdict.keys():
+        if key in SECRETS:
+            newdict[key] = "(redacted)"
+    return newdict
+
+
 def maybe_munge_profile_for_all_containers(sync_profile, container_name):
     """
     Takes a sync profile config and a UTF8-encoded container name, and returns
@@ -390,7 +401,7 @@ class S3SyncShunt(object):
             start_response(status, headers)
             return app_iter
         self.logger.debug('404 for %s; shunting to %r'
-                          % (req.path, sync_profile))
+                          % (req.path, redact_secrets(sync_profile)))
 
         # Save off any existing trans-id headers so we can add them back later
         trans_id_headers = [(h, v) for h, v in headers if h.lower() in (

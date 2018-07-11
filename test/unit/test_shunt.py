@@ -15,6 +15,7 @@ limitations under the License.
 """
 
 import json
+import logging
 import lxml
 import mock
 import StringIO
@@ -66,6 +67,9 @@ class FakeSwift(object):
 
 class TestShunt(unittest.TestCase):
     def setUp(self):
+        self.logger = logging.getLogger()
+        self.stream = StringIO.StringIO()
+        self.logger.addHandler(logging.StreamHandler(self.stream))
         self.patchers = [mock.patch(name) for name in (
             's3_sync.sync_swift.SyncSwift.shunt_object',
             's3_sync.sync_s3.SyncS3.shunt_object',
@@ -159,7 +163,7 @@ class TestShunt(unittest.TestCase):
                 'container': 'destination',
                 'aws_bucket': 'source',
                 'aws_identity': 'migration',
-                'aws_secret': 'migration'
+                'aws_secret': 'migration_key'
             }]
         }
 
@@ -173,6 +177,12 @@ class TestShunt(unittest.TestCase):
     def tearDown(self):
         for patcher in self.patchers:
             patcher.__exit__()
+
+    def pop_log_lines(self):
+        lines = self.stream.getvalue()
+        self.stream.seek(0)
+        self.stream.truncate()
+        return lines
 
     def test_bad_config_noops(self):
         app = shunt.filter_factory(
@@ -241,7 +251,7 @@ class TestShunt(unittest.TestCase):
                 'restore_object': True,
                 'aws_bucket': 'source',
                 'aws_identity': 'migration',
-                'aws_secret': 'migration',
+                'aws_secret': 'migration_key',
                 'custom_prefix': '',
             },
             ('AUTH_tee', 'tee'): {
@@ -430,6 +440,9 @@ class TestShunt(unittest.TestCase):
     @mock.patch.object(sync_swift.SyncSwift, 'get_manifest')
     @mock.patch.object(sync_s3.SyncS3, 'get_manifest')
     def test_object_shunt(self, mock_s3_manifest, mock_swift_manifest):
+
+        self.app.shunted_app.logger = self.logger
+
         def _test_no_shunt(path, status):
             req = swob.Request.blank(path, environ={
                 '__test__.status': status,
@@ -485,6 +498,9 @@ class TestShunt(unittest.TestCase):
                 ])
                 self.assertEqual(b''.join(body_iter), b'remote swift')
                 self.mock_shunt_swift.reset_mock()
+            log_lines = self.pop_log_lines()
+            self.assertNotIn('key', log_lines)
+            self.assertIn("(redacted)", log_lines)
         _test_shunted(u'/v1/AUTH_a/sw\u00e9ft/o', False)
         _test_shunted('/v1/AUTH_a/s3/o', True)
         _test_shunted('/v1/AUTH_a/s3prop/o', True)
