@@ -132,9 +132,7 @@ class S3SyncShunt(object):
 
             with open(self.conf_file, 'rb') as fp:
                 conf = json.load(fp)
-        except (IOError, ValueError, OSError) as err:
-            self.logger.warning("Couldn't read conf_file %r: %s; disabling",
-                                self.conf_file, err)
+        except (IOError, ValueError, OSError):
             conf = {'containers': []}
 
         self.sync_profiles = {}
