@@ -698,6 +698,8 @@ class SyncS3(BaseSync):
     def get_s3_name(self, key):
         prefix = self.get_prefix()
         if self.use_custom_prefix:
+            if not isinstance(key, unicode):
+                key = key.decode('utf-8')
             return '/'.join(filter(None, (prefix, key)))
         return u'%s/%s' % (prefix, self._full_name(key))
 

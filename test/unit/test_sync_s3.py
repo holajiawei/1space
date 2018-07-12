@@ -619,6 +619,7 @@ class TestSyncS3(unittest.TestCase):
     @mock.patch('s3_sync.sync_s3.boto3.session.Session')
     def test_s3_name(self, mock_session):
         test_data = [('AUTH_test', 'container', 'key'),
+                     ('acct', 'cont', '\u062akey'),
                      ('swift', 'stuff', 'my/key')]
         for account, container, key in test_data:
             sync = SyncS3({'account': account,
@@ -630,6 +631,7 @@ class TestSyncS3(unittest.TestCase):
             self.assertEqual(sync.get_s3_name(key),
                              sync.get_s3_name(key))
             s3_key = sync.get_s3_name(key)
+            self.assertTrue(isinstance(s3_key, unicode))
             prefix, remainder = s3_key.split('/', 1)
             self.assertEqual(remainder, '/'.join((account, container, key)))
             self.assertTrue(len(prefix) and
@@ -643,6 +645,7 @@ class TestSyncS3(unittest.TestCase):
     @mock.patch('s3_sync.sync_s3.boto3.session.Session')
     def test_s3_name_custom_prefix(self, mock_session):
         test_data = [('AUTH_test', 'container', 'key'),
+                     ('acct', 'cont', '\u062akey'),
                      ('swift', 'stuff', 'my/key')]
         prefixes = ['scary', 'scary/', 'scary/idea/', '', '/']
         for c_pref in prefixes:
@@ -657,6 +660,7 @@ class TestSyncS3(unittest.TestCase):
                 self.assertEqual(sync.get_s3_name(key),
                                  sync.get_s3_name(key))
                 s3_key = sync.get_s3_name(key)
+                self.assertTrue(isinstance(s3_key, unicode))
                 e_pref = c_pref.strip('/')
                 if len(e_pref):
                     expected = e_pref + '/' + key
