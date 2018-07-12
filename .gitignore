@@ -7,3 +7,4 @@ docker-compose.custom.yml
 /.coverhtml
 /.swift-s3-sync
 /port-mapping.env
+*,cover
