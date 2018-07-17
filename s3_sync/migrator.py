@@ -547,10 +547,30 @@ class Migrator(object):
                     return
                 raise
             if get_sys_migrator_header('object') in hdrs:
-                self.logger.info(
-                    'Detected removed object %s. Removing from %s/%s' % (
-                        key, self.config['account'], container))
-                ic.delete_object(self.config['account'], container, key)
+                headers = {}
+                xts = hdrs.get('x-backend-durable-timestamp') or \
+                    hdrs.get('x-backend-timestamp') or hdrs.get('x-timestamp')
+                if xts:
+                    ts = Timestamp(xts)
+                    headers['x-timestamp'] = Timestamp(
+                        ts.timestamp, ts.offset + 1).internal
+                else:
+                    xts = _create_x_timestamp_from_hdrs(hdrs)
+                    if xts:
+                        headers['x-timestamp'] = Timestamp(xts, 1)
+                try:
+                    ic.delete_object(self.config['account'], container, key,
+                                     headers)
+                    self.logger.info(
+                        'Detected removed object %s. Removing from %s/%s' % (
+                            key, self.config['account'], container))
+                except UnexpectedResponse as e:
+                    if e.resp.status_int == HTTP_CONFLICT:
+                        self.logger.info(
+                            'Conflict removing object %s from %s/%s' % (
+                                key, self.config['account'], container))
+                        return
+                    raise
 
     def _maybe_delete_internal_container(self, container):
         '''Delete a specified internal container.
