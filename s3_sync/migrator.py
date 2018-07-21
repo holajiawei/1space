@@ -25,6 +25,7 @@ import json
 import logging
 import os
 import sys
+import tempfile
 import time
 import traceback
 
@@ -154,19 +155,42 @@ def _create_x_timestamp_from_hdrs(hdrs, use_x_timestamp=True):
 
 
 class Status(object):
+    CORRUPTED_SUFFIX = 'corrupted'
+
     def __init__(self, status_location):
         self.status_location = status_location
         self.status_list = None
+        self.logger = logging.getLogger(LOGGER_NAME)
+
+    def _move_stats(self):
+        try:
+            index = 1
+            while True:
+                location = '.'.join(
+                    [self.status_location, self.CORRUPTED_SUFFIX, str(index)])
+                if not os.path.exists(location):
+                    break
+                index += 1
+
+            self.logger.warning(
+                'Detected corrupted status file! Reset stats. Old moved to: %s'
+                % location)
+            os.rename(self.status_location, location)
+        except Exception as e:
+            self.logger.error('Fatal error: failed to move stats (%s).' % e)
 
     def load_status_list(self):
         self.status_list = []
         try:
             with open(self.status_location) as fh:
-                try:
-                    self.status_list = json.load(fh)
-                except ValueError as e:
-                    if str(e) != 'No JSON object could be decoded':
-                        raise
+                self.status_list = json.load(fh)
+        except ValueError as e:
+            if str(e) == 'No JSON object could be decoded':
+                # This happens when we have an empty file
+                return
+            # Regardless of whether we moved the stats or not, we will be
+            # restarting the stats from an empty list.
+            self._move_stats()
         except IOError as e:
             if e.errno != errno.ENOENT:
                 raise
@@ -180,15 +204,21 @@ class Status(object):
         return {}
 
     def save_status_list(self):
+        def _writeout_status_list():
+            # TODO: if we are killed while writing out the file, we may litter
+            # these temp files. We should add a cleanup step at some point.
+            with tempfile.NamedTemporaryFile(
+                    dir=os.path.dirname(self.status_location),
+                    delete=False) as tmp_fh:
+                json.dump(self.status_list, tmp_fh)
+            os.rename(tmp_fh.name, self.status_location)
+
         try:
-            with open(self.status_location, 'w') as fh:
-                fh.truncate()
-                json.dump(self.status_list, fh)
-        except IOError as e:
+            _writeout_status_list()
+        except OSError as e:
             if e.errno == errno.ENOENT:
-                os.mkdir(os.path.dirname(self.status_location), mode=0755)
-                with open(self.status_location, 'w') as fh:
-                    json.dump(self.status_list, fh)
+                os.mkdir(os.path.dirname(self.status_location), 0755)
+                _writeout_status_list()
             else:
                 raise
 

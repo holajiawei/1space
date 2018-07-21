@@ -173,13 +173,7 @@ class TestMigratorUtils(unittest.TestCase):
                 with self.assertRaises(expected):
                     s3_sync.migrator.cmp_object_entries(left, right)
 
-    @mock.patch('__builtin__.open')
-    def test_status_get(self, mock_open):
-        mock_file = mock.Mock()
-        mock_file.__enter__ = lambda *args: mock_file
-        mock_file.__exit__ = lambda *args: None
-        mock_open.return_value = mock_file
-
+    def test_status_get(self):
         test_cases = [
             [{'aws_bucket': 'testbucket',
               'aws_endpoint': '',
@@ -201,10 +195,8 @@ class TestMigratorUtils(unittest.TestCase):
                   'scanned_count': 100}}],
         ]
         for test in test_cases:
-            mock_file.reset_mock()
-            mock_file.read.return_value = json.dumps(test)
-
             status = s3_sync.migrator.Status('/fake/location')
+            status.status_list = test
             self.assertEqual({}, status.get_migration(
                 {'aws_identity': '',
                  'aws_secret': ''}))
@@ -230,12 +222,29 @@ class TestMigratorUtils(unittest.TestCase):
             status.get_migration({})
         self.assertEqual(errno.EPERM, e.exception.errno)
 
-    @mock.patch('__builtin__.open')
-    def test_status_save(self, mock_open):
-        mock_file = mock.Mock()
-        mock_file.__enter__ = lambda *args: mock_file
-        mock_file.__exit__ = lambda *args: None
-        mock_open.return_value = mock_file
+    def setup_test_tree(self):
+        self.test_dir = mkdtemp()
+        self.addCleanup(shutil.rmtree, self.test_dir)
+
+    def test_load_corrupt_status(self):
+        self.setup_test_tree()
+        with NamedTemporaryFile(dir=self.test_dir, delete=False) as bad_status:
+            bad_status.write('[{"status": {"moved_count": 5, }')
+        status = s3_sync.migrator.Status(bad_status.name)
+        status.load_status_list()
+        self.assertTrue(os.path.exists(bad_status.name + '.corrupted.1'))
+        self.assertEqual([], status.status_list)
+
+        # we should do this again if there is a prior corrupted file
+        with open(bad_status.name, 'w') as fh:
+            fh.write('[{"status": {"moved_count": 5, }')
+        status = s3_sync.migrator.Status(bad_status.name)
+        status.load_status_list()
+        self.assertTrue(os.path.exists(bad_status.name + '.corrupted.2'))
+        self.assertEqual([], status.status_list)
+
+    def test_status_save(self):
+        self.setup_test_tree()
         start = int(time.time()) + 1
 
         test_cases = [
@@ -273,8 +282,8 @@ class TestMigratorUtils(unittest.TestCase):
              {'finished': start, 'moved_count': 1000, 'scanned_count': 1000}),
         ]
         for status_list, test_params, write_status in test_cases:
-            mock_file.reset_mock()
-            status = s3_sync.migrator.Status('/fake/location')
+            status = s3_sync.migrator.Status(
+                os.path.join(self.test_dir, 'location'))
             status.status_list = status_list
 
             if not status_list:
@@ -291,45 +300,42 @@ class TestMigratorUtils(unittest.TestCase):
                     test_params['reset_stats'])
             write_status['marker'] = test_params['marker']
             migration['status'] = write_status
+
             # gets the 1st argument in the call argument list
-            written = ''.join([call[1][0] for call in
-                               mock_file.write.mock_calls])
-            written_conf = json.loads(written)
+            with open(os.path.join(self.test_dir, 'location')) as fh:
+                written_conf = json.load(fh)
             for entry in written_conf:
                 self.assertTrue('aws_secret' not in entry)
             del migration['aws_secret']
             self.assertEqual(written_conf, [migration])
 
-    @mock.patch('s3_sync.migrator.os.mkdir')
-    @mock.patch('__builtin__.open')
-    def test_status_save_create(self, mock_open, mock_mkdir):
+    def test_status_save_create(self):
+        self.setup_test_tree()
         start = int(time.time()) + 1
-        mock_file = mock.Mock()
-        mock_file.__enter__ = lambda *args: mock_file
-        mock_file.__exit__ = lambda *args: None
-        mock_open.side_effect = [IOError(errno.ENOENT, 'not found'), mock_file]
 
-        status = s3_sync.migrator.Status('/fake/location')
+        status = s3_sync.migrator.Status(os.path.join(
+            self.test_dir, 'dne', 'status'))
+        self.assertFalse(
+            os.path.exists(os.path.dirname(status.status_location)))
         status.status_list = []
         with mock.patch('time.time') as mock_time:
             mock_time.return_value = start
             status.save_migration(
                 {'aws_identity': 'aws id', 'aws_secret': 'secret'},
                 'marker', 100, 100, False)
-        mock_mkdir.assert_called_once_with('/fake', mode=0755)
-        written = ''.join([call[1][0] for call in mock_file.write.mock_calls])
-        self.assertEqual(json.loads(written), [
+        self.assertTrue(
+            os.path.exists(os.path.dirname(status.status_location)))
+        with open(status.status_location) as fh:
+            written_conf = json.load(fh)
+        self.assertEqual(written_conf, [
             {'aws_identity': 'aws id',
              'status': {'marker': 'marker', 'moved_count': 100,
                         'scanned_count': 100, 'finished': start}}])
 
     @mock.patch('s3_sync.migrator.os.mkdir')
-    @mock.patch('__builtin__.open')
-    def test_status_save_create_raises(self, mock_open, mock_mkdir):
-        mock_file = mock.Mock()
-        mock_file.__enter__ = lambda *args: mock_file
-        mock_file.__exit__ = lambda *args: None
-        mock_open.side_effect = IOError(errno.ENOENT, 'not found')
+    @mock.patch('s3_sync.migrator.tempfile.NamedTemporaryFile')
+    def test_status_save_create_raises(self, mock_temp, mock_mkdir):
+        mock_temp.side_effect = OSError(errno.ENOENT, 'not found')
         mock_mkdir.side_effect = IOError(errno.EPERM, 'denied')
 
         status = s3_sync.migrator.Status('/fake/location')
@@ -338,15 +344,15 @@ class TestMigratorUtils(unittest.TestCase):
             status.save_migration(
                 {'aws_identity': 'aws id', 'aws_secret': 'secret'},
                 'marker', 100, 100, False)
-        mock_mkdir.assert_called_once_with('/fake', mode=0755)
+        mock_mkdir.assert_called_once_with('/fake', 0755)
         self.assertEqual(errno.EPERM, cm.exception.errno)
 
-    @mock.patch('__builtin__.open')
-    def test_status_save_raises(self, mock_open):
-        mock_open.side_effect = IOError(errno.EPERM, 'denied')
+    @mock.patch('s3_sync.migrator.tempfile.NamedTemporaryFile')
+    def test_status_save_raises(self, mock_temp):
+        mock_temp.side_effect = OSError(errno.EPERM, 'denied')
         status = s3_sync.migrator.Status('/fake/location')
         status.status_list = []
-        with self.assertRaises(IOError) as err:
+        with self.assertRaises(OSError) as err:
             status.save_migration(
                 {'aws_identity': 'aws id', 'aws_secret': 'secret'},
                 'marker', 100, 100, False)
