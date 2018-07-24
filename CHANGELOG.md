@@ -1,3 +1,30 @@
+## 0.1.41 (2018-07-24)
+
+Features:
+
+    - Allow migrations from a ProxyFS account. The migrator will ignore ProxyFS
+      non-content specific, opaque ETags during migrations and the operator
+      should validate content hashes of the migrated objects.
+    - Migrator will report the total size of objects copied during each pass as
+      "bytes_count" field in the status file (and the corresponding
+      "last_bytes_count").
+
+Bug fixes:
+
+    - A non-ASCII character in the `custom_prefix` option would result in a
+      unicode error.
+    - Security: Secret key was previously logged at debug level in the Swift
+      proxy server logs.
+    - Quiesced the shunt middleware to no longer log a notice that it is not
+      configured on every Swift request to the proxy server.
+    - Migrator now uses the source object's X-Timestamp (if available), as
+      opposed to the Last-Modified date. This ensures the exact match between
+      the dates during migrations.
+    - If the migrator status file is corrupted, the migrator previously would
+      not start. As of 0.1.41, the migrator will move the corrupted files and
+      will restart its scan. The migrator also attempts to avoid corruption by
+      using a temporary file, as opposed to writing to the status file directly.
+
 ## 0.1.40 (2018-06-29)
 
 Bug fixes:
