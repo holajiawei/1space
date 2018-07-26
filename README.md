@@ -131,7 +131,7 @@ and start the `swift-s3-sync` container running in the background.
 If you want a shell in that container, you can run `./run_bash`.
 
 Tests pre-configure multiple
-[policies](https://github.com/swiftstack/swift-s3-sync/blob/master/test/container/swift-s3-sync.conf).
+[policies](https://github.com/swiftstack/swift-s3-sync/blob/master/containers/swift-s3-sync/swift-s3-sync.conf).
 
 Specifically, you can create containers `sync-s3` and `archive-s3` to observe
 how swift-s3-sync works. Use `python-swiftclient` inside the container like this:
@@ -214,7 +214,7 @@ provider. Currently, they use a Docker container to provide Swift and are
 configured to talk to [S3Proxy](https://github.com/andrewgaul/s3proxy).
 
 The cloud sync configuration for the tests is defined in
-`test/container/swift-s3-sync.conf`. In particular, there are mappings for S3
+`containers/swift-s3-sync/swift-s3-sync.conf`. In particular, there are mappings for S3
 sync and archive policies and the same for Swift. The S3 mappings point to
 S3Proxy running in the swift-s3-sync container, listening on port 10080.
 
@@ -251,7 +251,7 @@ an example invocation specifying all options and illustrating how you can
 change the GitHub repository from which Swift is pulled:
 
 ```
-cd cloud-connector-docker
+cd containers/cloud-connector
 ./build_docker_image.py --swift-repo swiftstack/swift \
     --swift-tag ss-release-2.16.0.2 --swift-s3-sync-tag DEV \
     --config-bucket default-bucket-name-to-use \
@@ -276,12 +276,12 @@ To deploy cloud-connector, you need the following inputs:
 1. A JSON-format database of authorized cloud-connector users and their
    corresponding secret S3-API keys **from the Swift cluster that the
    cloud-connector container will be pointed at**.  See
-   [here](https://github.com/swiftstack/swift-s3-sync/blob/master/test/container/s3-passwd.json)
+   [here](https://github.com/swiftstack/swift-s3-sync/blob/master/containers/swift-s3-sync/s3-passwd.json)
    for an example.
 1. A copy of the CloudSync JSON-format config file as used inside the Swift
    cluster.
 1. A configuration file for cloud-connector.  See
-   [here](https://github.com/swiftstack/swift-s3-sync/blob/master/test/container/cloud-connector.conf)
+   [here](https://github.com/swiftstack/swift-s3-sync/blob/master/containers/swift-s3-sync/cloud-connector.conf)
    for an example.  Of particular interest are the `swift_baseurl` setting in
    the `[DEFAULT]` section, `conf_file` setting in the `[app:proxy-server]`
    section, and the `s3_passwd_json` setting in the

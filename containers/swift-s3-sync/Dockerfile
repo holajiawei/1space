@@ -1,5 +1,5 @@
 # I am intended to be built from the top of the swift-s3-sync tree like this:
-#    docker build [...] -f test/container/Dockerfile .
+#    docker build [...] -f containers/swift-s3-sync/Dockerfile .
 
 FROM bouncestorage/swift-aio:latest
 
@@ -22,19 +22,19 @@ RUN locale-gen en_US.UTF-8
 ENV LANG='en_US.UTF-8' LANGUAGE='en_US:en' LC_ALL='en_US.UTF-8'
 
 # These patches improve Unicode handling in tempauth, swiftclient, and swift3
-COPY test/container/tempauth.patch /tmp/
+COPY containers/swift-s3-sync/tempauth.patch /tmp/
 RUN bash -c "cd /usr/local/src \
     && patch -p0 < /tmp/tempauth.patch \
     && rm -f /tmp/tempauth.patch"
-COPY test/container/swiftclient.patch /tmp/
+COPY containers/swift-s3-sync/swiftclient.patch /tmp/
 RUN bash -c "cd /usr/local/src \
     && patch -p0 < /tmp/swiftclient.patch \
     && rm -f /tmp/swiftclient.patch"
-COPY test/container/swift3-unicode-fix.patch /tmp/
+COPY containers/swift-s3-sync/swift3-unicode-fix.patch /tmp/
 RUN bash -c "cd /usr/local/src \
     && patch -p0 < /tmp/swift3-unicode-fix.patch \
     && rm -f /tmp/swift3-unicode-fix.patch"
 
 ENV CONF_BUCKET=cloud-connector-conf
 
-CMD ["/bin/bash", "/swift-s3-sync/test/container/launch.sh"]
+CMD ["/bin/bash", "/swift-s3-sync/containers/swift-s3-sync/launch.sh"]

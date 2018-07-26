@@ -10,7 +10,7 @@ find /var/run/ -name *.pid -delete
 # Include our own internal-client config.
 # Ditto for proxy-server config, and a config that will run a no-auth, no-shunt
 # proxy-server instance on port 8082.
-cp -f /swift-s3-sync/test/container/{internal-client,proxy-server,proxy-server-noshunt}.conf /etc/swift/
+cp -f /swift-s3-sync/containers/swift-s3-sync/{internal-client,proxy-server,proxy-server-noshunt}.conf /etc/swift/
 
 # Copied from the docker swift container. Unfortunately, there is no way to
 # plugin an additional invocation to start swift-s3-sync, so we had to do this.
@@ -37,12 +37,12 @@ cd /swift-s3-sync; pip install -e .
 /usr/bin/sudo -u swift /swift/bin/startmain
 
 python -m s3_sync --log-level debug \
-    --config /swift-s3-sync/test/container/swift-s3-sync.conf &
+    --config /swift-s3-sync/containers/swift-s3-sync/swift-s3-sync.conf &
 # NOTE: integration tests will run the migrator as needed so they can better
 # control the timing of actions.
 
 /usr/bin/java -DLOG_LEVEL=debug -jar /s3proxy/s3proxy \
-    --properties /swift-s3-sync/test/container/s3proxy.properties \
+    --properties /swift-s3-sync/containers/swift-s3-sync/s3proxy.properties \
     2>&1 > /var/log/s3proxy.log &
 
 sleep 6  # let S3Proxy start up
@@ -50,11 +50,11 @@ sleep 6  # let S3Proxy start up
 # Set up stuff for cloud-connector
 # NOTE: s3cmd is installed via requirements-test.txt in the Dockerfile
 s3cmd -c /swift-s3-sync/s3cfg mb s3://$CONF_BUCKET ||:
-s3cmd -c /swift-s3-sync/s3cfg put /swift-s3-sync/test/container/cloud-connector.conf \
+s3cmd -c /swift-s3-sync/s3cfg put /swift-s3-sync/containers/swift-s3-sync/cloud-connector.conf \
     s3://$CONF_BUCKET
-s3cmd -c /swift-s3-sync/s3cfg put /swift-s3-sync/test/container/swift-s3-sync.conf \
+s3cmd -c /swift-s3-sync/s3cfg put /swift-s3-sync/containers/swift-s3-sync/swift-s3-sync.conf \
     s3://$CONF_BUCKET/sync-config.json
-s3cmd -c /swift-s3-sync/s3cfg put /swift-s3-sync/test/container/s3-passwd.json \
+s3cmd -c /swift-s3-sync/s3cfg put /swift-s3-sync/containers/swift-s3-sync/s3-passwd.json \
     s3://$CONF_BUCKET/s3-passwd.json
 
 /usr/local/bin/supervisord -n -c /etc/supervisord.conf

@@ -178,7 +178,8 @@ class TestCloudSyncBase(unittest.TestCase):
     NOSHUNT_STORAGE_BASE = 'http://localhost:%d/v1/' % PORTS['noshunt']
 
     CLOUD_SYNC_CONF = os.path.join(
-        os.path.dirname(__file__), '../container/swift-s3-sync.conf')
+        os.path.dirname(__file__),
+        '../../containers/swift-s3-sync/swift-s3-sync.conf')
     SWIFT_CREDS = {
         'authurl': 'http://localhost:%d/auth/v1.0' % PORTS['swift'],
         'src': {
@@ -433,7 +434,8 @@ class TestCloudSyncBase(unittest.TestCase):
         devnull = open('/dev/null', 'wb')
         proc = subprocess.Popen(
             ['/usr/bin/python', '/usr/local/bin/swift-s3-migrator',
-             '--config', '/swift-s3-sync/test/container/swift-s3-sync.conf'],
+             '--config',
+             '/swift-s3-sync/containers/swift-s3-sync/swift-s3-sync.conf'],
             close_fds=True,
             cwd='/',
             stdout=devnull, stderr=devnull)

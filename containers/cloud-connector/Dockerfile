@@ -1,5 +1,5 @@
 # I am intended to be built from the top of the swift-s3-sync tree like this:
-#    docker build [...] -f cloud-connector-docker/Dockerfile .
+#    docker build [...] -f containres/cloud-connector/Dockerfile .
 
 FROM python:2-alpine3.7 AS wheel
 WORKDIR /opt/cloud-connector
@@ -27,13 +27,13 @@ RUN apk --no-cache add \
     make install && \
     make DESTDIR=/liberasurecode-tree install
 # Install non-cloud-builder Python dependencies
-COPY cloud-connector-docker/*.txt requirements.txt ./
+COPY containers/cloud-connector/*.txt requirements.txt ./
 ARG SWIFT_REPO=openstack/swift
 ARG SWIFT_TAG=2.17.0
 RUN pip install --no-warn-script-location -I --root /python-root \
     -r ./requirements.txt -r ./cloud-connector-requirements.txt \
     "git+https://github.com/${SWIFT_REPO}@${SWIFT_TAG}#egg=swift"
-COPY test/container/swift3-unicode-fix.patch /tmp/
+COPY containers/swift-s3-sync/swift3-unicode-fix.patch /tmp/
 RUN bash -c "cd /python-root/usr/local/lib/python2.7/site-packages \
     && patch -p1 < /tmp/swift3-unicode-fix.patch"
 # Now install cloud-builder code itself
