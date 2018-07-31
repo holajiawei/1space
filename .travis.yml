@@ -13,15 +13,16 @@ before_cache:
         docker images -a --format '{{.Repository}}:{{.Tag}} {{.ID}}' &&
         mkdir -p $HOME/docker &&
         docker images -a --filter='dangling=false' --format '{{.Repository}}:{{.Tag}} {{.ID}}'
-        | xargs -n 2 -t sh -c 'test $0 = bouncestorage/swift-aio:latest ||
-                               test $0 = python:2-alpine3.7 ||
-                               test -e $HOME/docker/$1.tar.gz ||
+        | xargs -n 2 -t sh -c 'test $0 = cloud-connector-wheel:latest ||
+                               test $0 = swift-s3-sync:latest &&
                                docker save $0 | gzip -2 > $HOME/docker/$1.tar.gz' &&
         docker images -a --filter='dangling=true' --format '{{.ID}}'
         | xargs -n 1 -t sh -c 'rm $HOME/docker/$0.tar.gz' &&
         docker images -a --filter='dangling=false' --format '{{.Repository}}:{{.Tag}} {{.ID}}'
         | xargs -n 2 -t sh -c 'test $0 = bouncestorage/swift-aio:latest ||
-                               test $0 = python:2-alpine3.7 &&
+                               test $0 = python:2-alpine3.7 ||
+                               test $0 = stephenhsu/keystone:9.1.0 ||
+                               test $0 = cloud-connector:latest &&
                                test -e $HOME/docker/$1.tar.gz &&
                                rm $HOME/docker/$1.tar.gz'
 

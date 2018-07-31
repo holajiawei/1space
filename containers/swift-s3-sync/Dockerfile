@@ -11,7 +11,7 @@ RUN apt-get update && \
 
 COPY requirements.txt requirements-test.txt /tmp/
 RUN pip install -U -r /tmp/requirements.txt -r /tmp/requirements-test.txt && \
-    pip uninstall -y hacking
+    pip uninstall -y hacking && pip install keystonemiddleware
 
 RUN mkdir -p /s3proxy/data && \
     cd /s3proxy && wget https://github.com/andrewgaul/s3proxy/releases/download/s3proxy-1.5.3/s3proxy
