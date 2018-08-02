@@ -285,6 +285,38 @@ class TestMigrator(TestCloudSyncBase):
         self.assertEqual('dlo-meta', dlo_hdrs.get('x-object-meta-dlo'))
         self.assertTrue(content == dlo_body)
 
+    def test_swift_self_contained_dlo(self):
+        migration = self.swift_migration()
+        conn_noshunt = self.conn_for_acct_noshunt(migration['account'])
+        status = migrator_utils.TempMigratorStatus(migration)
+        migrator = migrator_utils.MigratorFactory().get_migrator(
+            migration, status)
+        migrator.work_chunk = 1
+
+        content = ''.join([chr(97 + i) * 2**20 for i in range(10)])
+
+        for i in range(10):
+            self.remote_swift('put_object', migration['aws_bucket'],
+                              'dlo/part-%d' % i, chr(97 + i) * 2**20,
+                              headers={'x-object-meta-part': i})
+        # Upload the manifest
+        self.remote_swift(
+            'put_object', migration['aws_bucket'], 'dlo', '',
+            headers={'x-object-manifest': migration['aws_bucket'] + '/dlo',
+                     'x-object-meta-dlo': 'dlo-meta'})
+
+        migrator.next_pass()
+
+        _, listing = conn_noshunt.get_container(migration['container'])
+        swift_names = [obj['name'] for obj in listing]
+        objects = ['dlo'] + ['dlo/part-%d' % part for part in range(10)]
+        self.assertEqual(objects, swift_names)
+
+        dlo_hdrs, dlo_body = self.local_swift(
+            'get_object', migration['container'], 'dlo')
+        self.assertEqual('dlo-meta', dlo_hdrs.get('x-object-meta-dlo'))
+        self.assertTrue(content == dlo_body)
+
     def test_migrate_new_container_location(self):
         migration = self._find_migration(
             lambda cont: cont['container'] == 'no-auto-migration-swift-reloc')
