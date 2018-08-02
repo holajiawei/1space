@@ -297,10 +297,25 @@ class TestCloudSyncBase(unittest.TestCase):
                                 mapping['aws_secret'])
                     acct_utf8 = url_user_key_to_acct.get(conn_key)
                 if not acct_utf8:
+                    connection_kwargs = {
+                        'authurl': mapping['aws_endpoint'],
+                        'user': mapping['aws_identity'],
+                        'key': mapping['aws_secret'],
+                        'retries': 0
+                    }
+
+                    if mapping.get('auth_type') == 'keystone_v3':
+                        connection_kwargs['os_options'] = {
+                            'project_name': mapping.get('project_name'),
+                            'user_domain_name': mapping.get(
+                                'user_domain_name'),
+                            'project_domain_name':
+                            mapping.get('project_domain_name')
+                        }
+                        connection_kwargs['auth_version'] = '3'
+
                     # Need to auth to get acct name, then add it to the cache
-                    conn = swiftclient.client.Connection(
-                        mapping['aws_endpoint'], mapping['aws_identity'],
-                        mapping['aws_secret'], retries=0)
+                    conn = swiftclient.client.Connection(**connection_kwargs)
                     url, _ = conn.get_auth()
                     acct_utf8 = urllib.unquote(url.rsplit('/')[-1])
                     url_user_key_to_acct[conn_key] = acct_utf8

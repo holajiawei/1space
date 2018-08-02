@@ -255,6 +255,21 @@ class TestCloudSync(TestCloudSyncBase):
             head_resp = wait_for_condition(5, _check_sync)
             self.assertEqual(etag, head_resp['etag'])
 
+    def test_keystone_sync(self):
+        mapping = self._find_mapping(
+            lambda m: m['aws_endpoint'].endswith('v3'))
+        conn = self.conn_for_acct(mapping['account'])
+        etag = conn.put_object(mapping['container'], 'sync-test', 'A' * 1024)
+        self.assertEqual(hashlib.md5('A' * 1024).hexdigest(), etag)
+
+        def _check_synced():
+            hdrs, listing = conn.get_container(mapping['container'])
+            if 'swift' not in listing[0].get('content_location', []):
+                return False
+            return True
+
+        wait_for_condition(5, _check_synced)
+
     def test_swift_archive(self):
         mapping = self.swift_archive_mapping()
         expected_location = swift_content_location(mapping)
