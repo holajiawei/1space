@@ -90,7 +90,7 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
     args.my_dir = os.path.realpath(os.path.dirname(__file__))
-    args.base_dir = os.path.realpath(os.path.join(args.my_dir, '..'))
+    args.base_dir = os.path.realpath(os.path.join(args.my_dir, '..', '..'))
 
     os.chdir(args.base_dir)
 
