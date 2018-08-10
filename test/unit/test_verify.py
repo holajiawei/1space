@@ -494,3 +494,45 @@ class TestMainTrackClientCalls(unittest.TestCase):
             mock.call.delete_object('some-bucket', 'cloud_sync_test_object',
                                     headers={}),
         ])
+
+    def test_swift_with_bucket_and_prefix(self, mock_get_client):
+        # custom_prefix doesn't do much (anything?) for Swift provider
+        mock_client = \
+            mock_get_client.return_value.__enter__.return_value
+        mock_client.head_object.side_effect = [
+            None,
+            {'x-object-meta-cloud-sync': 'fabcab'},
+            {'x-object-meta-cloud-sync': 'fabcab'},  # One extra for the DELETE
+        ]
+        mock_client.get_container.return_value = ({}, [])
+        mock_client.post_object.return_value = None
+        mock_client.delete_object.return_value = None
+        exit_arg = main([
+            '--protocol', 'swift',
+            '--endpoint', 'https://saio:8080/auth/v1.0',
+            '--username', 'access id',
+            '--password', 'secret key',
+            '--bucket', 'some-bucket',
+            '--prefix', 'floo/gloo/',
+        ])
+        self.assertEqual(exit_arg, 0)
+        self.assertEqual(mock_client.mock_calls, [
+            mock.call.head_object('some-bucket', 'cloud_sync_test_object',
+                                  headers={}),
+            mock.call.put_object(
+                'some-bucket', 'cloud_sync_test_object', mock.ANY,
+                content_length=15, etag=mock.ANY,
+                headers={'content-type': 'text/plain'}),
+            mock.call.post_object(
+                'some-bucket', 'cloud_sync_test_object', headers={
+                    'content-type': 'text/plain',
+                    'X-Object-Meta-Cloud-Sync': 'fabcab'}),
+            mock.call.head_object('some-bucket', 'cloud_sync_test_object',
+                                  headers={}),
+            mock.call.get_container('some-bucket', delimiter='', limit=1,
+                                    marker='', prefix='', headers={}),
+            mock.call.head_object('some-bucket', 'cloud_sync_test_object',
+                                  headers={}),
+            mock.call.delete_object('some-bucket', 'cloud_sync_test_object',
+                                    headers={}),
+        ])
