@@ -87,16 +87,43 @@ class TestMainTrackProvider(unittest.TestCase):
         self.assertEqual([mock.ANY], mock_validate.mock_calls)
         provider, swift_key, create_bucket = mock_validate.mock_calls[0][1]
         self.assertEqual({
-            k: v for k, v in provider.settings.items()
-            if k.startswith('aws_') or k in ('protocol',)
+            k: v for k, v in provider.settings.items() if k != 'container'
         }, {
             'protocol': 's3',
             'aws_endpoint': None,
             'aws_identity': 'access id',
             'aws_secret': 'secret key',
             'aws_bucket': 'some-bucket',
+            'account': 'verify-auth',
+            'custom_prefix': None,
+            'remote_account': None,
         })
         self.assertEqual(swift_key, 'fabcab/cloud_sync_test')
+        self.assertFalse(create_bucket)
+
+    def test_aws_with_prefix(self, mock_validate):
+        exit_arg = main([
+            '--protocol', 's3',
+            '--endpoint', 'https://s3.amazonaws.com',
+            '--username', 'access id',
+            '--password', 'secret key',
+            '--bucket', 'some-bucket',
+            '--prefix', 'jojo/hoho/',
+        ])
+        self.assertIs(exit_arg, mock_validate.return_value)
+        self.assertEqual([mock.ANY], mock_validate.mock_calls)
+        provider, swift_key, create_bucket = mock_validate.mock_calls[0][1]
+        self.assertEqual({
+            'protocol': 's3',
+            'aws_endpoint': None,
+            'aws_identity': 'access id',
+            'aws_secret': 'secret key',
+            'aws_bucket': 'some-bucket',
+            'account': 'verify-auth',
+            'custom_prefix': 'jojo/hoho/',
+            'remote_account': None,
+        }, {k: v for k, v in provider.settings.items() if k != 'container'})
+        self.assertEqual(swift_key, 'cloud_sync_test')
         self.assertFalse(create_bucket)
 
     def test_google_leaves_endpoint_alone(self, mock_validate):
@@ -267,6 +294,76 @@ class TestMainTrackClientCalls(unittest.TestCase):
                 Key=key),
         ])
 
+    def test_aws_with_bucket_and_prefix(self, mock_get_client):
+        mock_client = \
+            mock_get_client.return_value.__enter__.return_value
+        mock_client.head_object.side_effect = [
+            None,
+            {  # HEAD after PUT
+                'Body': [''],
+                'ResponseMetadata': {
+                    'HTTPStatusCode': 200,
+                    'HTTPHeaders': {
+                        'x-amz-meta-cloud-sync': 'fabcab',
+                    },
+                },
+            },
+        ]
+        mock_client.list_objects.return_value = {
+            'Contents': [],
+            'ResponseMetadata': {
+                'HTTPStatusCode': 200,
+                'HTTPHeaders': {
+                    'x-amz-meta-cloud-sync': 'fabcab',
+                },
+            },
+        }
+        mock_client.delete_object.return_value = {
+            'DeleteMarker': False,
+            'VersionId': '',
+        }
+        exit_arg = main([
+            '--protocol', 's3',
+            '--endpoint', 'https://s3.amazonaws.com',
+            '--username', 'access id',
+            '--password', 'secret key',
+            '--bucket', 'some-bucket',
+            '--prefix', 'heehee/hawhaw/',
+        ])
+        self.assertEqual(exit_arg, 0)
+        key = u'heehee/hawhaw/cloud_sync_test'
+        self.assert_calls(mock_client, [
+            mock.call.head_object(
+                Bucket='some-bucket',
+                Key=key),
+            mock.call.put_object(
+                Body=mock.ANY,
+                Bucket='some-bucket',
+                ContentLength=15,
+                ContentType='text/plain',
+                Key=key,
+                Metadata={},
+                ServerSideEncryption='AES256'),
+            mock.call.copy_object(
+                Bucket='some-bucket',
+                ContentType='text/plain',
+                CopySource={'Bucket': 'some-bucket', 'Key': key},
+                Key=key,
+                Metadata={'cloud-sync': 'fabcab'},
+                MetadataDirective='REPLACE',
+                ServerSideEncryption='AES256'),
+            mock.call.head_object(
+                Bucket='some-bucket',
+                Key=key),
+            mock.call.list_objects(
+                Bucket='some-bucket',
+                MaxKeys=1,
+                Prefix=u'heehee/hawhaw/'),
+            mock.call.delete_object(
+                Bucket='some-bucket',
+                Key=key),
+        ])
+
     def test_google_no_bucket(self, mock_get_client):
         exit_arg = main([
             '--protocol', 's3',
@@ -375,6 +472,48 @@ class TestMainTrackClientCalls(unittest.TestCase):
             '--username', 'access id',
             '--password', 'secret key',
             '--bucket', 'some-bucket',
+        ])
+        self.assertEqual(exit_arg, 0)
+        self.assertEqual(mock_client.mock_calls, [
+            mock.call.head_object('some-bucket', 'cloud_sync_test_object',
+                                  headers={}),
+            mock.call.put_object(
+                'some-bucket', 'cloud_sync_test_object', mock.ANY,
+                content_length=15, etag=mock.ANY,
+                headers={'content-type': 'text/plain'}),
+            mock.call.post_object(
+                'some-bucket', 'cloud_sync_test_object', headers={
+                    'content-type': 'text/plain',
+                    'X-Object-Meta-Cloud-Sync': 'fabcab'}),
+            mock.call.head_object('some-bucket', 'cloud_sync_test_object',
+                                  headers={}),
+            mock.call.get_container('some-bucket', delimiter='', limit=1,
+                                    marker='', prefix='', headers={}),
+            mock.call.head_object('some-bucket', 'cloud_sync_test_object',
+                                  headers={}),
+            mock.call.delete_object('some-bucket', 'cloud_sync_test_object',
+                                    headers={}),
+        ])
+
+    def test_swift_with_bucket_and_prefix(self, mock_get_client):
+        # custom_prefix doesn't do much (anything?) for Swift provider
+        mock_client = \
+            mock_get_client.return_value.__enter__.return_value
+        mock_client.head_object.side_effect = [
+            None,
+            {'x-object-meta-cloud-sync': 'fabcab'},
+            {'x-object-meta-cloud-sync': 'fabcab'},  # One extra for the DELETE
+        ]
+        mock_client.get_container.return_value = ({}, [])
+        mock_client.post_object.return_value = None
+        mock_client.delete_object.return_value = None
+        exit_arg = main([
+            '--protocol', 'swift',
+            '--endpoint', 'https://saio:8080/auth/v1.0',
+            '--username', 'access id',
+            '--password', 'secret key',
+            '--bucket', 'some-bucket',
+            '--prefix', 'floo/gloo/',
         ])
         self.assertEqual(exit_arg, 0)
         self.assertEqual(mock_client.mock_calls, [
