@@ -907,6 +907,10 @@ class Migrator(object):
             return
 
         if 'x-object-manifest' in resp.headers:
+            if (aws_bucket, container, key) in self._manifests:
+                # This means the DLO has already been handled
+                return
+
             self.logger.warning(
                 'Migrating Dynamic Large Object "%s/%s" -- '
                 'results may not be consistent' % (container, key))
@@ -926,12 +930,12 @@ class Migrator(object):
         put_headers = convert_to_local_headers(
             resp.headers.items(), remove_timestamp=False)
         dlo_container, prefix = put_headers['x-object-manifest'].split('/', 1)
-        self.container_queue.put((dlo_container, prefix))
-        if dlo_container != container or not key.startswith(prefix):
+        if (aws_bucket, container, key) not in self._manifests:
             # The DLO prefix can include the manifest object, which doesn't
             # have to be 0-sized. We have to be careful not to end up recursing
             # infinitely in that case.
             self._manifests.add((aws_bucket, container, key))
+            self.container_queue.put((dlo_container, prefix))
         resp.body.close()
 
     def _migrate_slo(self, aws_bucket, slo_container, key, resp):

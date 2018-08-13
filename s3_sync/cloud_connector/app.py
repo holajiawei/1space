@@ -257,7 +257,7 @@ class CloudConnectorController(Controller):
 
     @utils.public
     def HEAD(self, req):
-        # Note: account and container HEADs were already filtered out in
+        # Note: account HEADs were already filtered out in
         # get_controller()
         if not self.object_name:
             # Try local-to-me first, then fall back to remote-to-me on any

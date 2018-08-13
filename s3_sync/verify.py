@@ -91,6 +91,7 @@ def main(args=None):
     parser.add_argument('--password', required=True)
     parser.add_argument('--account')
     parser.add_argument('--bucket')
+    parser.add_argument('--prefix')
     args = parser.parse_args(args)
     # We normalize the conf to Unicode strings since that's how they come out
     # of the JSON file.
@@ -105,6 +106,8 @@ def main(args=None):
         args.account.decode('utf8') if args.account else args.account,
         'aws_bucket': args.bucket.decode('utf8') if args.bucket
         else args.bucket,
+        'custom_prefix': args.prefix.decode('utf8') if args.prefix else
+        args.prefix,
     }
     if args.account and args.protocol != 'swift':
         return 'Invalid argument: account is only valid with swift protocol'
@@ -126,7 +129,10 @@ def main(args=None):
                     client.get_account()
         else:
             if args.protocol == 's3':
-                swift_key = 'fabcab/cloud_sync_test'
+                if args.prefix:
+                    swift_key = 'cloud_sync_test'
+                else:
+                    swift_key = 'fabcab/cloud_sync_test'
             else:
                 swift_key = 'cloud_sync_test_object'
             result = validate_bucket(

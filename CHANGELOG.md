@@ -1,3 +1,10 @@
+## 0.1.42 (2018-08-03)
+
+Bug fixes:
+
+    - Fixed an issue where a DLO that has a manifest that refers to the DLO
+      itself would result in an infinite loop.
+
 ## 0.1.41 (2018-07-24)
 
 Features:
