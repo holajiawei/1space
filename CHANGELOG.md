@@ -1,3 +1,15 @@
+## 0.1.43 (2018-08-14)
+
+Features:
+
+    - Allow keystone credentials to be used (NOTE: does not work with storage
+      URLs which do not use the same account - i.e. specifying remote_account)
+    - Add --prefix to verify
+
+Bug fixes:
+
+    - Fixed build_docker_image.py for cloud-connector.
+
 ## 0.1.42 (2018-08-03)
 
 Bug fixes:
