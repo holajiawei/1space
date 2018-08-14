@@ -84,6 +84,9 @@ def validate_bucket(provider, swift_key, create_bucket):
 
 
 def main(args=None):
+    keystone_v3_args = ['--project-name', '--project-domain-name',
+                        '--user-domain-name']
+
     parser = argparse.ArgumentParser()
     parser.add_argument('--protocol', required=True, choices=('s3', 'swift'))
     parser.add_argument('--endpoint', required=True)
@@ -92,6 +95,13 @@ def main(args=None):
     parser.add_argument('--account')
     parser.add_argument('--bucket')
     parser.add_argument('--prefix')
+    parser.add_argument('--auth-type', choices=('keystone_v2', 'keystone_v3'))
+    # Required arg, if --auth-type=keystone_v2 provided:
+    parser.add_argument('--tenant-name')
+    # Required args if --auth-type=keystone_v3 provided:
+    for v3_arg in keystone_v3_args:
+        parser.add_argument(v3_arg)
+
     args = parser.parse_args(args)
     # We normalize the conf to Unicode strings since that's how they come out
     # of the JSON file.
@@ -115,6 +125,29 @@ def main(args=None):
         conf['aws_bucket'] = u'.cloudsync_test_container-\U0001f44d'
     if urlparse.urlparse(args.endpoint).hostname.endswith('.amazonaws.com'):
         conf['aws_endpoint'] = None  # let Boto sort it out
+
+    if args.auth_type in ('keystone_v2', 'keystone_v3'):
+        if args.protocol != 'swift':
+            return 'Keystone auth requires swift protocol.'
+    if args.auth_type == 'keystone_v2':
+        if not args.tenant_name:
+            return 'argument --tenant-name is required when ' \
+                '--auth-type=keystone_v2'
+        conf['auth_type'] = 'keystone_v2'
+        conf['tenant_name'] = args.tenant_name.decode('utf8')
+    elif args.auth_type == 'keystone_v3':
+        err_strs = []
+        for v3_arg in keystone_v3_args:
+            attr = v3_arg[2:].replace('-', '_')
+            if not getattr(args, attr):
+                err_strs.append('argument %s is required when '
+                                '--auth-type=keystone_v3\n' % v3_arg)
+        if err_strs:
+            return '\n'.join(err_strs)
+        conf['auth_type'] = 'keystone_v3'
+        for v3_arg in keystone_v3_args:
+            attr = v3_arg[2:].replace('-', '_')
+            conf[attr] = getattr(args, attr).decode('utf8')
 
     if conf['aws_bucket'] and '/' in conf['aws_bucket']:
         return 'Invalid argument: slash is not allowed in container name'

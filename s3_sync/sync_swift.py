@@ -60,10 +60,38 @@ class SyncSwift(BaseSync):
             os_options = {
                 'object_storage_url': '%s:%s%s' % (scheme, host, path)}
 
+        # **connection_args is common arguments; authurl, user, and key
+        connection_kwargs = {'authurl': endpoint,
+                             'user': username,
+                             'key': key,
+                             'retries': 3,
+                             'os_options': os_options}
+        # default: swift, options: keystone_v2, and keystone_v3
+        _authtype = self.settings.get('auth_type', 'swift')
+        if _authtype == 'keystone_v2':
+            if 'tenant_name' not in self.settings:
+                raise ValueError(
+                    'Missing tenant_name for keystone v2')
+            connection_kwargs['tenant_name'] =\
+                self.settings['tenant_name']
+            connection_kwargs['auth_version'] = '2'
+        elif _authtype == 'keystone_v3':
+            _os_auth_fields = ['project_name',
+                               'project_domain_name',
+                               'user_domain_name']
+            missing_fields = [field for field in _os_auth_fields
+                              if field not in self.settings]
+            if missing_fields:
+                raise ValueError(
+                    'Missing %s for keystone v3' %
+                    ', '.join(missing_fields))
+            connection_kwargs['os_options'] = dict(
+                [(field, self.settings[field]) for field in _os_auth_fields])
+            connection_kwargs['auth_version'] = '3'
+
         def swift_client_factory():
-            return swiftclient.client.Connection(
-                authurl=endpoint, user=username, key=key, retries=3,
-                os_options=os_options)
+            return swiftclient.client.Connection(**connection_kwargs)
+
         return swift_client_factory
 
     @staticmethod

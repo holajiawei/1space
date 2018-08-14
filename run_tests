@@ -10,12 +10,22 @@ cd "$MYDIR"
 ./run_unit_tests
 unit_test_status=$?
 ./scripts/ensure_cloud_connector_container_started
+./scripts/ensure_keystone_started
 
 echo Waiting for container services to start...
 docker exec swift-s3-sync timeout 40 \
     bash -c "until s3cmd -c /swift-s3-sync/s3cfg ls s3://\$CONF_BUCKET/s3-passwd.json; do sleep 0.5; done" >/dev/null 2>&1
 docker exec cloud-connector timeout 40 \
     bash -c 'until echo > /dev/tcp/localhost/8081; do sleep 0.5; done' >/dev/null 2>&1
+docker exec 1space-keystone timeout 40 \
+    bash -c 'source openrc; until openstack endpoint list|grep swift; do sleep 0.5; done' >/dev/null 2>&1
+
+# make sure we can actually authenticate using keystone
+docker exec swift-s3-sync timeout 40 \
+    bash -c 'until swift --os-auth-url http://1space-keystone:5000/v3 \
+             --os-username tester --os-password testing --os-project-name test \
+             --os-project-domain-name default --os-user-domain-name default \
+             --auth-version 3 --debug stat; do sleep 0.5; done' >/dev/null 2>&1
 
 docker exec -e DOCKER=true  swift-s3-sync nosetests /swift-s3-sync/test/integration/
 exit $(($unit_test_status + $?))

@@ -16,6 +16,7 @@ limitations under the License.
 
 from io import BytesIO
 import mock
+import sys
 import unittest
 
 from s3_sync.verify import main
@@ -46,13 +47,23 @@ class TestMainTrackProvider(unittest.TestCase):
         ]))
         self.assertEqual(mock_validate.mock_calls, [])
 
+    def _stderr_of_sysexit(self, args):
+        with self.assertRaises(SystemExit), \
+                mock.patch('sys.stderr', new_callable=BytesIO) as err:
+            got = main(args)
+            # This little adapter lets us also test error conditions where
+            # the message is returned, for the surrounding "exit(...)" to
+            # turn into a SystemExit.
+            if got:
+                print >>sys.stderr, got
+                raise SystemExit()
+        return err.getvalue()
+
     def test_missing_args(self, mock_validate):
         def do_test(args, missing_arg):
-            with self.assertRaises(SystemExit), \
-                    mock.patch('sys.stderr', new_callable=BytesIO) as err:
-                main(args)
+            stderr_stuff = self._stderr_of_sysexit(args)
             self.assertIn('argument %s is required' % missing_arg,
-                          err.getvalue())
+                          stderr_stuff)
 
         do_test([
             '--endpoint', 'https://s3.amazonaws.com',
@@ -74,6 +85,75 @@ class TestMainTrackProvider(unittest.TestCase):
             '--endpoint', 'https://s3.amazonaws.com',
             '--username', 'access id',
         ], '--password')
+        do_test([
+            '--protocol', 'swift',
+            '--endpoint', 'http://1space-keystone:5000/v3',
+            '--username', 'access id',
+            '--password', 'secret key',
+            "--auth-type", "keystone_v2",
+        ], "--tenant-name")
+        do_test([
+            '--protocol', 'swift',
+            '--endpoint', 'http://1space-keystone:5000/v3',
+            '--username', 'access id',
+            '--password', 'secret key',
+            "--auth-type", "keystone_v3",
+            "--project-name", "test",
+            "--user-domain-name", "default",
+        ], "--project-domain-name")
+        do_test([
+            '--protocol', 'swift',
+            '--endpoint', 'http://1space-keystone:5000/v3',
+            '--username', 'access id',
+            '--password', 'secret key',
+            "--auth-type", "keystone_v3",
+            "--project-name", "test",
+            "--project-domain-name", "default",
+        ], "--user-domain-name")
+        do_test([
+            '--protocol', 'swift',
+            '--endpoint', 'http://1space-keystone:5000/v3',
+            '--username', 'access id',
+            '--password', 'secret key',
+            "--auth-type", "keystone_v3",
+            "--user-domain-name", "default",
+            "--project-domain-name", "default",
+        ], "--project-name")
+
+    def test_keystone_requires_swift_proto(self, mock_validate):
+        exit_arg = main([
+            '--protocol', 's3',
+            '--endpoint', 'https://s3.amazonaws.com',
+            '--username', 'access id',
+            '--password', 'secret key',
+            "--auth-type", "keystone_v3",
+            "--project-name", "test",
+            "--user-domain-name", "default",
+            "--project-domain-name", "default",
+        ])
+        self.assertIn('Keystone auth requires swift protocol',
+                      exit_arg)
+        exit_arg = main([
+            '--protocol', 's3',
+            '--endpoint', 'https://s3.amazonaws.com',
+            '--username', 'access id',
+            '--password', 'secret key',
+            "--auth-type", "keystone_v2",
+            "--tenant-name", "test",
+        ])
+        self.assertIn('Keystone auth requires swift protocol',
+                      exit_arg)
+
+    def test_auth_type_choices(self, mock_validate):
+        got = self._stderr_of_sysexit([
+            '--protocol', 'swift',
+            '--endpoint', 'http://1space-keystone:5000/v3',
+            '--username', 'access id',
+            '--password', 'secret key',
+            "--auth-type", "flimflam",
+        ])
+        self.assertIn('invalid choice: ', got)
+        self.assertIn("choose from 'keystone_v2', 'keystone_v3'", got)
 
     def test_aws_adjusts_endpoint(self, mock_validate):
         exit_arg = main([
@@ -195,6 +275,68 @@ class TestMainTrackProvider(unittest.TestCase):
             'aws_secret': 'secret key',
             'aws_bucket': u'.cloudsync_test_container-\U0001f44d',
         })
+        self.assertEqual(swift_key, 'cloud_sync_test_object')
+        self.assertTrue(create_bucket)
+
+    def test_swift_keystone_v2(self, mock_validate):
+        exit_arg = main([
+            '--protocol', 'swift',
+            '--endpoint', 'http://1space-keystone:5000/v3',
+            '--username', 'access id',
+            '--password', 'secret key',
+            "--auth-type", "keystone_v2",
+            "--tenant-name", "flipper-flapp",
+            '--bucket', '/*',
+        ])
+        self.assertIs(exit_arg, mock_validate.return_value)
+        self.assertEqual([mock.ANY], mock_validate.mock_calls)
+        provider, swift_key, create_bucket = mock_validate.mock_calls[0][1]
+        self.assertEqual({
+            'protocol': 'swift',
+            'aws_endpoint': 'http://1space-keystone:5000/v3',
+            'aws_identity': 'access id',
+            'aws_secret': 'secret key',
+            'aws_bucket': u'.cloudsync_test_container-\U0001f44d',
+            'account': 'verify-auth',
+            'container': u'testing-\U0001f44d',
+            'custom_prefix': None,
+            'remote_account': None,
+            'auth_type': 'keystone_v2',
+            'tenant_name': 'flipper-flapp',
+        }, provider.settings)
+        self.assertEqual(swift_key, 'cloud_sync_test_object')
+        self.assertTrue(create_bucket)
+
+    def test_swift_keystone_v3(self, mock_validate):
+        exit_arg = main([
+            '--protocol', 'swift',
+            '--endpoint', 'http://1space-keystone:5000/v3',
+            '--username', 'access id',
+            '--password', 'secret key',
+            "--auth-type", "keystone_v3",
+            "--project-name", "test",
+            "--project-domain-name", "wat-wat",
+            "--user-domain-name", 'floo-boo',
+            '--bucket', '/*',
+        ])
+        self.assertIs(exit_arg, mock_validate.return_value)
+        self.assertEqual([mock.ANY], mock_validate.mock_calls)
+        provider, swift_key, create_bucket = mock_validate.mock_calls[0][1]
+        self.assertEqual({
+            'protocol': 'swift',
+            'aws_endpoint': 'http://1space-keystone:5000/v3',
+            'aws_identity': 'access id',
+            'aws_secret': 'secret key',
+            'aws_bucket': u'.cloudsync_test_container-\U0001f44d',
+            'account': 'verify-auth',
+            'container': u'testing-\U0001f44d',
+            'custom_prefix': None,
+            'remote_account': None,
+            'auth_type': 'keystone_v3',
+            'user_domain_name': 'floo-boo',
+            'project_name': 'test',
+            'project_domain_name': 'wat-wat',
+        }, provider.settings)
         self.assertEqual(swift_key, 'cloud_sync_test_object')
         self.assertTrue(create_bucket)
 
