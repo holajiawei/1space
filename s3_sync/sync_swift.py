@@ -45,27 +45,18 @@ class SyncSwift(BaseSync):
 
     def _get_client_factory(self):
         # TODO: support LDAP auth
-        # TODO: support v2 auth
         username = self.settings['aws_identity']
         key = self.settings['aws_secret']
         # Endpoint must be defined for the Swift clusters and should be the
         # auth URL
         endpoint = self.settings['aws_endpoint']
-        os_options = {}
-        if self.settings.get('remote_account'):
-            scheme, rest = endpoint.split(':', 1)
-            host = urllib.splithost(rest)[0]
-            path = '/v1/%s' % urllib.quote(
-                self.settings['remote_account'].encode('utf8'))
-            os_options = {
-                'object_storage_url': '%s:%s%s' % (scheme, host, path)}
 
         # **connection_args is common arguments; authurl, user, and key
         connection_kwargs = {'authurl': endpoint,
                              'user': username,
                              'key': key,
                              'retries': 3,
-                             'os_options': os_options}
+                             'os_options': {}}
         # default: swift, options: keystone_v2, and keystone_v3
         _authtype = self.settings.get('auth_type', 'swift')
         if _authtype == 'keystone_v2':
@@ -90,7 +81,22 @@ class SyncSwift(BaseSync):
             connection_kwargs['auth_version'] = '3'
 
         def swift_client_factory():
-            return swiftclient.client.Connection(**connection_kwargs)
+            _conn = swiftclient.client.Connection(**connection_kwargs)
+            if self.settings.get('remote_account'):
+                # We need to rewrite the account portion of the connection's
+                # storage URL (NOTE: this wouldn't't survive a
+                # token-expiration-triggered re-auth if we didn't also jam the
+                # resulting storage-url in
+                # _conn.os_options['object_storage_url'])
+                _conn.get_auth()
+                scheme, rest = _conn.url.split(':', 1)
+                host = urllib.splithost(rest)[0]
+                path = '/v1/%s' % urllib.quote(
+                    self.settings['remote_account'].encode('utf8'))
+                storage_url = '%s:%s%s' % (scheme, host, path)
+                _conn.url = storage_url
+                _conn.os_options['object_storage_url'] = storage_url
+            return _conn
 
         return swift_client_factory
 

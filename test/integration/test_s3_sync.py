@@ -255,20 +255,83 @@ class TestCloudSync(TestCloudSyncBase):
             head_resp = wait_for_condition(5, _check_sync)
             self.assertEqual(etag, head_resp['etag'])
 
-    def test_keystone_sync(self):
+    def test_keystone_sync_v3(self):
         mapping = self._find_mapping(
             lambda m: m['aws_endpoint'].endswith('v3'))
-        conn = self.conn_for_acct(mapping['account'])
-        etag = conn.put_object(mapping['container'], 'sync-test', 'A' * 1024)
-        self.assertEqual(hashlib.md5('A' * 1024).hexdigest(), etag)
+        local_conn = self.conn_for_acct(mapping['account'])
+        obj_name = 'sync-test-keystone-v3'
+        body = 'party-hardy' * 512
+        etag = local_conn.put_object(mapping['container'], obj_name, body)
+        self.assertEqual(hashlib.md5(body).hexdigest(), etag)
+
+        self.assertIn('KEY_', mapping['aws_account'])
+        remote_conn = self.conn_for_acct_noshunt(mapping['aws_account'])
+        self.assertIn('KEY_', remote_conn.url)
 
         def _check_synced():
-            hdrs, listing = conn.get_container(mapping['container'])
+            hdrs, listing = local_conn.get_container(mapping['container'])
             if 'swift' not in listing[0].get('content_location', []):
                 return False
+            got_headers, got_body = remote_conn.get_object(
+                mapping['container'], obj_name)
+            self.assertEqual(body, got_body)
             return True
 
         wait_for_condition(5, _check_synced)
+
+    def test_keystone_sync_v2(self):
+        mapping = self._find_mapping(
+            lambda m: m['aws_bucket'] == 'keystone2')
+        local_conn = self.conn_for_acct(mapping['account'])
+        obj_name = 'sync-test-keystone-v2'
+        body = 'party-animl' * 512
+        etag = local_conn.put_object(mapping['container'], obj_name, body)
+        self.assertEqual(hashlib.md5(body).hexdigest(), etag)
+
+        self.assertIn('KEY_', mapping['aws_account'])
+        remote_conn = self.conn_for_acct_noshunt(mapping['aws_account'])
+        self.assertIn('KEY_', remote_conn.url)
+
+        def _check_synced():
+            hdrs, listing = local_conn.get_container(mapping['container'])
+            if 'swift' not in listing[0].get('content_location', []):
+                return False
+            got_headers, got_body = remote_conn.get_object(
+                mapping['container'], obj_name)
+            self.assertEqual(body, got_body)
+            return True
+
+        wait_for_condition(5, _check_synced)
+
+    def test_keystone_cross_account_v2(self):
+        mapping = self._find_mapping(
+            lambda m: m['aws_bucket'] == 'keystone2a')
+        local_conn = self.conn_for_acct(mapping['account'])
+        obj_name = 'sync-test-keystone-v2-cross-acct'
+        body = 'party-animl' * 512
+        etag = local_conn.put_object(mapping['container'], obj_name, body)
+        self.assertEqual(hashlib.md5(body).hexdigest(), etag)
+
+        remote_conn = self.conn_for_acct_noshunt(mapping['remote_account'])
+
+        def _check_synced():
+            try:
+                got_headers, got_body = remote_conn.get_object(
+                    mapping['container'], obj_name)
+                self.assertEqual(body, got_body)
+                return True
+            except Exception:
+                return False
+
+        wait_for_condition(5, _check_synced)
+
+        # Make sure it actually got lifecycled
+        hdrs, listing = local_conn.get_container(mapping['container'])
+        list_item = [i for i in listing if i['name'] == obj_name][0]
+        self.assertEqual([';'.join((mapping['aws_endpoint'],
+                                    mapping['aws_identity'],
+                                    mapping['aws_bucket']))],
+                         list_item['content_location'])
 
     def test_swift_archive(self):
         mapping = self.swift_archive_mapping()

@@ -35,6 +35,13 @@ RUN bash -c "cd /usr/local/src \
     && patch -p0 < /tmp/swift3-unicode-fix.patch \
     && rm -f /tmp/swift3-unicode-fix.patch"
 
+# This patch allows tempauth to use Keystone-provided identities ("groups") for
+# authz decisions.
+COPY containers/swift-s3-sync/tempauth-keystone-groups.patch /tmp/
+RUN bash -c "cd /usr/local/src \
+    && patch -p0 < /tmp/tempauth-keystone-groups.patch \
+    && rm -f /tmp/tempauth-keystone-groups.patch"
+
 ENV CONF_BUCKET=cloud-connector-conf
 
 CMD ["/bin/bash", "/swift-s3-sync/containers/swift-s3-sync/launch.sh"]

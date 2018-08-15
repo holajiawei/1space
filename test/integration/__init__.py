@@ -21,8 +21,10 @@ import hashlib
 import json
 import os
 import psutil
+from s3_sync.utils import ACCOUNT_ACL_KEY
 import signal
 import subprocess
+from swift.common.middleware.acl import format_acl
 import swiftclient
 import time
 import unittest
@@ -133,7 +135,7 @@ def swift_content_location(mapping):
 def get_container_ports(image_name):
     if 'DOCKER' in os.environ:
         return dict(swift=8080, s3=10080, cloud_connector=8081,
-                    noshunt=8082)
+                    noshunt=8082, keystone=5000)
     if 'TEST_CONTAINER' in os.environ:
         container = os.environ['TEST_CONTAINER']
     else:
@@ -162,6 +164,8 @@ def get_container_ports(image_name):
                 ports['cloud_connector'] = host_port
             elif docker_port == 8082:
                 ports['noshunt'] = host_port
+            elif docker_port == 5000:
+                ports['keystone'] = host_port
     except subprocess.CalledProcessError as e:
         print e.output
         print e.retcode
@@ -292,9 +296,22 @@ class TestCloudSyncBase(unittest.TestCase):
                 if mapping.get('remote_account'):
                     acct_utf8 = mapping['remote_account'].encode('utf8')
                 else:
-                    conn_key = (mapping['aws_endpoint'],
-                                mapping['aws_identity'],
-                                mapping['aws_secret'])
+                    if mapping.get('auth_type') == 'keystone_v2':
+                        conn_key = (mapping['aws_endpoint'],
+                                    mapping['aws_identity'],
+                                    mapping['aws_secret'],
+                                    mapping['tenant_name'])
+                    elif mapping.get('auth_type') == 'keystone_v3':
+                        conn_key = (mapping['aws_endpoint'],
+                                    mapping['aws_identity'],
+                                    mapping['aws_secret'],
+                                    mapping['project_name'],
+                                    mapping['user_domain_name'],
+                                    mapping['project_domain_name'])
+                    else:
+                        conn_key = (mapping['aws_endpoint'],
+                                    mapping['aws_identity'],
+                                    mapping['aws_secret'])
                     acct_utf8 = url_user_key_to_acct.get(conn_key)
                 if not acct_utf8:
                     connection_kwargs = {
@@ -304,7 +321,12 @@ class TestCloudSyncBase(unittest.TestCase):
                         'retries': 0
                     }
 
-                    if mapping.get('auth_type') == 'keystone_v3':
+                    if mapping.get('auth_type') == 'keystone_v2':
+                        connection_kwargs['os_options'] = {
+                            'tenant_name': mapping.get('tenant_name'),
+                        }
+                        connection_kwargs['auth_version'] = '2'
+                    elif mapping.get('auth_type') == 'keystone_v3':
                         connection_kwargs['os_options'] = {
                             'project_name': mapping.get('project_name'),
                             'user_domain_name': mapping.get(
@@ -323,9 +345,6 @@ class TestCloudSyncBase(unittest.TestCase):
                 # As a convenience for ourselves, we'll stick the resolved
                 # remote Swift account name in the mapping as "aws_account"
                 # (stored as Unicode string for consistency)
-                # TODO(darrell): maybe use `remote_account` since the
-                # SwiftSync() class can eat that already, so there's precedent
-                # for the storage key name.
                 mapping['aws_account'] = acct_utf8.decode('utf8')
 
             # Now maybe auto-create some containers
@@ -349,8 +368,9 @@ class TestCloudSyncBase(unittest.TestCase):
                     # name for a swift destination that has a source container
                     # of /*.  So don't create a container of that name.
                     if mapping.get('container') != '/*':
-                        conn = klass.conn_for_acct_noshunt(
-                            mapping['aws_account'])
+                        acct = mapping.get('remote_bucket',
+                                           mapping['aws_account'])
+                        conn = klass.conn_for_acct_noshunt(acct)
                         conn.put_container(mapping['aws_bucket'])
                 else:
                     try:
@@ -383,6 +403,16 @@ class TestCloudSyncBase(unittest.TestCase):
             klass.SWIFT_CREDS['cloud-connector']['user'],
             klass.SWIFT_CREDS['cloud-connector']['key'],
             retries=0)
+
+        # A test is going to need this Keystone user (tenant? whatever) able to
+        # read/write this tempauth account.
+        keystone_uuid = url_user_key_to_acct[(
+            "http://1space-keystone:5000/v2.0",
+            "tester", "testing", "test")].replace('KEY_', '')
+        acl_dict = {'read-write': [keystone_uuid]}
+        acl = format_acl(version=2, acl_dict=acl_dict)
+        conn = klass.conn_for_acct(u"AUTH_\u062aacct2")
+        resp_headers, body = conn.post_account({ACCOUNT_ACL_KEY: acl})
 
     @classmethod
     def tearDownClass(klass):

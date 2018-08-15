@@ -1,0 +1,15 @@
+diff -ru swift.orig/swift/common/middleware/tempauth.py swift/swift/common/middleware/tempauth.py
+--- swift.orig/swift/common/middleware/tempauth.py	2018-08-13 23:33:28.000000000 +0000
++++ swift/swift/common/middleware/tempauth.py	2018-08-15 18:50:05.159165000 +0000
+@@ -547,7 +547,10 @@
+                 headers = [('Content-Type', 'text/plain; charset=UTF-8')]
+                 return HTTPBadRequest(request=req, headers=headers, body=msg)
+ 
+-        user_groups = (req.remote_user or '').split(',')
++        if isinstance(req.remote_user, (list, tuple)):
++            user_groups = [g.encode('utf8') for g in req.remote_user]
++        else:
++            user_groups = (req.remote_user or '').split(',')
+         account_user = user_groups[1] if len(user_groups) > 1 else None
+ 
+         if '.reseller_admin' in user_groups and \
