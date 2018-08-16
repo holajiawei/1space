@@ -84,7 +84,7 @@ class SyncSwift(BaseSync):
             _conn = swiftclient.client.Connection(**connection_kwargs)
             if self.settings.get('remote_account'):
                 # We need to rewrite the account portion of the connection's
-                # storage URL (NOTE: this wouldn't't survive a
+                # storage URL (NOTE: this wouldn't survive a
                 # token-expiration-triggered re-auth if we didn't also jam the
                 # resulting storage-url in
                 # _conn.os_options['object_storage_url'])

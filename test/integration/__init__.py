@@ -412,7 +412,7 @@ class TestCloudSyncBase(unittest.TestCase):
         acl_dict = {'read-write': [keystone_uuid]}
         acl = format_acl(version=2, acl_dict=acl_dict)
         conn = klass.conn_for_acct(u"AUTH_\u062aacct2")
-        resp_headers, body = conn.post_account({ACCOUNT_ACL_KEY: acl})
+        conn.post_account({ACCOUNT_ACL_KEY: acl})
 
     @classmethod
     def tearDownClass(klass):
