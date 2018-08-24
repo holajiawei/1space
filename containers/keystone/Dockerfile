@@ -3,6 +3,5 @@
 
 FROM stephenhsu/keystone:9.1.0
 
-# configure a basic Swift user
 COPY ./containers/keystone/setup_keystone.sh /
 CMD /setup_keystone.sh
