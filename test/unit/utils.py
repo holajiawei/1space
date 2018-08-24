@@ -26,10 +26,12 @@ class FakeStream(object):
         self.current_pos = 0
         self.closed = False
         self.chunk_size = self.size / 10 or 1
+        self.raised_stop_iter = False
 
     def next(self):
         want = min(self.size - self.current_pos, self.chunk_size)
         if want <= 0:
+            self.raised_stop_iter = True
             raise StopIteration()
         if self.content:
             ret = self.content[self.current_pos:self.current_pos + want]

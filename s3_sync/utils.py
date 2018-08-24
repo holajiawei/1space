@@ -315,11 +315,14 @@ class FileWrapper(SeekableFileLikeIter):
 
         return iter(self._swift_stream)
 
-    def next(self, *args, **kwargs):
-        the_data = super(FileWrapper, self).next(*args, **kwargs)
+    def next(self, called_from_read=False):
+        the_data = super(FileWrapper, self).next(called_from_read)
+        _bytes_read = self.tell()
+        if called_from_read:
+            _bytes_read += len(the_data)
         # TODO: we do not need to read an extra byte after
         # https://review.openstack.org/#/c/363199/ is released
-        if self.length is not None and self.tell() == self.__len__():
+        if self.length is not None and _bytes_read == len(self):
             try:
                 next(self.iterator)
             except StopIteration:

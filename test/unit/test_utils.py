@@ -546,6 +546,20 @@ class TestFileWrapper(unittest.TestCase):
                          'Exp %d bytes, got %d' % (1024, len(got_all)))
         self.assertEqual(1024, wrapper.tell())
 
+    def test_reads_extra_byte(self):
+        content = 'deadbeef' * 12
+        self.mock_swift = FakeSwift(
+            content_length=len(content),
+            content=content)
+        wrapper = utils.FileWrapper(
+            self.mock_swift, 'account', 'container', 'key')
+        self.assertEqual(len(content), len(wrapper))
+        recvd_content = ''
+        while len(recvd_content) < len(content):
+            recvd_content += wrapper.read(len(content) - len(recvd_content))
+        self.assertTrue(wrapper._swift_stream.raised_stop_iter)
+        self.assertEqual(content, recvd_content)
+
 
 class TestSLOFileWrapper(unittest.TestCase):
     def setUp(self):
