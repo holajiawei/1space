@@ -28,6 +28,14 @@ from .base_sync import BaseSync, ProviderResponse, match_item
 from .utils import (FileWrapper, ClosingResourceIterable, check_slo,
                     SWIFT_USER_META_PREFIX, SWIFT_TIME_FMT)
 
+# We have to import keystone upfront to avoid green threads issue with the lazy
+# importer
+try:
+    from keystoneclient.v2_0 import client as _ks_v2_client  # NOQA
+    from keystoneclient.v3 import client as _ks_v3_client  # NOQA
+except ImportError:
+    pass
+
 
 class SyncSwift(BaseSync):
     def __init__(self, *args, **kwargs):
