@@ -1,3 +1,11 @@
+## 0.1.45 (????-??-??)
+
+Features:
+
+    - Support for `remote_delete_after` configuration option for swift
+      endpoints only. THIS SHOULD BE USED WITH EXTREME CAUTION AS IT CAN RESULT
+      IN DATA LOSS.
+
 ## 0.1.44 (2018-08-27)
 
 Features:

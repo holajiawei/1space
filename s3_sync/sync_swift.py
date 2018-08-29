@@ -43,6 +43,7 @@ class SyncSwift(BaseSync):
         super(SyncSwift, self).__init__(*args, **kwargs)
         # Used to verify the remote container in case of per_account uploads
         self.verified_container = False
+        self.remote_delete_after = self.settings.get('remote_delete_after', 0)
 
     @property
     def remote_container(self):
@@ -201,6 +202,8 @@ class SyncSwift(BaseSync):
                                          swift_key,
                                          swift_req_hdrs)
             headers = self._get_user_headers(wrapper_stream.get_headers())
+            if self.remote_delete_after:
+                headers.update({'x-delete-after': self.remote_delete_after})
             self.logger.debug('Uploading %s with meta: %r' % (
                 swift_key, headers))
 
@@ -462,11 +465,14 @@ class SyncSwift(BaseSync):
                                      size_bytes=segment['bytes']))
 
         self.logger.debug(json.dumps(new_manifest))
+        manifest_hdrs = self._client_headers(self._get_user_headers(headers))
+        if self.remote_delete_after:
+            manifest_hdrs.update({'x-delete-after': self.remote_delete_after})
         # Upload the manifest itself
         with self.client_pool.get_client() as swift_client:
             swift_client.put_object(
                 self.remote_container, name, json.dumps(new_manifest),
-                headers=self._client_headers(self._get_user_headers(headers)),
+                headers=manifest_hdrs,
                 query_string='multipart-manifest=put')
 
     def get_manifest(self, key, bucket=None):
@@ -519,12 +525,16 @@ class SyncSwift(BaseSync):
                                   obj, req_headers)
             self.logger.debug('Uploading segment %s: %s bytes' % (
                 self.account + segment['name'], segment['bytes']))
+            seg_headers = self._client_headers()
+            if self.remote_delete_after:
+                seg_headers.update(
+                    {'x-delete-after': self.remote_delete_after})
             try:
                 swift_client.put_object(self.remote_segments_container,
                                         obj, wrapper,
                                         etag=segment['hash'],
                                         content_length=len(wrapper),
-                                        headers=self._client_headers())
+                                        headers=seg_headers)
             except swiftclient.exceptions.ClientException as e:
                 # The segments may not exist, so we need to create it
                 if e.http_status == 404:

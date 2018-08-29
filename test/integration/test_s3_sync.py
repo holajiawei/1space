@@ -17,6 +17,7 @@ limitations under the License.
 import hashlib
 from itertools import repeat
 import json
+import time
 
 from s3_sync.provider_factory import create_provider
 
@@ -350,6 +351,24 @@ class TestCloudSync(TestCloudSyncBase):
             self._test_archive(key, content, mapping, get_etag,
                                expected_location)
 
+    def test_swift_archive_x_delete_after(self):
+        mapping = self._find_mapping(
+            lambda m: m['aws_bucket'] == 'bit-bucket')
+        conn = self.conn_for_acct(mapping['account'])
+        conn.put_object(mapping['container'], 'del_after_test', 'B' * 1024)
+
+        def _check_synced():
+            try:
+                return self.remote_swift('head_object', mapping['aws_bucket'],
+                                         'del_after_test')
+            except Exception:
+                return False
+
+        hdrs = wait_for_condition(5, _check_synced)
+        self.assertIn('x-delete-at', hdrs.keys())
+        target_time = int(time.time() + mapping['remote_delete_after'])
+        self.assertTrue(int(hdrs['x-delete-at']) <= target_time)
+
     def test_provider_s3_put_object_defaults(self):
         mapping = self.s3_sync_mapping()
         provider = create_provider(mapping, 1)
@@ -621,6 +640,45 @@ class TestCloudSync(TestCloudSyncBase):
 
         clear_swift_container(self.swift_dst, mapping['aws_bucket'])
         clear_swift_container(self.swift_src, mapping['container'])
+
+    def test_swift_archive_slo_w_remote_delete_at(self):
+        content = 'A' * 2048
+        key = 'test_swift_slo_del_after'
+        mapping = self._find_mapping(
+            lambda m: m['aws_bucket'] == 'bit-bucket')
+        manifest = [
+            {'size_bytes': 1024, 'path': '/segments/part1'},
+            {'size_bytes': 1024, 'path': '/segments/part2'}]
+        early_target_time = int(time.time() + mapping['remote_delete_after'])
+        conn = self.conn_for_acct(mapping['account'])
+        conn.put_container('segments')
+        conn.put_object('segments', 'part1', content[:1024])
+        conn.put_object('segments', 'part2', content[1024:])
+        conn.put_object(mapping['container'], key,
+                        json.dumps(manifest),
+                        query_string='multipart-manifest=put')
+
+        def _check_synced():
+            try:
+                return self.remote_swift('head_object', mapping['aws_bucket'],
+                                         key)
+            except Exception:
+                return False
+
+        hdrs = wait_for_condition(5, _check_synced)
+        self.assertIn('x-delete-at', hdrs.keys())
+        target_time = int(time.time() + mapping['remote_delete_after'])
+        self.assertTrue(int(hdrs['x-delete-at']) <= target_time)
+        self.assertTrue(int(hdrs['x-delete-at']) >= early_target_time)
+        seg_container = mapping['aws_bucket'] + '_segments'
+        hdrs = self.remote_swift('head_object', seg_container, 'part1')
+        self.assertIn('x-delete-at', hdrs.keys())
+        self.assertTrue(int(hdrs['x-delete-at']) <= target_time)
+        self.assertTrue(int(hdrs['x-delete-at']) >= early_target_time)
+        hdrs = self.remote_swift('head_object', seg_container, 'part2')
+        self.assertIn('x-delete-at', hdrs.keys())
+        self.assertTrue(int(hdrs['x-delete-at']) <= target_time)
+        self.assertTrue(int(hdrs['x-delete-at']) >= early_target_time)
 
     def test_swift_archive_slo_restore(self):
         content = 'A' * 2048
