@@ -22,6 +22,7 @@ from s3_sync.provider_factory import create_provider
 
 from . import TestCloudSyncBase, clear_swift_container, wait_for_condition, \
     swift_content_location, s3_key_name, clear_s3_bucket, WaitTimedOut
+import swiftclient
 
 
 class TestCloudSync(TestCloudSyncBase):
@@ -669,6 +670,102 @@ class TestCloudSync(TestCloudSyncBase):
         clear_swift_container(self.swift_dst, 'segments')
         clear_swift_container(self.swift_src, mapping['container'])
         clear_swift_container(self.swift_src, 'segments')
+
+    def test_swift_slo_sync(self):
+        content = 'A' * 2048
+        key = 'test_slo'
+        mapping = self.swift_sync_mapping()
+        manifest = [
+            {'size_bytes': 1024, 'path': '/segments/part1'},
+            {'size_bytes': 1024, 'path': '/segments/part2'}]
+        self.local_swift('put_container', 'segments')
+        self.local_swift('put_object', 'segments', 'part1', content[:1024])
+        self.local_swift('put_object', 'segments', 'part2', content[1024:])
+        self.local_swift('put_object', mapping['container'], key,
+                         json.dumps(manifest),
+                         query_string='multipart-manifest=put')
+
+        def _check_slo():
+            try:
+                return self.remote_swift(
+                    'head_object', mapping['aws_bucket'], key)
+            except swiftclient.exceptions.ClientException as e:
+                if e.http_status == 404:
+                    return False
+                raise
+
+        wait_for_condition(10, _check_slo)
+        headers, body = self.remote_swift(
+            'get_object', mapping['aws_bucket'], key)
+        self.assertEqual(body, content)
+        self.assertEqual(
+            '"%s"' % hashlib.md5('%s%s' % (
+                hashlib.md5(content[:1024]).hexdigest(),
+                hashlib.md5(content[1024:]).hexdigest())).hexdigest(),
+            headers['etag'])
+
+    def test_swift_slo_sync_new_meta(self):
+        content = 'A' * 2048
+        key = 'test_slo'
+        mapping = self.swift_sync_mapping()
+        manifest = [
+            {'size_bytes': 1024, 'path': '/segments/part1'},
+            {'size_bytes': 1024, 'path': '/segments/part2'}]
+        self.local_swift('put_container', 'segments')
+        self.local_swift('put_object', 'segments', 'part1', content[:1024])
+        self.local_swift('put_object', 'segments', 'part2', content[1024:])
+        self.local_swift('put_object', mapping['container'], key,
+                         json.dumps(manifest),
+                         query_string='multipart-manifest=put')
+
+        def _check_slo():
+            try:
+                return self.remote_swift(
+                    'head_object', mapping['aws_bucket'], key)
+            except swiftclient.exceptions.ClientException as e:
+                if e.http_status == 404:
+                    return False
+                raise
+        wait_for_condition(10, _check_slo)
+
+        # record the last-modified date, so we can check that segments are not
+        # re-uploaded
+        remote_objects = [
+            (mapping['aws_bucket'], key),
+            ('%s_segments' % mapping['aws_bucket'], 'part1'),
+            ('%s_segments' % mapping['aws_bucket'], 'part2')]
+        old_headers = {}
+        for cont, obj in remote_objects:
+            old_headers[(cont, obj)] = self.remote_swift(
+                'head_object', cont, obj,
+                query_string='multipart-manifest=get')
+
+        self.local_swift(
+            'post_object',
+            mapping['container'], key,
+            headers={'x-object-meta-test-hdr': 'new header'})
+
+        def _check_slo_header():
+            return 'x-object-meta-test-hdr' in self.remote_swift(
+                'head_object', mapping['aws_bucket'], key)
+
+        wait_for_condition(5, _check_slo_header)
+
+        headers = self.remote_swift(
+            'head_object', mapping['aws_bucket'], key)
+        self.assertEqual('new header', headers['x-object-meta-test-hdr'])
+        for cont, obj in remote_objects:
+            hdrs = self.remote_swift(
+                'head_object', cont, obj,
+                query_string='multipart-manifest=get')
+            if cont == mapping['aws_bucket']:
+                self.assertTrue(
+                    float(old_headers[(cont, obj)]['x-timestamp']) <
+                    float(hdrs['x-timestamp']))
+            else:
+                self.assertEqual(
+                    old_headers[(cont, obj)]['x-timestamp'],
+                    hdrs['x-timestamp'])
 
     def test_swift_shunt_post(self):
         content = 'shunt post'

@@ -14,10 +14,12 @@ See the License for the specific language governing permissions and
 limitations under the License.
 """
 
+import hashlib
 import json
 import mock
 from s3_sync.sync_swift import SyncSwift
 from s3_sync import utils
+import StringIO
 import swiftclient
 from swiftclient.exceptions import ClientException
 from swift.common import swob
@@ -51,7 +53,7 @@ class FakeBody(object):
 
 class TestSyncSwift(unittest.TestCase):
     def setUp(self):
-        self.aws_bucket = 'bucket'
+        self.aws_bucket = 'container'
         self.scratch_space = 'scratch'
         self.max_conns = 10
         self.mapping = {
@@ -332,8 +334,8 @@ class TestSyncSwift(unittest.TestCase):
                      'hash': 'beefdead',
                      'bytes': 1024}]
 
-        not_found = swiftclient.exceptions.ClientException('not found',
-                                                           http_status=404)
+        not_found = swiftclient.exceptions.ClientException(
+            'not found', http_status=404, http_response_headers={})
         swift_client = mock.Mock()
         mock_swift.return_value = swift_client
         swift_client.head_object.side_effect = not_found
@@ -424,8 +426,8 @@ class TestSyncSwift(unittest.TestCase):
                      'hash': 'beefdead',
                      'bytes': 1024}]
 
-        not_found = swiftclient.exceptions.ClientException('not found',
-                                                           http_status=404)
+        not_found = swiftclient.exceptions.ClientException(
+            'not found', http_status=404, http_response_headers={})
         swift_client = mock.Mock()
         mock_swift.return_value = swift_client
         swift_client.head_object.side_effect = not_found
@@ -505,27 +507,35 @@ class TestSyncSwift(unittest.TestCase):
     def test_slo_metadata_update(self, mock_swift):
         key = 'key'
         storage_policy = 42
-        etag = '1234'
+        slo_etag = hashlib.md5('deadbeef').hexdigest()
         swift_object_meta = {'x-object-meta-new': 'new',
                              'x-object-meta-old': 'updated',
                              'x-static-large-object': 'True',
-                             'etag': etag}
+                             'etag': 'foobar'}
+
+        manifest = [{'path': '/segments/part1', 'hash': 'deadbeef'}]
+
+        def _get_object(account, container, key, **kwargs):
+            return 200, {}, StringIO.StringIO(json.dumps(manifest))
+
         mock_ic = mock.Mock()
         mock_ic.get_object_metadata.return_value = swift_object_meta
+        mock_ic.get_object.side_effect = _get_object
+
         swift_client = mock.Mock()
         mock_swift.return_value = swift_client
         swift_client.head_object.return_value = {
             'x-object-meta-old': 'old',
             'x-static-large-object': 'True',
-            'etag': '%s' % etag}
-        swift_client.get_object.return_value = ({
-            'etag': etag
-        }, '')
+            'etag': '"%s"' % slo_etag}
         swift_client.post_object.return_value = None
 
         self.sync_swift.upload_object(key, storage_policy, mock_ic)
 
-        swift_client.post_object.assert_called_with(
+        mock_ic.get_object.assert_called_once_with(
+            self.sync_swift.account, self.sync_swift.container, key,
+            headers=mock.ANY)
+        swift_client.post_object.assert_called_once_with(
             self.aws_bucket, key, headers={
                 'x-object-meta-new': 'new',
                 'x-object-meta-old': 'updated'})
@@ -534,21 +544,122 @@ class TestSyncSwift(unittest.TestCase):
     def test_slo_no_changes(self, mock_swift):
         key = 'key'
         storage_policy = 42
-        etag = '1234'
+        slo_etag = hashlib.md5('deadbeef').hexdigest()
         meta = {'x-object-meta-new': 'new',
                 'x-object-meta-old': 'updated',
                 'x-static-large-object': 'True',
-                'etag': etag}
+                'etag': 'foobar'}
+
+        remote_meta = {
+            'x-object-meta-new': 'new',
+            'x-object-meta-old': 'updated',
+            'x-static-large-object': 'True',
+            'etag': '"%s"' % slo_etag}
+
+        manifest = [{'path': '/segments/part1', 'hash': 'deadbeef'}]
+
+        def _get_object(account, container, key, **kwargs):
+            return 200, {}, StringIO.StringIO(json.dumps(manifest))
+
         mock_ic = mock.Mock()
         mock_ic.get_object_metadata.return_value = meta
+        mock_ic.get_object.side_effect = _get_object
+
         swift_client = mock.Mock()
         mock_swift.return_value = swift_client
-        swift_client.head_object.return_value = meta
-        swift_client.get_object.return_value = (meta, '')
+        swift_client.head_object.return_value = remote_meta
+
+        self.sync_swift.upload_object(key, storage_policy, mock_ic)
+
+        mock_ic.get_object.assert_called_once_with(
+            self.sync_swift.account, self.sync_swift.container, key,
+            headers=mock.ANY)
+        swift_client.post_object.assert_not_called()
+
+    @mock.patch('s3_sync.sync_swift.swiftclient.client.Connection')
+    def test_slo_no_changes_different_container(self, mock_swift):
+        self.sync_swift.aws_bucket = 'other-container'
+
+        key = 'key'
+        storage_policy = 42
+        slo_etag = hashlib.md5('deadbeef').hexdigest()
+        meta = {'x-object-meta-new': 'new',
+                'x-object-meta-old': 'updated',
+                'x-static-large-object': 'True',
+                'etag': 'foobar'}
+
+        mock_ic = mock.Mock()
+        mock_ic.get_object_metadata.return_value = meta
+
+        manifest = [
+            {'name': '/%s_segments/part1' % (self.sync_swift.container),
+             'hash': 'deadbeef'}]
+
+        remote_meta = dict(meta.items())
+        remote_meta['etag'] = '"%s"' % slo_etag
+
+        swift_client = mock.Mock()
+        mock_swift.return_value = swift_client
+        swift_client.head_object.return_value = remote_meta
+
+        def _get_object(account, container, key, **kwargs):
+            if container != 'container' or key != 'key':
+                raise NotImplementedError
+
+            body = json.dumps(manifest)
+            headers = {
+                'etag': hashlib.md5(body).hexdigest()}
+            return 200, headers, StringIO.StringIO(body)
+
+        swift_client.head_object.return_value
+        mock_ic.get_object.side_effect = _get_object
 
         self.sync_swift.upload_object(key, storage_policy, mock_ic)
 
         swift_client.post_object.assert_not_called()
+
+    @mock.patch('s3_sync.sync_swift.swiftclient.client.Connection')
+    def test_slo_update_meta_different_container(self, mock_swift):
+        self.sync_swift.aws_bucket = 'other-container'
+
+        key = 'key'
+        storage_policy = 42
+        slo_etag = hashlib.md5('deadbeef').hexdigest()
+        meta = {'x-object-meta-new': 'new',
+                'x-static-large-object': 'True',
+                'etag': 'foobar'}
+
+        mock_ic = mock.Mock()
+        mock_ic.get_object_metadata.return_value = meta
+
+        manifest = [
+            {'name': '/%s_segments/part1' % (self.sync_swift.container),
+             'hash': 'deadbeef'}]
+        remote_meta = dict(meta.items())
+        del remote_meta['x-object-meta-new']
+        remote_meta['etag'] = '"%s"' % slo_etag
+
+        swift_client = mock.Mock()
+        mock_swift.return_value = swift_client
+        swift_client.head_object.return_value = remote_meta
+
+        def _get_object(account, container, key, **kwargs):
+            if container != 'container' or key != 'key':
+                raise NotImplementedError
+
+            body = json.dumps(manifest)
+            headers = {
+                'etag': hashlib.md5(body).hexdigest()}
+            return 200, headers, StringIO.StringIO(body)
+
+        swift_client.head_object.return_value
+        mock_ic.get_object.side_effect = _get_object
+
+        self.sync_swift.upload_object(key, storage_policy, mock_ic)
+
+        swift_client.post_object.assert_called_once_with(
+            self.sync_swift.remote_container, key,
+            headers={'x-object-meta-new': 'new'})
 
     @mock.patch('s3_sync.sync_swift.swiftclient.client.Connection')
     def test_delete_object(self, mock_swift):
@@ -823,14 +934,13 @@ class TestSyncSwift(unittest.TestCase):
         self.assertFalse(self.sync_swift.verified_container)
         self.sync_swift.upload_object('foo', 'policy', mock_ic)
         swift_client.put_container.assert_called_once_with(
-            'bucketcontainer', headers={})
+            self.aws_bucket + 'container', headers={})
         self.assertTrue(self.sync_swift.verified_container)
 
         swift_client.reset_mock()
         self.sync_swift.upload_object('foo', 'policy', mock_ic)
-        self.assertEqual([mock.call.head_object('bucketcontainer', 'foo',
-                                                headers={})],
-                         swift_client.mock_calls)
+        swift_client.head_object.assert_called_once_with(
+            self.aws_bucket + self.mapping['aws_bucket'], 'foo', headers={})
 
     @mock.patch('s3_sync.sync_swift.swiftclient.client.Connection')
     def test_list_buckets(self, mock_swift):

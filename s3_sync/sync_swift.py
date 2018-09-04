@@ -16,6 +16,7 @@ limitations under the License.
 
 import datetime
 import eventlet
+import hashlib
 import json
 import swiftclient
 from swift.common.internal_client import UnexpectedResponse
@@ -50,6 +51,10 @@ class SyncSwift(BaseSync):
         else:
             # In this case the aws_bucket is treated as a prefix
             return self.aws_bucket + self.container
+
+    @property
+    def remote_segments_container(self):
+        return self.remote_container + '_segments'
 
     def _get_client_factory(self):
         # TODO: support LDAP auth
@@ -176,24 +181,11 @@ class SyncSwift(BaseSync):
             return False
 
         if check_slo(metadata):
-            try:
-                # fetch the remote etag
-                with self.client_pool.get_client() as swift_client:
-                    # This relies on the fact that getting the manifest results
-                    # in the etag being the md5 of the JSON. The internal
-                    # client pipeline does not have SLO and also returns the
-                    # md5 of the JSON, making our comparison valid.
-                    headers, _ = swift_client.get_object(
-                        self.remote_container, swift_key,
-                        query_string='multipart-manifest=get',
-                        headers=self._client_headers({'Range': 'bytes=0-0'}))
-                if headers['etag'] == metadata['etag']:
-                    if not self._is_meta_synced(metadata, headers):
-                        self.update_metadata(swift_key, metadata)
-                    return True
-            except swiftclient.exceptions.ClientException as e:
-                if e.http_status != 404:
-                    raise True
+            if remote_meta and self._check_slo_uploaded(
+                    swift_key, remote_meta, internal_client, swift_req_hdrs):
+                if not self._is_meta_synced(metadata, remote_meta):
+                    self.update_metadata(swift_key, metadata)
+                return True
             self._upload_slo(swift_key, swift_req_hdrs, internal_client)
             return True
 
@@ -434,13 +426,8 @@ class SyncSwift(BaseSync):
         self.post_object(swift_key, user_headers)
 
     def _upload_slo(self, name, swift_headers, internal_client):
-        status, headers, body = internal_client.get_object(
-            self.account, self.container, name, headers=swift_headers)
-        if status != 200:
-            body.close()
-            raise RuntimeError('Failed to get the manifest')
-        manifest = json.load(FileLikeIter(body))
-        body.close()
+        headers, manifest = self._get_internal_manifest(
+            name, internal_client, swift_headers)
         self.logger.debug("JSON manifest: %s" % str(manifest))
 
         work_queue = eventlet.queue.Queue(self.SLO_QUEUE_SIZE)
@@ -466,7 +453,7 @@ class SyncSwift(BaseSync):
             raise RuntimeError('Failed to upload an SLO %s' % name)
 
         # we need to mutate the container in the manifest
-        container = self.remote_container + '_segments'
+        container = self.remote_segments_container
         new_manifest = []
         for segment in manifest:
             _, obj = segment['name'].split('/', 2)[1:]
@@ -498,6 +485,16 @@ class SyncSwift(BaseSync):
                 self.logger.warning('Failed to fetch the manifest: %s' % e)
                 return None
 
+    def _get_internal_manifest(self, key, internal_client, swift_headers={}):
+        status, headers, body = internal_client.get_object(
+            self.account, self.container, key, headers=swift_headers)
+        if status != 200:
+            body.close()
+            raise RuntimeError('Failed to get the manifest')
+        manifest = json.load(FileLikeIter(body))
+        body.close()
+        return headers, manifest
+
     def _upload_slo_worker(self, req_headers, work_queue, internal_client):
         errors = []
         while True:
@@ -517,14 +514,14 @@ class SyncSwift(BaseSync):
 
     def _upload_segment(self, segment, req_headers, internal_client):
         container, obj = segment['name'].split('/', 2)[1:]
-        dest_container = self.remote_container + '_segments'
         with self.client_pool.get_client() as swift_client:
             wrapper = FileWrapper(internal_client, self.account, container,
                                   obj, req_headers)
             self.logger.debug('Uploading segment %s: %s bytes' % (
                 self.account + segment['name'], segment['bytes']))
             try:
-                swift_client.put_object(dest_container, obj, wrapper,
+                swift_client.put_object(self.remote_segments_container,
+                                        obj, wrapper,
                                         etag=segment['hash'],
                                         content_length=len(wrapper),
                                         headers=self._client_headers())
@@ -532,13 +529,29 @@ class SyncSwift(BaseSync):
                 # The segments may not exist, so we need to create it
                 if e.http_status == 404:
                     self.logger.debug('Creating a segments container %s' % (
-                        dest_container))
+                        self.remote_segments_container))
                     # Creating a container may take some (small) amount of time
                     # and we should attempt to re-upload in the following
                     # iteration
-                    swift_client.put_container(dest_container,
+                    swift_client.put_container(self.remote_segments_container,
                                                headers=self._client_headers())
                     raise RuntimeError('Missing segments container')
+
+    def _check_slo_uploaded(self, key, remote_meta, internal_client,
+                            swift_req_hdrs):
+        _, manifest = self._get_internal_manifest(
+            key, internal_client, swift_req_hdrs)
+
+        expected_etag = '"%s"' % hashlib.md5(
+            ''.join([segment['hash'] for segment in manifest])).hexdigest()
+
+        self.logger.debug('SLO ETags: %s %s' % (
+            remote_meta['etag'], expected_etag))
+        if remote_meta['etag'] != expected_etag:
+            return False
+        self.logger.info('Static large object %s has already been uploaded'
+                         % key)
+        return True
 
     @staticmethod
     def _is_meta_synced(local_metadata, remote_metadata):
