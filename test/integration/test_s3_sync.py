@@ -328,10 +328,10 @@ class TestCloudSync(TestCloudSyncBase):
         # Make sure it actually got lifecycled
         hdrs, listing = local_conn.get_container(mapping['container'])
         list_item = [i for i in listing if i['name'] == obj_name][0]
-        self.assertEqual([';'.join((mapping['aws_endpoint'],
-                                    mapping['aws_identity'],
-                                    mapping['aws_bucket']))],
-                         list_item['content_location'])
+        self.assertIn(';'.join((mapping['aws_endpoint'],
+                                mapping['aws_identity'],
+                                mapping['aws_bucket'])),
+                      list_item['content_location'])
 
     def test_swift_archive(self):
         mapping = self.swift_archive_mapping()
