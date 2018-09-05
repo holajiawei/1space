@@ -5,8 +5,8 @@ FROM bouncestorage/swift-aio:latest
 
 RUN apt-get update && \
     apt-get install --no-install-recommends -y \
-        wget curl patch git build-essential python-dev locales \
-        openjdk-8-jre-headless net-tools && \
+        wget curl patch git locales openjdk-8-jre-headless net-tools gcc \
+        python-dev && \
     apt-get clean
 
 COPY requirements.txt requirements-test.txt /tmp/
