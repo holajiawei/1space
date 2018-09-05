@@ -49,7 +49,15 @@ sleep 6  # let S3Proxy start up
 
 # Set up stuff for cloud-connector
 # NOTE: s3cmd is installed via requirements-test.txt in the Dockerfile
-s3cmd -c /swift-s3-sync/s3cfg mb s3://$CONF_BUCKET ||:
+set +e
+s3cmd -c /swift-s3-sync/s3cfg info s3://$CONF_BUCKET
+rc=$?
+set -e
+
+if [ $rc -ne 0 ]; then
+    s3cmd -c /swift-s3-sync/s3cfg mb s3://$CONF_BUCKET
+fi
+
 s3cmd -c /swift-s3-sync/s3cfg put /swift-s3-sync/containers/swift-s3-sync/cloud-connector.conf \
     s3://$CONF_BUCKET
 s3cmd -c /swift-s3-sync/s3cfg put /swift-s3-sync/containers/swift-s3-sync/swift-s3-sync.conf \
