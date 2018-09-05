@@ -211,7 +211,7 @@ class TestCloudConnector(TestCloudSyncBase):
             'ETag': exp_etags[u'i/am/groot'], u'StorageClass': 'STANDARD',
             u'Key': 'i/am/groot', u'Size': 11,
         }], [{k: v for k, v in l.items() if k != 'LastModified'}
-             for l in list_resp['Contents']])
+             for l in list_resp.get('Contents', [])])
 
     def test_container_get_filters_against_s3_dirs(self):
         obj_names = [
@@ -539,7 +539,7 @@ class TestCloudConnector(TestCloudSyncBase):
              u'Key': o, u'Size': len(o) + 1}
             for o in obj_names
         ], [{k: v for k, v in l.items() if k != 'LastModified'}
-            for l in list_resp['Contents']])
+            for l in list_resp.get('Contents', [])])
         self.assertNotIn('CommonPrefixes', list_resp, repr(list_resp))
 
         # With StartAfter

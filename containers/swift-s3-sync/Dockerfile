@@ -21,11 +21,7 @@ EXPOSE 10080
 RUN locale-gen en_US.UTF-8
 ENV LANG='en_US.UTF-8' LANGUAGE='en_US:en' LC_ALL='en_US.UTF-8'
 
-# These patches improve Unicode handling in tempauth, swiftclient, and swift3
-COPY containers/swift-s3-sync/tempauth.patch /tmp/
-RUN bash -c "cd /usr/local/src \
-    && patch -p0 < /tmp/tempauth.patch \
-    && rm -f /tmp/tempauth.patch"
+# These patches improve Unicode handling in swiftclient, and swift3
 COPY containers/swift-s3-sync/swiftclient.patch /tmp/
 RUN bash -c "cd /usr/local/src \
     && patch -p0 < /tmp/swiftclient.patch \
@@ -34,6 +30,10 @@ COPY containers/swift-s3-sync/swift3-unicode-fix.patch /tmp/
 RUN bash -c "cd /usr/local/src \
     && patch -p0 < /tmp/swift3-unicode-fix.patch \
     && rm -f /tmp/swift3-unicode-fix.patch"
+COPY containers/swift-s3-sync/swift3-s3api-auth.patch /tmp/
+RUN bash -c "cd /usr/local/src/swift \
+    && patch -p1 < /tmp/swift3-s3api-auth.patch \
+    && rm -f /tmp/swift3-s3api-auth.patch"
 
 # This patch allows tempauth to use Keystone-provided identities ("groups") for
 # authz decisions.
