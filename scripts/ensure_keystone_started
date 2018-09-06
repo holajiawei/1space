@@ -6,6 +6,7 @@ MYDIR=$(dirname $(python -c 'import os,sys;print os.path.realpath(sys.argv[1])' 
 cd "$MYDIR"/..
 
 # Build the image
+docker pull $(grep -ioP -m 1 '(?<=^from)\s+\S+' containers/keystone/Dockerfile)
 docker build --cache-from 1space-keystone -t 1space-keystone -f containers/keystone/Dockerfile .
 
 # Create a network for our party (if necessary)

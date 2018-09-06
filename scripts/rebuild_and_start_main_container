@@ -14,7 +14,7 @@ cd "$MYDIR"/..
 test -f ./port-mapping.env && . ./port-mapping.env
 
 # This will be fast if the image is up-to-date and cached:
-docker pull bouncestorage/swift-aio
+docker pull bouncestorage/swift-aio:latest
 
 # Build our image
 docker build --cache-from swift-s3-sync:latest -t swift-s3-sync -f containers/swift-s3-sync/Dockerfile .

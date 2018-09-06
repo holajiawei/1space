@@ -12,21 +12,41 @@ cache:
 before_cache:
     - >
         if [[ $TRAVIS_TEST_RESULT = 0 ]]; then
-            docker images -a --format '{{.Repository}}:{{.Tag}} {{.ID}}'
             mkdir -p $HOME/docker
-            docker images -a --filter='dangling=false' --format '{{.Repository}}:{{.Tag}}'\
-            | xargs -n 1 -t sh -c 'test $0 = cloud-connector-wheel:latest ||
-                                   test $0 = cloud-connector:latest ||
-                                   test $0 = swift-s3-sync:latest ||
-                                   test $0 = 1space-keystone:latest &&
-                                   docker save $0 | gzip -2 > $HOME/docker/$0.tar.gz'
-            ls -1 $HOME/docker \
-            | xargs -n 1 -t sh -c 'test $0 != cloud-connector-wheel:latest.tar.gz &&
-                                   test $0 != cloud-connector:latest.tar.gz &&
-                                   test $0 != swift-s3-sync:latest.tar.gz &&
-                                   test $0 != 1space-keystone:latest.tar.gz &&
-                                   rm -f $HOME/docker/$0'
+            # Export and save the images we care about
+            IMAGES=`docker images --format '{{.Repository}}:{{.Tag}}:{{.ID}}'`
+            OLD_IMAGES=`ls $HOME/docker/|grep tar.gz`
+            for img in $IMAGES; do
+                img_name=`echo $img|cut -d : -f 1,2 -`
+                if [[ "$img_name" = "1space-keystone:latest" ]] || [[ "$img_name" = "swift-s3-sync:latest" ]] ||\
+                   [[ "$img_name" = "cloud-connector:latest" ]] || [[ "$img_name" = "cloud-connector-wheel:latest" ]]; then
+                    if [[ ! -e $HOME/docker/$img.tar.gz ]]; then
+                        NEW_IMAGE="true"
+                        echo "Saving $img"
+                        docker save $img_name | gzip -2 > $HOME/docker/$img.tar.gz
+                    fi
+                fi
+            done
+            for img in $OLD_IMAGES; do
+                img_name=`echo $img|cut -d : -f 1,2 -`
+                if [[ $img != `docker images --format {{.Repository}}:{{.Tag}}:{{.ID}}.tar.gz --filter=reference=$img_name` ]]; then
+                    echo "Removing: $img"
+                    rm -f $HOME/docker/$img
+                fi
+            done
+            if [[ "$NEW_IMAGE" = "true" ]] || [[ ! -e $HOME/docker/metadata.tar ]]; then
+                # Export the metadata, so we don't pull the same image again
+                sudo tar -cvf $HOME/docker/metadata.tar /var/lib/docker/image/overlay2/distribution/diffid-by-digest
+            fi
         fi
 
 before_install:
-    - if [[ -d $HOME/docker ]]; then ls $HOME/docker/*.tar.gz | xargs -I {file} sh -c "zcat {file} | docker load"; fi
+    - >
+        if [[ -d $HOME/docker ]]; then
+            ls $HOME/docker
+            ls $HOME/docker/|grep tar.gz | xargs -I {file} sh -c 'zcat $HOME/docker/{file} | docker load'
+            if [[ -e $HOME/docker/metadata.tar ]]; then
+                sudo tar -C / -xvf $HOME/docker/metadata.tar
+            fi
+            docker images --format '{{.ID}}' |xargs -I {img} docker inspect {img}
+        fi
