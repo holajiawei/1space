@@ -1,10 +1,18 @@
-## 0.1.45 (????-??-??)
+## 0.1.45 (2018-09-07)
 
 Features:
 
-    - Support for `remote_delete_after` configuration option for swift
-      endpoints only. THIS SHOULD BE USED WITH EXTREME CAUTION AS IT CAN RESULT
-      IN DATA LOSS.
+    - Added a new configuration option: `remote_delete_after`. This will cause
+      the x-delete-after header to be set when uploading objects via
+      swift-s3-sync. As it uses the x-delete-at header, it only works with Swift
+      (and not with AWS S3, Google, or an S3 clone).
+      THIS SHOULD BE USED WITH EXTREME CAUTION AS IT CAN RESULT IN DATA LOSS.
+
+Bug fixes:
+
+    - Correctly detects if a Swift Static Large Object (SLO) has already been
+      uploaded. Previously, SLO would always be re-uploaded if the remote
+      segments container does not match the origin segments container.
 
 ## 0.1.44 (2018-08-27)
 
