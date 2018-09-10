@@ -44,7 +44,6 @@ from swift.common import swob
 from swift.common.internal_client import UnexpectedResponse
 from swift.common.utils import FileLikeIter, Timestamp, quote
 
-
 EQUAL = 0
 ETAG_DIFF = 1
 TIME_DIFF = 2
@@ -841,6 +840,15 @@ class Migrator(object):
             # the number of items we should process. We will process all of
             # the keys that were returned in the listing and restart on the
             # following iteration.
+            try:
+                lname = local['name']
+            except Exception:
+                lname = 'nothing'
+            try:
+                rname = remote['name']
+            except:
+                rname = 'nothing'
+
             if not local or local['name'] > remote['name']:
                 if self._old_enough(remote):
                     work = MigrateObjectWork(aws_bucket, container,
@@ -881,9 +889,9 @@ class Migrator(object):
         return marker
 
     def _migrate_object(self, aws_bucket, container, key):
-        args = {'bucket': aws_bucket,
-                'query_string': 'multipart-manifest=get'}
+        args = {'bucket': aws_bucket}
         if self.config.get('protocol', 's3') == 'swift':
+            args['query_string'] = 'multipart-manifest=get'
             args['resp_chunk_size'] = 65536
 
         resp = self.provider.get_object(key, **args)

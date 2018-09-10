@@ -21,6 +21,10 @@ from lxml import etree
 import StringIO
 import urllib
 
+def quicklog(msg):
+    with open('/tmp/quicklog_utils', 'a') as f:
+        f.write("%s\n" % msg)
+
 # Old (prior to 2.11) versions of swift cannot import this, but cloud sync
 # cannot be set up for such old clusters. This just allows the cloud shunt to
 # do nothing quietly.
@@ -931,7 +935,12 @@ def iter_listing(list_func, logger, marker, limit, prefix, *args):
                     marker = item['name']
                 else:
                     marker = item['subdir']
-                item['content_location'] = [item['content_location']]
+
+                try:
+                    item['content_location'] = [item['content_location']]
+                except KeyError:
+                    pass
+
                 yield item, marker
             # WSGI supplies the request parameters as UTF-8 encoded
             # strings. We should do the same when submitting

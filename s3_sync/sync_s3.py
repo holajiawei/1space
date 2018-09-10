@@ -327,6 +327,8 @@ class SyncS3(BaseSync):
                 # PUTs that copy objects (to update metadata or whatever).
                 # The API response for delete_object is also different (but
                 # only sometimes?).
+                if 'Buckets' in resp:
+                    return ProviderResponse(True, 200, {}, resp)
                 if 'CopyObjectResult' in resp:
                     return ProviderResponse(True, 200, {}, body)
                 if ('ResponseMetadata' not in resp and
