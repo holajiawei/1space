@@ -45,6 +45,9 @@ python -m s3_sync --log-level debug \
     --properties /swift-s3-sync/containers/swift-s3-sync/s3proxy.properties \
     2>&1 > /var/log/s3proxy.log &
 
+/usr/bin/sudo -u elastic /bin/bash /elasticsearch-5.5.2/bin/elasticsearch \
+    > /var/log/elasticsearch.log 2>&1 &
+
 sleep 6  # let S3Proxy start up
 
 # Set up stuff for cloud-connector

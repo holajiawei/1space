@@ -20,6 +20,7 @@ setup(name='swift-s3-sync',
               'swift-s3-verify = s3_sync.verify:main',
               'swift-s3-migrator = s3_sync.migrator:main',
               'cloud-connector = s3_sync.cloud_connector.app:main',
+              'swift-metadata-migrator = s3_sync.metadata_migrator:main',
           ],
           'paste.filter_factory': [
               'cloud-shunt = s3_sync.shunt:filter_factory',

@@ -21,6 +21,13 @@ EXPOSE 10080
 RUN locale-gen en_US.UTF-8
 ENV LANG='en_US.UTF-8' LANGUAGE='en_US:en' LC_ALL='en_US.UTF-8'
 
+RUN useradd -M -d /tmp elastic
+RUN wget https://artifacts.elastic.co/downloads/elasticsearch/elasticsearch-5.5.2.tar.gz &&\
+    tar -xvf elasticsearch-5.5.2.tar.gz && chown -R elastic elasticsearch-5.5.2
+RUN echo "network.host: 0.0.0.0" >> /elasticsearch-5.5.2/config/elasticsearch.yml
+RUN sed -i 's/-Xms2g/-Xms500m/;s/-Xmx2g/-Xmx500m/' /elasticsearch-5.5.2/config/jvm.options
+EXPOSE 9200
+
 # These patches improve Unicode handling in swiftclient, and swift3
 COPY containers/swift-s3-sync/swiftclient.patch /tmp/
 RUN bash -c "cd /usr/local/src \

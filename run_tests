@@ -16,7 +16,7 @@ unit_test_status=$?
 ./scripts/ensure_keystone_started
 
 echo Waiting for container services to start...
-docker exec swift-s3-sync timeout 40 \
+docker exec swift-s3-sync timeout 120 \
     bash -c "until s3cmd -c /swift-s3-sync/s3cfg ls s3://\$CONF_BUCKET/s3-passwd.json; do sleep 1; done"
 echo "swift-s3-sync started"
 
@@ -30,6 +30,9 @@ echo "cloud-connector started"
 docker exec 1space-keystone timeout 120 \
     bash -c 'until source openrc && openstack endpoint list|grep swift; do sleep 1; done'
 echo "keystone started"
+docker exec swift-s3-sync timeout 40 \
+    bash -c 'until echo > /dev/tcp/localhost/9200; do sleep 1; done'
+echo "elasticsearch started"
 
 # make sure we can actually authenticate using keystone
 docker exec swift-s3-sync timeout 40 \
