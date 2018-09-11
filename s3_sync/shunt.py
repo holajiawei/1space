@@ -318,6 +318,7 @@ class S3SyncShunt(object):
 
     def handle_listing(self, req, start_response, sync_profile, cont,
                        per_account):
+
         limit, marker, prefix, delimiter, path = get_list_params(
             req, constraints.CONTAINER_LISTING_LIMIT)
 

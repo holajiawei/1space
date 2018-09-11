@@ -11,6 +11,7 @@ cd "$MYDIR"/..
 # HOST_S3_PORT=...
 # HOST_SWIFT_PORT=...
 # HOST_CLOUD_CONNECTOR_PORT=...
+# HOST_ELASTICSEARCH_PORT=...
 test -f ./port-mapping.env && . ./port-mapping.env
 
 # This will be fast if the image is up-to-date and cached:
@@ -30,4 +31,5 @@ docker run -d -v `pwd`:/swift-s3-sync \
     --network swift-s3-sync-net --network-alias swift-s3-sync \
     -p "${HOST_S3_PORT:-10080}:10080" \
     -p "${HOST_SWIFT_PORT:-8080}:8080" \
+    -p "${HOST_ELASTICSEARCH_PORT:-9200}:9200" \
     swift-s3-sync

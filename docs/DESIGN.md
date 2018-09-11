@@ -5,7 +5,7 @@
 1space is roughly composed of four parts:
 
 1. Sync/Lifecycle
-2. Migrator
+2. Migrator (and Metadata Migrator)
 3. Shunt (Swift middleware)
 4. Cloud Connector
 
@@ -68,6 +68,15 @@ contents of the remote blob store, comparing them to the Swift contents.
 
 The migrator is implemented in
 [`migrator.py`](https://github.com/swiftstack/1space/blob/master/s3_sync/sync_container.py).
+
+#### Metadata Migrator
+
+The Metadata Migrator peforms a similar function to the migrator, but instead
+of copying remote objects to a local blob store, it indexes remote object
+metadata to a local Elasticsearch cluster.
+
+It shares much of its implementation with the migrator. You can find it in
+[`metadata_migrator.py`](https://github.com/swiftstack/1space/blob/master/s3_sync/metadata_migrator.py).
 
 ### Shunt (Swift middleware)
 

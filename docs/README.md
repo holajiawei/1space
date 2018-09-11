@@ -108,6 +108,7 @@ By default, the following services are pubished to host operating system ports:
 1. Swift: `8080`
 1. S3Proxy: `10080`
 1. Cloud Connector: `8081`
+1. Elasticsearch: `9200`
 
 If you want to publish the services to different host ports, you can create a
 file named `port-mapping.env` in the root directory of this code tree with
@@ -117,6 +118,7 @@ other values in this format (it is sorced by a shell):
 # HOST_S3_PORT=...
 # HOST_SWIFT_PORT=...
 # HOST_CLOUD_CONNECTOR_PORT=...
+# HOST_ELASTICSEARCH_PORT=...
 ```
 
 To run the main integration test container in the background, run:
@@ -165,6 +167,15 @@ s3cmd -c /swift-s3-sync/s3cfg ls -r s3://s3-sync-test
 
 You should see two objects in the bucket.
 
+If you would like to observe the metadata migrator at work, you can use curl to
+interact with the Elasticsearch instance running in the `swift-s3-sync`
+container:
+
+```
+curl http://swift-s3-sync:9200/_cat/indices/
+curl 'http://es.swift.lab:9200/*/_search?size=10000'
+```
+
 When you're done you can always destroy the containers:
 
 ```
@@ -209,9 +220,10 @@ You can run the integration tests by running
 Non-integration test time is so low that there isn't any reason to make
 another command that only runs integration tests.
 
-The integration tests need access to a Swift cluster and some sort of an S3
-provider. Currently, they use a Docker container to provide Swift and are
-configured to talk to [S3Proxy](https://github.com/andrewgaul/s3proxy).
+The integration tests need access to a Swift cluster, some sort of an S3
+provider, and an Elasticsearch instance. Currently, they use a Docker
+container to provide Swift and Elasticsearch, and are configured to talk to
+[S3Proxy](https://github.com/andrewgaul/s3proxy).
 
 The cloud sync configuration for the tests is defined in
 `containers/swift-s3-sync/swift-s3-sync.conf`. In particular, there are mappings for S3
