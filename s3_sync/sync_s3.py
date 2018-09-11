@@ -309,11 +309,24 @@ class SyncS3(BaseSync):
            so that parameter is ignored, as well.
         '''
         resp = self._call_boto('list_buckets')
+        index = 0
+        if marker:
+            index = next((index for (index, b) in
+                          enumerate(resp.body['Buckets'])
+                          if b['Name'] == marker), 0)
+            if index:
+                index += 1
+                try:
+                    resp.body['Buckets'][index]
+                except IndexError:
+                    resp.body = None
+                    return resp
+        buckets = resp.body['Buckets'][index:index + limit]
         resp.body = [
             {'last_modified': bucket['CreationDate'],
              'count': 0,
              'bytes': 0,
-             'name': bucket['Name']} for bucket in resp.body['Buckets']]
+             'name': bucket['Name']} for bucket in buckets]
         return resp
 
     def _call_boto(self, op, **args):

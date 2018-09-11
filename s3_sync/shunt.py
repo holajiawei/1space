@@ -157,6 +157,19 @@ class S3SyncShunt(object):
                    profile['container'].encode('utf-8'))
             self.sync_profiles[key] = profile
 
+        for migration in conf.get('metadata_migrations', []):
+            profile = dict(migration)
+            # Migrations should have some sane defaults if they aren't present
+            profile.setdefault('restore_object', False)
+            profile.setdefault('container', profile['aws_bucket'])
+            profile.setdefault('migration', True)
+            # if, in the future, we support custom_prefix on the S3 side,
+            # we may need to change this. Swift side code ignores custom_prefix
+            profile['custom_prefix'] = ''
+            key = (profile['account'].encode('utf-8'),
+                   profile['container'].encode('utf-8'))
+            self.sync_profiles[key] = profile
+
     def __call__(self, env, start_response):
         if time() > self._rtime:
             self._reload()

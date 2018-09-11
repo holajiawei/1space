@@ -20,10 +20,9 @@ import json
 from lxml import etree
 import StringIO
 import urllib
+import datetime
 
-def quicklog(msg):
-    with open('/tmp/quicklog_utils', 'a') as f:
-        f.write("%s\n" % msg)
+LAST_MODIFIED_FMT = '%a, %d %b %Y %H:%M:%S %Z'
 
 # Old (prior to 2.11) versions of swift cannot import this, but cloud sync
 # cannot be set up for such old clusters. This just allows the cloud shunt to
@@ -954,7 +953,10 @@ def iter_listing(list_func, logger, marker, limit, prefix, *args):
 
 
 def splice_listing(local_iter, remote_iter, limit):
-    remote_item, remote_key = next(remote_iter)
+    try:
+        remote_item, remote_key = next(remote_iter)
+    except StopIteration:
+        remote_item, remote_key = None, None
     # There used to be an unnecessary short-circuit here if remote_item is
     # false. However, it's easier to handle "local_iter" possibly only yielding
     # items and not tuples of (item, key) if that's only handled in one place.
@@ -999,7 +1001,11 @@ def splice_listing(local_iter, remote_iter, limit):
             # enough context.  OR, could we just append
             # local_item['content_location'] or
             # local_item['content_location'][0] or something??
-            remote_item['content_location'].append('swift')
+            try:
+                remote_item['content_location'].append('swift')
+            except KeyError:
+                # TODO make a new content-location
+                pass
             spliced_response.append(remote_item)
             remote_item, remote_key = next(remote_iter)
         else:
@@ -1037,7 +1043,10 @@ def format_xml_listing(
 
 def format_container_listing_response(list_results, list_format, account):
     if list_format == 'application/json':
-        return json.dumps(list_results)
+        def _datetime_converter(x):
+            if isinstance(x, datetime.datetime):
+                return x.strftime(LAST_MODIFIED_FMT)
+        return json.dumps(list_results, default=_datetime_converter)
     if list_format.endswith('/xml'):
         fields = ['name', 'count', 'bytes', 'last_modified', 'subdir']
         return format_xml_listing(

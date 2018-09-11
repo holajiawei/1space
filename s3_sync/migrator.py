@@ -840,14 +840,6 @@ class Migrator(object):
             # the number of items we should process. We will process all of
             # the keys that were returned in the listing and restart on the
             # following iteration.
-            try:
-                lname = local['name']
-            except Exception:
-                lname = 'nothing'
-            try:
-                rname = remote['name']
-            except:
-                rname = 'nothing'
 
             if not local or local['name'] > remote['name']:
                 if self._old_enough(remote):
