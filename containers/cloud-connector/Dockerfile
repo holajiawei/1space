@@ -52,14 +52,13 @@ WORKDIR /usr/src/cloud-connector
 ARG CONF_BUCKET=cloud-connector-conf
 
 # TODO: remove bash
-RUN apk del libx11 libxrender libxft tk .python-rundeps && \
-    apk --no-cache add \
+RUN apk del .python-rundeps && apk --no-cache add \
     bash \
     ca-certificates \
     libxml2 \
     libxslt \
-    sqlite-libs && \
-    adduser -S -h /etc/swift swift swift
+    sqlite-libs \
+    && adduser -S -h /etc/swift swift swift
 
 COPY --from=wheel /liberasurecode-tree /
 COPY --from=wheel /python-root /
