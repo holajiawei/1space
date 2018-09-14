@@ -661,22 +661,31 @@ class SyncS3(BaseSync):
                 return errors
 
             try:
-                part_number, segment = work
-                container, obj = segment['name'].split('/', 2)[1:]
-                self.logger.debug('Uploading part %d from %s: %s bytes' % (
-                    part_number, self.account + segment['name'],
-                    segment['bytes']))
-                wrapper = FileWrapper(internal_client, self.account,
-                                      container, obj, req_headers)
-                resp = self._upload_part(
-                    s3_key, body=wrapper, content_length=len(wrapper),
-                    upload_id=upload_id, part_number=part_number)
-                if not self.check_etag(segment['hash'], resp['ETag']):
-                    self.logger.error('Part %d ETag mismatch (%s): %s %s',
-                                      part_number,
-                                      self.account + segment['name'],
-                                      segment['hash'], resp['ETag'])
-                    errors.append(part_number)
+                with self.client_pool.get_client() as s3_client:
+                    part_number, segment = work
+                    container, obj = segment['name'].split('/', 2)[1:]
+                    self.logger.debug('Uploading part %d from %s: %s bytes' % (
+                        part_number, self.account + segment['name'],
+                        segment['bytes']))
+                    # NOTE: we must be holding an S3 connection at this point,
+                    # because once we instantiate a FileWrapper, we create an
+                    # open Swift connection and the request will timeout if we
+                    # do not read for more than 60 seconds.
+                    wrapper = FileWrapper(internal_client, self.account,
+                                          container, obj, req_headers)
+                    resp = s3_client.upload_part(
+                        Bucket=self.aws_bucket,
+                        Key=s3_key,
+                        Body=wrapper,
+                        ContentLength=len(wrapper),
+                        UploadId=upload_id,
+                        PartNumber=part_number)
+                    if not self.check_etag(segment['hash'], resp['ETag']):
+                        self.logger.error('Part %d ETag mismatch (%s): %s %s',
+                                          part_number,
+                                          self.account + segment['name'],
+                                          segment['hash'], resp['ETag'])
+                        errors.append(part_number)
             except:
                 self.logger.error('Failed to upload part %d for %s: %s' % (
                     part_number, self.account + segment['name'],

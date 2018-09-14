@@ -996,13 +996,17 @@ class TestSyncS3(unittest.TestCase):
             else:
                 raise RuntimeError('Unknown call to upload part')
 
+        def _get_object(*args, **kwargs):
+            self.assertEqual(
+                self.max_conns - 1, self.sync_s3.client_pool.free_count())
+            return 200, {'Content-Length': chunk_len}, fake_app_iter
+
         self.mock_boto3_client.upload_part.side_effect = upload_part
 
         chunk_len = 5 * SyncS3.MB
         fake_app_iter = FakeStream(chunk_len)
         mock_ic = mock.Mock()
-        mock_ic.get_object.return_value = (
-            200, {'Content-Length': chunk_len}, fake_app_iter)
+        mock_ic.get_object.side_effect = _get_object
         self.sync_s3._upload_slo(manifest, slo_meta, s3_key, swift_req_headers,
                                  mock_ic)
 
