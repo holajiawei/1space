@@ -1,3 +1,11 @@
+## 0.1.45.1 (2018-09-14)
+
+Bug fixes:
+
+    - When uploading an SLO to S3 as a multi-part upload, cloud connector needs
+      to reserve the S3 connection before making a Swift GET request, as
+      otherwise the upload may encounter a Timeout and fail the entire MPU.
+
 ## 0.1.45 (2018-09-07)
 
 Features:
