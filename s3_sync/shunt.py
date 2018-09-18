@@ -416,13 +416,19 @@ class S3SyncShunt(object):
             manifest = provider.get_manifest(obj)
             self.logger.debug("Manifest: %s" % manifest)
             status, headers, app_iter = provider.shunt_object(req, obj)
-            put_headers = convert_to_local_headers(headers)
 
             if response_is_complete(int(status.split()[0]), headers):
-                if check_slo(put_headers) and manifest:
-                    app_iter = SwiftSloPutWrapper(
-                        app_iter, put_headers, req.environ['PATH_INFO'],
-                        self.app, manifest, self.logger)
+                put_headers = convert_to_local_headers(headers)
+                if check_slo(put_headers):
+                    if manifest:
+                        app_iter = SwiftSloPutWrapper(
+                            app_iter, put_headers, req.environ['PATH_INFO'],
+                            self.app, manifest, self.logger)
+                    else:
+                        # if slo manifest is missing, log error, don't attempt
+                        # to restore object, but continue shunt
+                        self.logger.error('Failed to restore slo object due '
+                                          'to missing manifest: %s' % obj)
                 else:
                     app_iter = SwiftPutWrapper(
                         app_iter, put_headers, req.environ['PATH_INFO'],

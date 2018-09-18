@@ -604,6 +604,43 @@ class TestShunt(unittest.TestCase):
             mock_call.reset_mock()
             self.swift.calls = []
 
+    @mock.patch.object(sync_s3.SyncS3, 'get_manifest')
+    @mock.patch.object(sync_s3.SyncS3, 'shunt_object')
+    def test_missing_slo_manifest(
+            self, mock_s3_shunt, mock_s3_get_manifest):
+        payload = 'bytes from remote'
+        path = 'AUTH_tee/tee'
+        resp = ('200 OK',
+                [('Content-Length', len(payload)),
+                 (utils.SLO_HEADER, 'True'),
+                 ('etag', 'deadbeef-2')],
+                StringIO.StringIO(payload))
+
+        env = {
+            '__test__.response_dict': {
+                'GET': {
+                    'status': '404 Not Found'
+                }
+            }
+        }
+
+        # the manifest is missing
+        mock_s3_get_manifest.return_value = None
+        mock_s3_shunt.return_value = resp
+        req = swob.Request.blank(u'/v1/%s/foo' % path, environ=env)
+        status, headers, body_iter = req.call_application(self.app)
+        resp_body = b''.join(body_iter)
+        path = path.encode('utf-8')
+        account = path.split('/', 1)[0]
+        self.assertEqual(
+            [(e['REQUEST_METHOD'], e['PATH_INFO'])
+             for e in self.swift.calls],
+            [
+                ('HEAD', '/v1/%s' % account),
+                ('GET', '/v1/%s/foo' % path),
+            ])
+        self.assertEqual(payload, resp_body)
+
     def test_list_container_no_shunt(self):
         req = swob.Request.blank(
             '/v1/AUTH_a/foo',
