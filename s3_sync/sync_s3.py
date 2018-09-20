@@ -14,6 +14,26 @@ See the License for the specific language governing permissions and
 limitations under the License.
 """
 
+# Versions of botocore prior to 1.5.79 only support HTTP proxies via the
+# standard environment variables. This is a problem if you want to proxy
+# S3 connections but not local Swift ones.
+# If we're running an older version of botocore, monkey patch it to
+# allow us to set them via botocore.endpoint.proxies ourselves.
+from distutils.version import LooseVersion
+import botocore.endpoint
+if botocore.__version__ < LooseVersion("1.5.79"):
+    botocore.endpoint.EndpointCreator.__get_proxies =\
+        botocore.endpoint.EndpointCreator._get_proxies
+
+    def _get_proxies(self, url):
+        try:
+            return botocore.endpoint.proxies
+        except AttributeError:
+            return botocore.endpoint.EndpointCreator.__get_proxies(
+                self,
+                url)
+    botocore.endpoint.EndpointCreator._get_proxies = _get_proxies
+
 import boto3
 import botocore.exceptions
 from botocore.handlers import (
@@ -67,6 +87,7 @@ class SyncS3(BaseSync):
         aws_identity = self.settings['aws_identity']
         aws_secret = self.settings['aws_secret']
         self.encryption = self.settings.get('encryption', True)
+        proxies = self.settings.get('proxies', {})
 
         session_kwargs = {
             'aws_access_key_id': aws_identity,
@@ -79,8 +100,18 @@ class SyncS3(BaseSync):
         if not self.endpoint or self.endpoint.endswith('amazonaws.com'):
             # We always use v4 signer with Amazon, as it will support all
             # regions.
-            boto_config = boto3.session.Config(signature_version='s3v4',
-                                               s3={'aws_chunked': True})
+
+            # If this version of botocore supports proxy configuration, set it
+            # via config. Otherwise, exploit our little hack above to
+            # force it to use botocore.endpoint.proxies.
+            if botocore.__version__ < LooseVersion("1.5.79"):
+                botocore.endpoint.proxies = proxies
+                boto_config = boto3.session.Config(signature_version='s3v4',
+                                                   s3={'aws_chunked': True})
+            else:
+                boto_config = boto3.session.Config(signature_version='s3v4',
+                                                   s3={'aws_chunked': True},
+                                                   proxies=proxies)
         else:
             # For the other providers, we default to v2 signer, as a lot of
             # them don't support v4 (e.g. Google)
