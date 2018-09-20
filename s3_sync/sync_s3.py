@@ -288,7 +288,7 @@ class SyncS3(BaseSync):
     def head_bucket(self, bucket=None, **options):
         if not bucket:
             bucket = self.aws_bucket
-        return self._call_boto('head_bucket', bucket, None, **options)
+        return self._call_boto('head_bucket', Bucket=bucket, **options)
 
     def post_object(self, swift_key, headers):
         s3_key = self.get_s3_name(swift_key)
