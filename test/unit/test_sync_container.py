@@ -20,7 +20,7 @@ import time
 import unittest
 
 from container_crawler import RetryError
-from s3_sync.sync_container import SyncContainer
+from s3_sync.sync_container import SyncContainer, SyncContainerFactory
 from s3_sync.sync_s3 import SyncS3
 from s3_sync.sync_swift import SyncSwift
 from swift.common.utils import decode_timestamps, Timestamp
@@ -514,3 +514,22 @@ class TestSyncContainer(unittest.TestCase):
         # Make sure that we do not make any additional calls
         self.assertEqual([mock.call.delete_object(row['name'])],
                          sync.provider.mock_calls)
+
+
+class TestSyncContainerFactory(unittest.TestCase):
+    def test_missing_status_dir(self):
+        with self.assertRaises(RuntimeError) as ctx:
+            SyncContainerFactory({})
+        self.assertIn('status_dir', ctx.exception.message)
+
+    def test_instance(self):
+        status_dir = '/foo/bar'
+        instance_settings = {'aws_bucket': 'bucket',
+                             'aws_identity': 'identity',
+                             'aws_secret': 'credential',
+                             'account': 'account',
+                             'container': 'container'}
+        factory = SyncContainerFactory({'status_dir': status_dir})
+        instance = factory.instance(instance_settings, per_account=True)
+        self.assertEqual(status_dir, instance._status_dir)
+        self.assertTrue(instance._per_account)

@@ -33,7 +33,7 @@ def main():
     initialize_loggers(conf)
     load_swift(LOGGER_NAME, args.once)
 
-    from .sync_container import SyncContainer
+    from .sync_container import SyncContainerFactory
     logger = logging.getLogger(LOGGER_NAME)
     logger.debug('Starting S3Sync')
 
@@ -49,9 +49,10 @@ def main():
     # trade-off to avoid doing useless work. The value is in minutes.
     if 'verification_slack' not in conf:
         conf['verification_slack'] = 60
+    factory = SyncContainerFactory(conf)
 
     try:
-        crawler = ContainerCrawler(conf, SyncContainer, logger)
+        crawler = ContainerCrawler(conf, factory, logger)
         if args.once:
             crawler.run_once()
         else:

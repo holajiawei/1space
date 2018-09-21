@@ -162,3 +162,17 @@ class SyncContainer(container_crawler.base_sync.BaseSync):
                 except UnexpectedResponse as e:
                     if '409 Conflict' in e.message:
                         pass
+
+
+class SyncContainerFactory(object):
+    def __init__(self, config):
+        if not config.get('status_dir'):
+            raise RuntimeError('Configuration option "status_dir" is missing')
+        self.config = config
+
+    def __str__(self):
+        return 'SyncContainer'
+
+    def instance(self, settings, per_account=False):
+        return SyncContainer(
+            self.config['status_dir'], settings, per_account=per_account)
