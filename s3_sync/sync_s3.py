@@ -143,7 +143,7 @@ class SyncS3(BaseSync):
         except UnexpectedResponse as e:
             if '404 Not Found' in e.message:
                 return
-            raise False
+            raise
 
         if not match_item(metadata, self.selection_criteria):
             self.logger.debug(

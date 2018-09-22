@@ -28,6 +28,7 @@ import mock
 from s3_sync.sync_s3 import SyncS3
 from s3_sync import utils
 from swift.common import swob
+from swift.common.internal_client import UnexpectedResponse
 import unittest
 from utils import FakeStream
 
@@ -1645,3 +1646,25 @@ class TestSyncS3(unittest.TestCase):
             MaxKeys=10)
         self.assertEqual(500, resp.status)
         self.assertIn('failed to list', resp.body)
+
+    def test_upload_object_head_failure(self):
+        self.mock_boto3_client.head_object.side_effect = ClientError(
+            dict(Error=dict(Code='ServerError', Message='failed to HEAD'),
+                 ResponseMetadata=dict(HTTPStatusCode=500, HTTPHeaders={})),
+            'head_object')
+
+        with self.assertRaises(ClientError) as context:
+            self.sync_s3.upload_object('key', 0, mock.Mock())
+
+        self.assertIn('failed to HEAD',
+                      context.exception.response['Error']['Message'])
+
+    def test_upload_object_internal_client_head_failure(self):
+        self.mock_boto3_client.head_object.return_value = {}
+        mock_ic = mock.Mock(get_object_metadata=mock.Mock(
+            side_effect=UnexpectedResponse('tragic error', None)))
+
+        with self.assertRaises(UnexpectedResponse) as context:
+            self.sync_s3.upload_object('key', 0, mock_ic)
+
+        self.assertIn('tragic error', context.exception.message)
