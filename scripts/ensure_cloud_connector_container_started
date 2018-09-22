@@ -13,7 +13,7 @@ cd "$MYDIR"/..
 test -f ./port-mapping.env && . ./port-mapping.env
 
 # Build the image
-docker pull $(grep -ioP -m 1 '(?<=^from)\s+\S+' containers/cloud-connector/Dockerfile)
+docker pull $(awk 'tolower($1) == "from" && NF == 2{print $2;exit}' containers/cloud-connector/Dockerfile)
 docker build -t cloud-connector-wheel --cache-from cloud-connector-wheel:latest --target wheel -f containers/cloud-connector/Dockerfile .
 docker build --cache-from cloud-connector:latest --cache-from cloud-connector-wheel:latest -t cloud-connector -f containers/cloud-connector/Dockerfile .
 
