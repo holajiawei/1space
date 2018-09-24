@@ -88,6 +88,79 @@ class TestCloudSync(TestCloudSyncBase):
                           'crazy-target:slashc2/c2.o1'],
                          self.get_swift_tree(target_conn))
 
+        clear_swift_container(target_conn, 'crazy-target:slashc1')
+        clear_swift_container(target_conn, 'crazy-target:slashc2')
+        clear_swift_container(conn, 'slashc1')
+        clear_swift_container(conn, 'slashc2')
+        target_conn.delete_container('crazy-target:slashc1')
+        target_conn.delete_container('crazy-target:slashc2')
+        conn.delete_container('slashc1')
+        conn.delete_container('slashc2')
+
+    def test_swift_sync_account_slo(self):
+        mapping = self._find_mapping(
+            lambda m: m['aws_bucket'] == 'crazy-target:')
+        target_conn = self.conn_for_acct_noshunt(mapping['aws_account'])
+
+        container = 'test-slo'
+        key = 'slo'
+        content = 'A' * 1024 + 'B' * 1024
+        manifest = [
+            {'size_bytes': 1024, 'path': '/segments/part1'},
+            {'size_bytes': 1024, 'path': '/segments/part2'}]
+        conn = self.conn_for_acct(mapping['account'])
+        conn.put_container('segments')
+        conn.put_container(container)
+        conn.put_object('segments', 'part1', content[:1024])
+        conn.put_object('segments', 'part2', content[1024:])
+        conn.put_object(container, key,
+                        json.dumps(manifest),
+                        query_string='multipart-manifest=put')
+
+        def _check_synced():
+            try:
+                return self.remote_swift(
+                    'head_object',
+                    mapping['aws_bucket'] + container,
+                    key)
+            except Exception:
+                return False
+
+        try:
+            wait_for_condition(5, _check_synced)
+        except WaitTimedOut:
+            pass
+
+        hdrs = target_conn.head_object(
+            mapping['aws_bucket'] + 'segments', 'part1')
+        self.assertEqual(1024, int(hdrs['content-length']))
+        self.assertEqual(hashlib.md5(content[:1024]).hexdigest(),
+                         hdrs['etag'])
+        hdrs = target_conn.head_object(
+            mapping['aws_bucket'] + 'segments', 'part2')
+        self.assertEqual(1024, int(hdrs['content-length']))
+        self.assertEqual(hashlib.md5(content[1024:]).hexdigest(),
+                         hdrs['etag'])
+
+        slo_etag = hashlib.md5(''.join([
+            hashlib.md5(content[:1024]).hexdigest(),
+            hashlib.md5(content[1024:]).hexdigest()])).hexdigest()
+        hdrs = target_conn.head_object(
+            mapping['aws_bucket'] + container, key)
+        self.assertEqual(2048, int(hdrs['content-length']))
+        self.assertEqual('"%s"' % slo_etag, hdrs['etag'])
+
+        clear_swift_container(
+            target_conn, mapping['aws_bucket'] + container)
+        clear_swift_container(
+            target_conn, mapping['aws_bucket'] + 'segments')
+        clear_swift_container(conn, container)
+        clear_swift_container(conn, 'segments')
+        target_conn.delete_container(mapping['aws_bucket'] + container)
+        target_conn.delete_container(mapping['aws_bucket'] + 'segments')
+        conn.delete_container(container)
+        conn.delete_container('segments')
+
     def test_s3_sync(self):
         s3_mapping = self.s3_sync_mapping()
 

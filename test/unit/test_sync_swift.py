@@ -504,6 +504,100 @@ class TestSyncSwift(unittest.TestCase):
                       headers=swift_req_headers)])
 
     @mock.patch('s3_sync.sync_swift.swiftclient.client.Connection')
+    def test_slo_upload_per_account(self, mock_swift):
+        slo_key = 'slo-object'
+        storage_policy = 42
+        segment_container = 'segment_container'
+        swift_req_headers = {'X-Backend-Storage-Policy-Index': storage_policy,
+                             'X-Newest': True}
+        manifest = [{'name': '/%s/slo-object/part1' % segment_container,
+                     'hash': 'deadbeef',
+                     'bytes': 1024},
+                    {'name': '/%s/slo-object/part2' % segment_container,
+                     'hash': 'beefdead',
+                     'bytes': 1024}]
+
+        not_found = swiftclient.exceptions.ClientException(
+            'not found', http_status=404, http_response_headers={})
+        swift_client = mock.Mock()
+        mock_swift.return_value = swift_client
+        swift_client.head_object.side_effect = not_found
+        swift_client.get_object.side_effect = not_found
+
+        def get_metadata(account, container, key, headers):
+            if key == slo_key:
+                return {utils.SLO_HEADER: 'True',
+                        'Content-Type': 'application/slo'}
+            raise RuntimeError('Unknown key')
+
+        def get_object(account, container, key, headers):
+            if key == slo_key:
+                return (200, {utils.SLO_HEADER: 'True',
+                              'Content-Type': 'application/slo'},
+                        FakeStream(content=json.dumps(manifest)))
+            if container == 'segment_container':
+                if key == 'slo-object/part1':
+                    return (200, {'Content-Length': 1024}, FakeStream(1024))
+                elif key == 'slo-object/part2':
+                    return (200, {'Content-Length': 1024}, FakeStream(1024))
+            raise RuntimeError('Unknown key!')
+
+        mock_ic = mock.Mock()
+        mock_ic.get_object_metadata.side_effect = get_metadata
+        mock_ic.get_object.side_effect = get_object
+
+        mapping = dict(self.mapping)
+        mapping['aws_bucket'] = 'prefix-'
+        sync_swift = SyncSwift(
+            mapping, max_conns=self.max_conns,
+            per_account=True)
+        sync_swift.upload_object(slo_key, storage_policy, mock_ic)
+
+        swift_client.head_object.assert_called_once_with(
+            mapping['aws_bucket'] + mapping['container'], slo_key, headers={})
+        swift_client.put_object.assert_has_calls([
+            mock.call(mapping['aws_bucket'] + segment_container,
+                      'slo-object/part1', mock.ANY, etag='deadbeef',
+                      content_length=1024, headers={}),
+            mock.call(mapping['aws_bucket'] + segment_container,
+                      'slo-object/part2', mock.ANY, etag='beefdead',
+                      content_length=1024, headers={}),
+            mock.call(mapping['aws_bucket'] + mapping['container'], slo_key,
+                      mock.ANY,
+                      headers={'Content-Type': 'application/slo'},
+                      query_string='multipart-manifest=put')
+        ])
+
+        expected_manifest = [
+            {'path': '/%s/%s' % (mapping['aws_bucket'] + segment_container,
+                                 'slo-object/part1'),
+             'size_bytes': 1024,
+             'etag': 'deadbeef'},
+            {'path': '/%s/%s' % (mapping['aws_bucket'] + segment_container,
+                                 'slo-object/part2'),
+             'size_bytes': 1024,
+             'etag': 'beefdead'}]
+
+        called_manifest = json.loads(
+            swift_client.put_object.mock_calls[-1][1][2])
+        self.assertEqual(len(expected_manifest), len(called_manifest))
+        for index, segment in enumerate(expected_manifest):
+            called_segment = called_manifest[index]
+            self.assertEqual(set(segment.keys()), set(called_segment.keys()))
+            for k in segment.keys():
+                self.assertEqual(segment[k], called_segment[k])
+
+        mock_ic.get_object_metadata.assert_called_once_with(
+            'account', 'container', slo_key, headers=swift_req_headers)
+        mock_ic.get_object.assert_has_calls([
+            mock.call('account', 'container', slo_key,
+                      headers=swift_req_headers),
+            mock.call('account', segment_container, 'slo-object/part1',
+                      headers=swift_req_headers),
+            mock.call('account', segment_container, 'slo-object/part2',
+                      headers=swift_req_headers)])
+
+    @mock.patch('s3_sync.sync_swift.swiftclient.client.Connection')
     def test_slo_metadata_update(self, mock_swift):
         key = 'key'
         storage_policy = 42

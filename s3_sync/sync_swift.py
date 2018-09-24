@@ -53,9 +53,11 @@ class SyncSwift(BaseSync):
             # In this case the aws_bucket is treated as a prefix
             return self.aws_bucket + self.container
 
-    @property
-    def remote_segments_container(self):
-        return self.remote_container + '_segments'
+    def remote_segments_container(self, container):
+        if self._per_account:
+            return self.aws_bucket + container
+        else:
+            return self.remote_container + '_segments'
 
     def _get_client_factory(self):
         # TODO: support LDAP auth
@@ -455,12 +457,13 @@ class SyncSwift(BaseSync):
         if errors:
             raise RuntimeError('Failed to upload an SLO %s' % name)
 
-        # we need to mutate the container in the manifest
-        container = self.remote_segments_container
         new_manifest = []
         for segment in manifest:
-            _, obj = segment['name'].split('/', 2)[1:]
-            new_manifest.append(dict(path='/%s/%s' % (container, obj),
+            segment_container, obj = segment['name'].split('/', 2)[1:]
+            path = '/%s/%s' % (
+                self.remote_segments_container(segment_container), obj)
+
+            new_manifest.append(dict(path=path,
                                      etag=segment['hash'],
                                      size_bytes=segment['bytes']))
 
@@ -520,6 +523,7 @@ class SyncSwift(BaseSync):
 
     def _upload_segment(self, segment, req_headers, internal_client):
         container, obj = segment['name'].split('/', 2)[1:]
+        dst_container = self.remote_segments_container(container)
         with self.client_pool.get_client() as swift_client:
             wrapper = FileWrapper(internal_client, self.account, container,
                                   obj, req_headers)
@@ -530,20 +534,19 @@ class SyncSwift(BaseSync):
                 seg_headers.update(
                     {'x-delete-after': self.remote_delete_after})
             try:
-                swift_client.put_object(self.remote_segments_container,
-                                        obj, wrapper,
+                swift_client.put_object(dst_container, obj, wrapper,
                                         etag=segment['hash'],
                                         content_length=len(wrapper),
                                         headers=seg_headers)
             except swiftclient.exceptions.ClientException as e:
                 # The segments may not exist, so we need to create it
                 if e.http_status == 404:
-                    self.logger.debug('Creating a segments container %s' % (
-                        self.remote_segments_container))
+                    self.logger.debug('Creating a segments container %s' %
+                                      dst_container)
                     # Creating a container may take some (small) amount of time
                     # and we should attempt to re-upload in the following
                     # iteration
-                    swift_client.put_container(self.remote_segments_container,
+                    swift_client.put_container(dst_container,
                                                headers=self._client_headers())
                     raise RuntimeError('Missing segments container')
 
