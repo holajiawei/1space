@@ -126,10 +126,11 @@ class SyncSwift(BaseSync):
         headers.update(self.extra_headers)
         return headers
 
-    def post_object(self, swift_key, headers):
+    def post_object(self, swift_key, headers, container=None):
+        if not container:
+            container = self.remote_container
         return self._call_swiftclient(
-            'post_object', self.remote_container, swift_key,
-            headers=headers)
+            'post_object', container, swift_key, headers=headers)
 
     def head_account(self):
         return self._call_swiftclient('head_account', None, None)
@@ -152,70 +153,14 @@ class SyncSwift(BaseSync):
                                                headers=self._client_headers())
             self.verified_container = True
 
-        try:
-            with self.client_pool.get_client() as swift_client:
-                remote_meta = swift_client.head_object(
-                    self.remote_container, swift_key,
-                    headers=self._client_headers())
-        except swiftclient.exceptions.ClientException as e:
-            if e.http_status == 404:
-                remote_meta = None
-            else:
-                raise
-
         swift_req_hdrs = {
             'X-Backend-Storage-Policy-Index': policy,
             'X-Newest': True
         }
 
-        try:
-            metadata = internal_client.get_object_metadata(
-                self.account, self.container, swift_key,
-                headers=swift_req_hdrs)
-        except UnexpectedResponse as e:
-            if '404 Not Found' in e.message:
-                return True
-            raise
-
-        if not match_item(metadata, self.selection_criteria):
-            self.logger.debug(
-                'Not archiving %s as metadata does not match: %s %s' % (
-                    swift_key, metadata, self.selection_criteria))
-            return False
-
-        if check_slo(metadata):
-            if remote_meta and self._check_slo_uploaded(
-                    swift_key, remote_meta, internal_client, swift_req_hdrs):
-                if not self._is_meta_synced(metadata, remote_meta):
-                    self.update_metadata(swift_key, metadata)
-                return True
-            self._upload_slo(swift_key, swift_req_hdrs, internal_client)
-            return True
-
-        if remote_meta and metadata['etag'] == remote_meta['etag']:
-            if not self._is_meta_synced(metadata, remote_meta):
-                self.update_metadata(swift_key, metadata)
-            return True
-
-        with self.client_pool.get_client() as swift_client:
-            wrapper_stream = FileWrapper(internal_client,
-                                         self.account,
-                                         self.container,
-                                         swift_key,
-                                         swift_req_hdrs)
-            headers = self._get_user_headers(wrapper_stream.get_headers())
-            if self.remote_delete_after:
-                headers.update({'x-delete-after': self.remote_delete_after})
-            self.logger.debug('Uploading %s with meta: %r' % (
-                swift_key, headers))
-
-            swift_client.put_object(self.remote_container,
-                                    swift_key,
-                                    wrapper_stream,
-                                    etag=wrapper_stream.get_headers()['etag'],
-                                    headers=self._client_headers(headers),
-                                    content_length=len(wrapper_stream))
-        return True
+        return self._upload_object(
+            self.container, self.remote_container, swift_key, swift_req_hdrs,
+            internal_client, segment=False)
 
     def delete_object(self, swift_key):
         """Delete an object from the remote cluster.
@@ -402,6 +347,73 @@ class SyncSwift(BaseSync):
             with self.client_pool.get_client() as swift_client:
                 return _perform_op(swift_client)
 
+    def _upload_object(self, src_container, dst_container, key, req_hdrs,
+                       internal_client, segment=False):
+        try:
+            with self.client_pool.get_client() as swift_client:
+                remote_meta = swift_client.head_object(
+                    dst_container, key, headers=self._client_headers())
+        except swiftclient.exceptions.ClientException as e:
+            if e.http_status == 404:
+                remote_meta = None
+            else:
+                raise
+
+        try:
+            metadata = internal_client.get_object_metadata(
+                self.account, src_container, key,
+                headers=req_hdrs)
+        except UnexpectedResponse as e:
+            if '404 Not Found' in e.message:
+                return True
+            raise
+
+        if not segment and not match_item(metadata, self.selection_criteria):
+            self.logger.debug(
+                'Not archiving %s as metadata does not match: %s %s' % (
+                    key, metadata, self.selection_criteria))
+            return False
+
+        if check_slo(metadata):
+            if segment:
+                self.logger.warning(
+                    'Nested SLOs are not currently supported. Failing to '
+                    'upload: %s/%s/%s' % (self.account, src_container, key))
+                return False
+
+            if remote_meta and self._check_slo_uploaded(
+                    key, remote_meta, internal_client, req_hdrs):
+                if not self._is_meta_synced(metadata, remote_meta):
+                    self.update_metadata(key, metadata, dst_container)
+                return True
+            self._upload_slo(key, req_hdrs, internal_client)
+            return True
+
+        if remote_meta and metadata['etag'] == remote_meta['etag']:
+            if not self._is_meta_synced(metadata, remote_meta):
+                self.update_metadata(key, metadata, dst_container)
+            return True
+
+        with self.client_pool.get_client() as swift_client:
+            wrapper_stream = FileWrapper(internal_client,
+                                         self.account,
+                                         src_container,
+                                         key,
+                                         req_hdrs)
+            headers = self._get_user_headers(wrapper_stream.get_headers())
+            if self.remote_delete_after:
+                headers.update({'x-delete-after': self.remote_delete_after})
+            self.logger.debug('Uploading %s with meta: %r' % (
+                key, headers))
+
+            swift_client.put_object(dst_container,
+                                    key,
+                                    wrapper_stream,
+                                    etag=wrapper_stream.get_headers()['etag'],
+                                    headers=self._client_headers(headers),
+                                    content_length=len(wrapper_stream))
+        return True
+
     def _make_content_location(self, bucket):
         # If the identity gets in here as UTF8-encoded string (e.g. through the
         # verify command's CLI, if the creds contain Unicode chars), then it
@@ -426,9 +438,9 @@ class SyncSwift(BaseSync):
             entry['content_location'] = self._make_content_location(bucket)
         return resp
 
-    def update_metadata(self, swift_key, metadata):
+    def update_metadata(self, swift_key, metadata, container=None):
         user_headers = self._get_user_headers(metadata)
-        self.post_object(swift_key, user_headers)
+        self.post_object(swift_key, user_headers, container)
 
     def _upload_slo(self, name, swift_headers, internal_client):
         headers, manifest = self._get_internal_manifest(
@@ -524,31 +536,23 @@ class SyncSwift(BaseSync):
     def _upload_segment(self, segment, req_headers, internal_client):
         container, obj = segment['name'].split('/', 2)[1:]
         dst_container = self.remote_segments_container(container)
-        with self.client_pool.get_client() as swift_client:
-            wrapper = FileWrapper(internal_client, self.account, container,
-                                  obj, req_headers)
-            self.logger.debug('Uploading segment %s: %s bytes' % (
-                self.account + segment['name'], segment['bytes']))
-            seg_headers = self._client_headers()
-            if self.remote_delete_after:
-                seg_headers.update(
-                    {'x-delete-after': self.remote_delete_after})
-            try:
-                swift_client.put_object(dst_container, obj, wrapper,
-                                        etag=segment['hash'],
-                                        content_length=len(wrapper),
-                                        headers=seg_headers)
-            except swiftclient.exceptions.ClientException as e:
-                # The segments may not exist, so we need to create it
-                if e.http_status == 404:
-                    self.logger.debug('Creating a segments container %s' %
-                                      dst_container)
-                    # Creating a container may take some (small) amount of time
-                    # and we should attempt to re-upload in the following
-                    # iteration
+
+        try:
+            self._upload_object(
+                container, dst_container, obj, req_headers,
+                internal_client, segment=True)
+        except swiftclient.exceptions.ClientException as e:
+            # The segments may not exist, so we need to create it
+            if e.http_status == 404:
+                self.logger.debug('Creating a segments container %s' %
+                                  dst_container)
+                # Creating a container may take some (small) amount of time
+                # and we should attempt to re-upload in the following
+                # iteration
+                with self.client_pool.get_client() as swift_client:
                     swift_client.put_container(dst_container,
                                                headers=self._client_headers())
-                    raise RuntimeError('Missing segments container')
+                raise RuntimeError('Missing segments container')
 
     def _check_slo_uploaded(self, key, remote_meta, internal_client,
                             swift_req_hdrs):

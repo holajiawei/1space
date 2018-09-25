@@ -345,7 +345,9 @@ class TestSyncSwift(unittest.TestCase):
             if key == slo_key:
                 return {utils.SLO_HEADER: 'True',
                         'Content-Type': 'application/slo'}
-            raise RuntimeError('Unknown key')
+            if key == 'slo-object/part1' or key == 'slo-object/part2':
+                return {}
+            raise RuntimeError('Unknown key: %s' % key)
 
         def get_object(account, container, key, headers):
             if key == slo_key:
@@ -354,10 +356,12 @@ class TestSyncSwift(unittest.TestCase):
                         FakeStream(content=json.dumps(manifest)))
             if container == 'segment_container':
                 if key == 'slo-object/part1':
-                    return (200, {'Content-Length': 1024}, FakeStream(1024))
+                    return (200, {'Content-Length': 1024, 'etag': 'deadbeef'},
+                            FakeStream(1024))
                 elif key == 'slo-object/part2':
-                    return (200, {'Content-Length': 1024}, FakeStream(1024))
-            raise RuntimeError('Unknown key!')
+                    return (200, {'Content-Length': 1024, 'etag': 'beefdead'},
+                            FakeStream(1024))
+            raise RuntimeError('Unknown key: %s' % key)
 
         mock_ic = mock.Mock()
         mock_ic.get_object_metadata.side_effect = get_metadata
@@ -365,8 +369,12 @@ class TestSyncSwift(unittest.TestCase):
 
         self.sync_swift.upload_object(slo_key, storage_policy, mock_ic)
 
-        swift_client.head_object.assert_called_once_with(
-            self.aws_bucket, slo_key, headers={})
+        swift_client.head_object.assert_has_calls([
+            mock.call(self.aws_bucket, slo_key, headers={}),
+            mock.call(self.aws_bucket + '_segments', 'slo-object/part1',
+                      headers={}),
+            mock.call(self.aws_bucket + '_segments', 'slo-object/part2',
+                      headers={})])
         segment_container = self.aws_bucket + '_segments'
         swift_client.put_object.assert_has_calls([
             mock.call(segment_container,
@@ -400,8 +408,13 @@ class TestSyncSwift(unittest.TestCase):
             for k in segment.keys():
                 self.assertEqual(segment[k], called_segment[k])
 
-        mock_ic.get_object_metadata.assert_called_once_with(
-            'account', 'container', slo_key, headers=swift_req_headers)
+        mock_ic.get_object_metadata.assert_has_calls(
+            [mock.call('account', 'container', slo_key,
+                       headers=swift_req_headers),
+             mock.call('account', 'segment_container', 'slo-object/part1',
+                       headers=swift_req_headers),
+             mock.call('account', 'segment_container', 'slo-object/part2',
+                       headers=swift_req_headers)])
         mock_ic.get_object.assert_has_calls([
             mock.call('account', 'container', slo_key,
                       headers=swift_req_headers),
@@ -437,6 +450,8 @@ class TestSyncSwift(unittest.TestCase):
             if key == slo_key:
                 return {utils.SLO_HEADER: 'True',
                         'Content-Type': 'application/slo'}
+            if key.startswith('slo-object/'):
+                return {}
             raise RuntimeError('Unknown key')
 
         def get_object(account, container, key, headers):
@@ -446,9 +461,11 @@ class TestSyncSwift(unittest.TestCase):
                         FakeStream(content=json.dumps(manifest)))
             if container == 'segment_container':
                 if key == 'slo-object/part1':
-                    return (200, {'Content-Length': 1024}, FakeStream(1024))
+                    return (200, {'Content-Length': 1024, 'etag': 'deadbeef'},
+                            FakeStream(1024))
                 elif key == 'slo-object/part2':
-                    return (200, {'Content-Length': 1024}, FakeStream(1024))
+                    return (200, {'Content-Length': 1024, 'etag': 'beefdead'},
+                            FakeStream(1024))
             raise RuntimeError('Unknown key!')
 
         mock_ic = mock.Mock()
@@ -457,8 +474,14 @@ class TestSyncSwift(unittest.TestCase):
 
         self.sync_swift.upload_object(slo_key, storage_policy, mock_ic)
 
-        swift_client.head_object.assert_called_once_with(
-            self.aws_bucket, slo_key, headers={'a': 'b', 'c': 'd'})
+        swift_client.head_object.assert_has_calls(
+            [mock.call(self.aws_bucket, slo_key,
+                       headers={'a': 'b', 'c': 'd'}),
+             mock.call(self.aws_bucket + '_segments', 'slo-object/part1',
+                       headers={'a': 'b', 'c': 'd'}),
+             mock.call(self.aws_bucket + '_segments', 'slo-object/part2',
+                       headers={'a': 'b', 'c': 'd'})])
+
         segment_container = self.aws_bucket + '_segments'
         swift_client.put_object.assert_has_calls([
             mock.call(segment_container,
@@ -493,8 +516,14 @@ class TestSyncSwift(unittest.TestCase):
             for k in segment.keys():
                 self.assertEqual(segment[k], called_segment[k])
 
-        mock_ic.get_object_metadata.assert_called_once_with(
-            'account', 'container', slo_key, headers=swift_req_headers)
+        mock_ic.get_object_metadata.assert_has_calls(
+            [mock.call('account', 'container', slo_key,
+                       headers=swift_req_headers),
+             mock.call('account', 'segment_container', 'slo-object/part1',
+                       headers=swift_req_headers),
+             mock.call('account', 'segment_container', 'slo-object/part2',
+                       headers=swift_req_headers)])
+
         mock_ic.get_object.assert_has_calls([
             mock.call('account', 'container', slo_key,
                       headers=swift_req_headers),
@@ -528,6 +557,8 @@ class TestSyncSwift(unittest.TestCase):
             if key == slo_key:
                 return {utils.SLO_HEADER: 'True',
                         'Content-Type': 'application/slo'}
+            if key.startswith('slo-object/part'):
+                return {}
             raise RuntimeError('Unknown key')
 
         def get_object(account, container, key, headers):
@@ -537,9 +568,11 @@ class TestSyncSwift(unittest.TestCase):
                         FakeStream(content=json.dumps(manifest)))
             if container == 'segment_container':
                 if key == 'slo-object/part1':
-                    return (200, {'Content-Length': 1024}, FakeStream(1024))
+                    return (200, {'Content-Length': 1024, 'etag': 'deadbeef'},
+                            FakeStream(1024))
                 elif key == 'slo-object/part2':
-                    return (200, {'Content-Length': 1024}, FakeStream(1024))
+                    return (200, {'Content-Length': 1024, 'etag': 'beefdead'},
+                            FakeStream(1024))
             raise RuntimeError('Unknown key!')
 
         mock_ic = mock.Mock()
@@ -553,8 +586,14 @@ class TestSyncSwift(unittest.TestCase):
             per_account=True)
         sync_swift.upload_object(slo_key, storage_policy, mock_ic)
 
-        swift_client.head_object.assert_called_once_with(
-            mapping['aws_bucket'] + mapping['container'], slo_key, headers={})
+        swift_client.head_object.assert_has_calls(
+            [mock.call(mapping['aws_bucket'] + mapping['container'], slo_key,
+                       headers={}),
+             mock.call(mapping['aws_bucket'] + 'segment_container',
+                       'slo-object/part1', headers={}),
+             mock.call(mapping['aws_bucket'] + 'segment_container',
+                       'slo-object/part2', headers={})])
+
         swift_client.put_object.assert_has_calls([
             mock.call(mapping['aws_bucket'] + segment_container,
                       'slo-object/part1', mock.ANY, etag='deadbeef',
@@ -587,8 +626,13 @@ class TestSyncSwift(unittest.TestCase):
             for k in segment.keys():
                 self.assertEqual(segment[k], called_segment[k])
 
-        mock_ic.get_object_metadata.assert_called_once_with(
-            'account', 'container', slo_key, headers=swift_req_headers)
+        mock_ic.get_object_metadata.assert_has_calls(
+            [mock.call('account', 'container', slo_key,
+                       headers=swift_req_headers),
+             mock.call('account', 'segment_container', 'slo-object/part1',
+                       headers=swift_req_headers),
+             mock.call('account', 'segment_container', 'slo-object/part2',
+                       headers=swift_req_headers)])
         mock_ic.get_object.assert_has_calls([
             mock.call('account', 'container', slo_key,
                       headers=swift_req_headers),

@@ -898,6 +898,53 @@ class TestCloudSync(TestCloudSyncBase):
                     old_headers[(cont, obj)]['x-timestamp'],
                     hdrs['x-timestamp'])
 
+    def test_swift_sync_same_segments_slo(self):
+        '''Uploading the same SLO manifest should not duplicate segments'''
+        content = 'A' * 2048
+        key = 'test_slo'
+        mapping = self.swift_sync_mapping()
+        manifest = [
+            {'size_bytes': 1024, 'path': '/segments/part1'},
+            {'size_bytes': 1024, 'path': '/segments/part2'}]
+        self.local_swift('put_container', 'segments')
+        self.local_swift('put_object', 'segments', 'part1', content[:1024])
+        self.local_swift('put_object', 'segments', 'part2', content[1024:])
+        self.local_swift('put_object', mapping['container'], key,
+                         json.dumps(manifest),
+                         query_string='multipart-manifest=put')
+
+        def _check_slo(test_key):
+            try:
+                return self.remote_swift(
+                    'head_object', mapping['aws_bucket'], test_key)
+            except swiftclient.exceptions.ClientException as e:
+                if e.http_status == 404:
+                    return False
+                raise
+
+        wait_for_condition(10, lambda: _check_slo(key))
+
+        # record the last-modified date, so we can check that segments are not
+        # re-uploaded
+        remote_objects = [
+            ('%s_segments' % mapping['aws_bucket'], 'part1'),
+            ('%s_segments' % mapping['aws_bucket'], 'part2')]
+        old_headers = {}
+        for cont, obj in remote_objects:
+            old_headers[(cont, obj)] = self.remote_swift(
+                'head_object', cont, obj)
+
+        new_slo = 'test_slo2'
+        self.local_swift(
+            'put_object', mapping['container'], new_slo, json.dumps(manifest),
+            query_string='multipart-manifest=put')
+
+        wait_for_condition(5, lambda: _check_slo(new_slo))
+        for cont, obj in remote_objects:
+            hdrs = self.remote_swift('head_object', cont, obj)
+            self.assertEqual(
+                old_headers[(cont, obj)]['x-timestamp'], hdrs['x-timestamp'])
+
     def test_swift_shunt_post(self):
         content = 'shunt post'
         key = 'test_swift_shunt_post'
