@@ -723,6 +723,8 @@ class TestCloudSync(TestCloudSyncBase):
             {'size_bytes': 1024, 'path': '/segments/part1'},
             {'size_bytes': 1024, 'path': '/segments/part2'}]
         early_target_time = int(time.time() + mapping['remote_delete_after'])
+        early_seg_target_time = early_target_time + \
+            mapping['remote_delete_after_addition']
         conn = self.conn_for_acct(mapping['account'])
         conn.put_container('segments')
         conn.put_object('segments', 'part1', content[:1024])
@@ -741,17 +743,18 @@ class TestCloudSync(TestCloudSyncBase):
         hdrs = wait_for_condition(5, _check_synced)
         self.assertIn('x-delete-at', hdrs.keys())
         target_time = int(time.time() + mapping['remote_delete_after'])
+        seg_target_time = target_time + mapping['remote_delete_after_addition']
         self.assertTrue(int(hdrs['x-delete-at']) <= target_time)
         self.assertTrue(int(hdrs['x-delete-at']) >= early_target_time)
         seg_container = mapping['aws_bucket'] + '_segments'
         hdrs = self.remote_swift('head_object', seg_container, 'part1')
         self.assertIn('x-delete-at', hdrs.keys())
-        self.assertTrue(int(hdrs['x-delete-at']) <= target_time)
-        self.assertTrue(int(hdrs['x-delete-at']) >= early_target_time)
+        self.assertTrue(int(hdrs['x-delete-at']) <= seg_target_time)
+        self.assertTrue(int(hdrs['x-delete-at']) >= early_seg_target_time)
         hdrs = self.remote_swift('head_object', seg_container, 'part2')
         self.assertIn('x-delete-at', hdrs.keys())
-        self.assertTrue(int(hdrs['x-delete-at']) <= target_time)
-        self.assertTrue(int(hdrs['x-delete-at']) >= early_target_time)
+        self.assertTrue(int(hdrs['x-delete-at']) <= seg_target_time)
+        self.assertTrue(int(hdrs['x-delete-at']) >= early_seg_target_time)
 
     def test_swift_archive_slo_restore(self):
         content = 'A' * 2048

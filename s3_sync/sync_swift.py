@@ -37,6 +37,8 @@ try:
 except ImportError:
     pass
 
+DEFAULT_SEGMENT_DELAY = 60 * 60 * 24
+
 
 class SyncSwift(BaseSync):
     def __init__(self, *args, **kwargs):
@@ -44,6 +46,10 @@ class SyncSwift(BaseSync):
         # Used to verify the remote container in case of per_account uploads
         self.verified_container = False
         self.remote_delete_after = self.settings.get('remote_delete_after', 0)
+        # Remote delete after addition for segments (defaults to 24 hours)
+        self.remote_delete_after_addition = \
+            self.settings.get('remote_delete_after_addition',
+                              DEFAULT_SEGMENT_DELAY)
 
     @property
     def remote_container(self):
@@ -402,7 +408,10 @@ class SyncSwift(BaseSync):
                                          req_hdrs)
             headers = self._get_user_headers(wrapper_stream.get_headers())
             if self.remote_delete_after:
-                headers.update({'x-delete-after': self.remote_delete_after})
+                del_after = self.remote_delete_after
+                if segment:
+                    del_after += self.remote_delete_after_addition
+                headers.update({'x-delete-after': del_after})
             self.logger.debug('Uploading %s with meta: %r' % (
                 key, headers))
 
