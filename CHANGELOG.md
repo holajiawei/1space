@@ -1,3 +1,25 @@
+## 0.1.46 (2018-09-25)
+
+Improvements:
+
+    - The segment container names are preserved during Swift-\>Swift sync or
+      lifecycle data movements. This resolves an issue where a static large
+      object could have its segments copied twice during full account data
+      movement (once to place segments into a new container and one more time
+      when copying the original segments container).
+    - When uploading SLOs, check whether a segment has already been uploaded.
+      This reduces the amount of duplicated network traffic.
+    - When using the `remote_delete_after` option, segments are now set to
+      expire 1 day after the manifest (to make sure manifests are not
+      prematurely invalidated). A new configurable option
+      `remote_delete_after_addition` can be used to change the 24 hours value to
+      a different one.
+
+Bug fix:
+
+    - The shunt now returns the multi-part object from S3 even if the manifest
+      is missing (the object is unable to be restored, however).
+
 ## 0.1.45.1 (2018-09-14)
 
 Bug fixes:
