@@ -21,6 +21,8 @@ from s3_sync.utils import filter_hop_by_hop_headers
 
 from swift.common import swob
 
+LOGGER_NAME = 's3-sync'
+
 
 def match_item(metadata, matchdict):
     if len(matchdict) == 0:  # No criteria matches all
@@ -116,7 +118,7 @@ class BaseSync(object):
 
         def close(self):
             if self.semaphore.balance > BaseSync.HTTP_CONN_POOL_SIZE - 1:
-                logging.getLogger('s3-sync').error(
+                logging.getLogger(LOGGER_NAME).error(
                     'Detected double release of the semaphore')
                 raise RuntimeError('Detected double release of the semaphore!')
             self.semaphore.release()
@@ -191,7 +193,7 @@ class BaseSync(object):
         self.settings = settings
         self.account = settings['account']
         self.container = settings['container']
-        self.logger = logger or logging.getLogger('s3-sync')
+        self.logger = logger or logging.getLogger(LOGGER_NAME)
         self._per_account = per_account
         if '/' in self.container:
             raise ValueError('Invalid container name %r' % self.container)

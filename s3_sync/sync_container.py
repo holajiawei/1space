@@ -29,6 +29,8 @@ import container_crawler.base_sync
 from .provider_factory import create_provider
 from container_crawler import RetryError
 
+from .base_sync import LOGGER_NAME
+
 
 class SyncContainer(container_crawler.base_sync.BaseSync):
     # There is an implicit link between the names of the json fields and the
@@ -41,7 +43,7 @@ class SyncContainer(container_crawler.base_sync.BaseSync):
                  per_account=False):
         super(SyncContainer, self).__init__(
             status_dir, sync_settings, per_account)
-        self.logger = logging.getLogger('s3-sync')
+        self.logger = logging.getLogger(LOGGER_NAME)
         self.aws_bucket = sync_settings['aws_bucket']
         self.copy_after = int(sync_settings.get('copy_after', 0))
         self.retain_local = sync_settings.get('retain_local', True)

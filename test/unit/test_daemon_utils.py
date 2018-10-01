@@ -3,6 +3,7 @@ import s3_sync.daemon_utils
 import StringIO
 import sys
 import unittest
+import socket
 
 
 class TestDaemonUtils(unittest.TestCase):
@@ -94,3 +95,33 @@ class TestDaemonUtils(unittest.TestCase):
             mock.call('botocore'),
             mock.call().setLevel('INFO'),
             mock.call().addHandler(handler)])
+
+    @mock.patch('s3_sync.daemon_utils.logging')
+    def test_syslog_handler(self, logging_mock):
+        handler = logging_mock.handlers.RotatingFileHandler.return_value
+        syslog_handler = logging_mock.handlers.SysLogHandler.return_value
+        s3_sync.daemon_utils.setup_logger(
+            'test logger', {'log_file': '/test/test_file',
+                            'syslog': {'host': 'testhost'}})
+        logging_mock.handlers.SysLogHandler.assert_called_once_with(
+            address=('testhost', 514),
+            socktype=socket.SOCK_DGRAM)
+        logging_mock.getLogger.assert_has_calls([
+            mock.call('test logger'),
+            mock.call().setLevel('INFO'),
+            mock.call().addHandler(handler),
+            mock.call('boto3'),
+            mock.call().setLevel('INFO'),
+            mock.call().addHandler(handler),
+            mock.call('botocore'),
+            mock.call().setLevel('INFO'),
+            mock.call().addHandler(handler),
+            mock.call().debug('Using syslog'),
+            mock.call().setLevel('INFO'),
+            mock.call().addHandler(syslog_handler),
+            mock.call('boto3'),
+            mock.call().setLevel('INFO'),
+            mock.call().addHandler(syslog_handler),
+            mock.call('botocore'),
+            mock.call().setLevel('INFO'),
+            mock.call().addHandler(syslog_handler)])

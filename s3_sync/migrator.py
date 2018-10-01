@@ -44,6 +44,7 @@ from swift.common import swob
 from swift.common.internal_client import UnexpectedResponse
 from swift.common.utils import FileLikeIter, Timestamp, quote
 
+from .base_sync import LOGGER_NAME as S3_SYNC_LOGGER_NAME
 
 EQUAL = 0
 ETAG_DIFF = 1
@@ -1116,11 +1117,11 @@ def main():
         migrator_conf['log_level'] = args.log_level
     migrator_conf['console'] = args.console
 
-    handler = setup_logger(LOGGER_NAME, migrator_conf)
-    logger = logging.getLogger('s3_sync')
-    logger.addHandler(handler)
-
+    setup_logger(LOGGER_NAME, migrator_conf)
     load_swift(LOGGER_NAME, args.once)
+
+    # Also sure we have the s3-sync logger initialized
+    setup_logger(S3_SYNC_LOGGER_NAME, migrator_conf)
 
     logger = logging.getLogger(LOGGER_NAME)
 
