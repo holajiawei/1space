@@ -31,7 +31,8 @@ import time
 import traceback
 
 from container_crawler.utils import create_internal_client
-from .daemon_utils import load_swift, setup_context, setup_logger
+from .daemon_utils import (load_swift, setup_context, initialize_loggers,
+                           setup_logger)
 from .provider_factory import create_provider
 from .stats import MigratorPassStats
 from .utils import (convert_to_local_headers, convert_to_swift_headers,
@@ -43,8 +44,6 @@ from swift.common.http import HTTP_NOT_FOUND, HTTP_CONFLICT
 from swift.common import swob
 from swift.common.internal_client import UnexpectedResponse
 from swift.common.utils import FileLikeIter, Timestamp, quote
-
-from .base_sync import LOGGER_NAME as S3_SYNC_LOGGER_NAME
 
 EQUAL = 0
 ETAG_DIFF = 1
@@ -1117,11 +1116,9 @@ def main():
         migrator_conf['log_level'] = args.log_level
     migrator_conf['console'] = args.console
 
+    initialize_loggers(migrator_conf)
     setup_logger(LOGGER_NAME, migrator_conf)
     load_swift(LOGGER_NAME, args.once)
-
-    # Also sure we have the s3-sync logger initialized
-    setup_logger(S3_SYNC_LOGGER_NAME, migrator_conf)
 
     logger = logging.getLogger(LOGGER_NAME)
 

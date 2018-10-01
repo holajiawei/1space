@@ -19,7 +19,7 @@ import os
 import traceback
 
 from container_crawler import ContainerCrawler
-from .daemon_utils import load_swift, setup_context, setup_logger
+from .daemon_utils import load_swift, setup_context, initialize_loggers
 
 from .base_sync import LOGGER_NAME
 
@@ -30,7 +30,7 @@ def main():
         conf['log_level'] = args.log_level
     conf['console'] = args.console
 
-    setup_logger(LOGGER_NAME, conf)
+    initialize_loggers(conf)
     load_swift(LOGGER_NAME, args.once)
 
     from .sync_container import SyncContainer

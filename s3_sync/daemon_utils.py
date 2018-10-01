@@ -24,9 +24,16 @@ import sys
 import time
 import socket
 
+from .base_sync import LOGGER_NAME
 
 MAX_LOG_SIZE = 100 * 1024 * 1024
 MIN_SWIFT_VERSION = LooseVersion('2.13')
+
+
+def initialize_loggers(config):
+    setup_logger(LOGGER_NAME, config)
+    setup_logger("boto3", config)
+    setup_logger("botocore", config)
 
 
 def setup_logger(logger_name, config):
@@ -47,11 +54,6 @@ def setup_logger(logger_name, config):
     handler.setFormatter(formatter)
     logger.addHandler(handler)
 
-    for logname in ['boto3', 'botocore']:
-        logger = logging.getLogger(logname)
-        logger.setLevel(level)
-        logger.addHandler(handler)
-
     if config.get('syslog'):
         syslog_config = config['syslog']
 
@@ -64,20 +66,14 @@ def setup_logger(logger_name, config):
         else:
             socktype = socket.SOCK_STREAM
 
-        logger.debug("Using syslog")
         syslog_handler = logging.handlers.SysLogHandler(
             address=(host, port),
             socktype=socktype
         )
 
         syslog_handler.setFormatter(formatter)
-        logger.setLevel(level)
         logger.addHandler(syslog_handler)
-
-        for logname in ['boto3', 'botocore']:
-            logger = logging.getLogger(logname)
-            logger.setLevel(level)
-            logger.addHandler(syslog_handler)
+        logger.debug("Using syslog")
 
 
 def load_swift(logger_name, once=False):

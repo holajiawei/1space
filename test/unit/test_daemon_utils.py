@@ -78,6 +78,27 @@ class TestDaemonUtils(unittest.TestCase):
         self.assertEqual('log file must be set', cm.exception.message)
 
     @mock.patch('s3_sync.daemon_utils.logging')
+    def test_initialize_loggers(self, logging_mock):
+        handler = logging_mock.handlers.RotatingFileHandler.return_value
+        s3_sync.daemon_utils.initialize_loggers({'log_file':
+                                                '/test/test_file'})
+        logging_mock.handlers.RotatingFileHandler.assert_called_with(
+            '/test/test_file', maxBytes=s3_sync.daemon_utils.MAX_LOG_SIZE,
+            backupCount=5)
+        self.assertEqual(3,
+                         logging_mock.handlers.RotatingFileHandler.call_count)
+        logging_mock.getLogger.assert_has_calls([
+            mock.call(s3_sync.daemon_utils.LOGGER_NAME),
+            mock.call().setLevel('INFO'),
+            mock.call().addHandler(handler),
+            mock.call('boto3'),
+            mock.call().setLevel('INFO'),
+            mock.call().addHandler(handler),
+            mock.call('botocore'),
+            mock.call().setLevel('INFO'),
+            mock.call().addHandler(handler)])
+
+    @mock.patch('s3_sync.daemon_utils.logging')
     def test_log_file_handler(self, logging_mock):
         handler = logging_mock.handlers.RotatingFileHandler.return_value
         s3_sync.daemon_utils.setup_logger(
@@ -87,12 +108,6 @@ class TestDaemonUtils(unittest.TestCase):
             backupCount=5)
         logging_mock.getLogger.assert_has_calls([
             mock.call('test logger'),
-            mock.call().setLevel('INFO'),
-            mock.call().addHandler(handler),
-            mock.call('boto3'),
-            mock.call().setLevel('INFO'),
-            mock.call().addHandler(handler),
-            mock.call('botocore'),
             mock.call().setLevel('INFO'),
             mock.call().addHandler(handler)])
 
@@ -110,18 +125,5 @@ class TestDaemonUtils(unittest.TestCase):
             mock.call('test logger'),
             mock.call().setLevel('INFO'),
             mock.call().addHandler(handler),
-            mock.call('boto3'),
-            mock.call().setLevel('INFO'),
-            mock.call().addHandler(handler),
-            mock.call('botocore'),
-            mock.call().setLevel('INFO'),
-            mock.call().addHandler(handler),
             mock.call().debug('Using syslog'),
-            mock.call().setLevel('INFO'),
-            mock.call().addHandler(syslog_handler),
-            mock.call('boto3'),
-            mock.call().setLevel('INFO'),
-            mock.call().addHandler(syslog_handler),
-            mock.call('botocore'),
-            mock.call().setLevel('INFO'),
             mock.call().addHandler(syslog_handler)])
