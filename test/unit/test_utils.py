@@ -332,6 +332,9 @@ class TestSeekableFileLikeIter(unittest.TestCase):
         # coding bug and is explicitly disallowed.
         self.assertRaises(RuntimeError, self.seeker.reset)
 
+        # the remaining buffer should be saved if the caller needs to use it
+        self.assertEqual('cd', self.seeker.buf)
+
     def test_close(self):
         self.assertEqual('ab', self.seeker.read(2))
         self.seeker.close()

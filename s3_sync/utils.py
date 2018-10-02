@@ -80,6 +80,8 @@ SYSMETA_ACCOUNT_ACL_KEY = \
     get_sys_meta_prefix('account') + 'core-access-control'
 PFS_ETAG_PREFIX = 'pfs'
 DEFAULT_CHUNK_SIZE = 65536
+REMOTE_ETAG = get_object_transient_sysmeta(
+    'multi-cloud-internal-migrator-remote-etag')
 
 
 class MigrationContainerStates(object):
@@ -215,7 +217,8 @@ class SeekableFileLikeIter(FileLikeIter):
         if self.length is not None:
             bytes_we_can_return = self.length - self.tell()
             if len(data) > bytes_we_can_return:
-                self.buf = None
+                # Keep the buffer in case the application needs to use it
+                self.buf = data[bytes_we_can_return:]
                 data = data[:bytes_we_can_return]
         self._bytes_delivered += len(data)
         return data

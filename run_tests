@@ -38,5 +38,6 @@ docker exec swift-s3-sync timeout 40 \
              --os-project-domain-name default --os-user-domain-name default \
              --auth-version 3 --debug stat; do sleep 0.5; done' >/dev/null 2>&1
 
-docker exec -e DOCKER=true  swift-s3-sync nosetests /swift-s3-sync/test/integration/
+# the AWS_* environment variables allow some tests to run against real S3
+docker exec -e DOCKER=true -e AWS_IDENTITY=$AWS_IDENTITY -e AWS_SECRET=$AWS_SECRET -e AWS_BUCKET=$AWS_BUCKET  swift-s3-sync nosetests /swift-s3-sync/test/integration/
 exit $(($unit_test_status + $?))

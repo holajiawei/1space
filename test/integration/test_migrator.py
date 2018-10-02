@@ -15,15 +15,20 @@ limitations under the License.
 """
 
 
+import boto3
 import botocore
 from functools import partial
 import hashlib
 import json
+import os
 import StringIO
 from swift.common.middleware.acl import format_acl
 import swiftclient
+import tempfile
 import time
+import unittest
 import urllib
+import uuid
 from . import (
     TestCloudSyncBase, clear_swift_container, wait_for_condition,
     clear_s3_bucket, clear_swift_account, WaitTimedOut)
@@ -32,6 +37,17 @@ from s3_sync.utils import ACCOUNT_ACL_KEY
 
 
 class TestMigrator(TestCloudSyncBase):
+    @classmethod
+    def setUpClass(klass):
+        super(TestMigrator, klass).setUpClass()
+        klass.aws_identity = os.environ.get('AWS_IDENTITY')
+        klass.aws_bucket = os.environ.get('AWS_BUCKET', '1space-test')
+        klass.aws_secret = os.environ.get('AWS_SECRET')
+        if all((klass.aws_identity, klass.aws_bucket, klass.aws_secret)):
+            klass.has_aws = True
+        else:
+            klass.has_aws = False
+
     def tearDown(self):
         def _clear_and_maybe_delete_container(account, container):
             conn = self.conn_for_acct_noshunt(account)
@@ -1469,3 +1485,157 @@ class TestMigrator(TestCloudSyncBase):
             self.assertEqual(
                 'nested-segments/segment',
                 hdrs['x-object-manifest'])
+
+    def _upload_mpu(self, key='mpu-example', parts=2, part_size=5 * 2**20):
+        session = boto3.session.Session(
+            aws_access_key_id=self.aws_identity,
+            aws_secret_access_key=self.aws_secret)
+        conf = boto3.session.Config(signature_version='s3v4',
+                                    s3={'aws_chunked': True})
+        client = session.client('s3', config=conf)
+
+        body = 'A' * (parts * part_size)
+        resp = client.create_multipart_upload(
+            Bucket=self.aws_bucket,
+            Key=key)
+        upload_id = resp['UploadId']
+        parts_etags = []
+        for part in range(parts):
+            part_resp = client.upload_part(
+                Bucket=self.aws_bucket,
+                Key=key,
+                UploadId=upload_id,
+                PartNumber=part + 1,
+                Body=body[part * part_size:((part + 1) * part_size)],
+                ContentLength=part_size)
+            parts_etags.append(part_resp['ETag'])
+        return client.complete_multipart_upload(
+            Bucket=self.aws_bucket,
+            Key=key,
+            UploadId=upload_id,
+            MultipartUpload={
+                'Parts': [{'PartNumber': i + 1, 'ETag': parts_etags[i]}
+                          for i in range(parts)]
+            })
+
+    def test_s3_large_file_migration(self):
+        # write large file on s3proxy (3 * 2**20)
+        key = 'large_file_' + str(uuid.uuid4())
+        content = 'A' * (3 * 2**20)
+        s3_migration = self.s3_migration()
+        self.s3('put_object', Bucket=s3_migration['aws_bucket'],
+                Key=key,
+                Body=StringIO.StringIO(content))
+        # run migrator with custom migration definition
+        config = {
+            'migrations': [s3_migration],
+            'migrator_settings': {
+                'items_chunk': 1000,
+                'log_file': '/var/log/swift-s3-migrator.log',
+                'log_level': 'debug',
+                'poll_interval': 300,
+                'process': 0,
+                'processes': 1,
+                'status_file': '/var/lib/swift-s3-sync/migrator.status',
+                'workers': 10,
+                'segment_size': 2**20,
+            }
+        }
+        conn_local = self.conn_for_acct(s3_migration['account'])
+        with tempfile.NamedTemporaryFile() as fp:
+            json.dump(config, fp)
+            fp.flush()
+            status = migrator_utils.TempMigratorStatus(s3_migration)
+            migrator = migrator_utils.MigratorFactory(
+                conf_path=fp.name).get_migrator(s3_migration, status)
+        migrator.next_pass()
+        _, listing = conn_local.get_container(s3_migration['container'])
+        key_entry = [x for x in listing if x['name'] == key]
+        self.assertEqual(1, len(key_entry))
+        key_entry = key_entry[0]
+        slo_hdrs, slo_body = conn_local.get_object(
+            s3_migration['container'], key)
+        self.assertTrue(content == slo_body)
+        _, body = conn_local.get_object(
+            s3_migration['container'], key,
+            query_string='multipart-manifest=get&format=raw')
+        _, listing = conn_local.get_container(
+            s3_migration['container'] + '_segments')
+        names = [x['name'] for x in listing]
+        for entry in json.loads(body):
+            self.assertIn(entry['path'].split('/', 2)[2], names)
+        self.s3('delete_object', Bucket=s3_migration['aws_bucket'],
+                Key=key)
+        # Clean up (these aren't standard config)
+        conn = self.conn_for_acct_noshunt(s3_migration['account'])
+        container = s3_migration['container']
+        clear_swift_container(conn, container)
+        clear_swift_container(conn, container + '_segments')
+        conn.delete_container(container + '_segments')
+
+    def test_s3_mpu_migration(self):
+        if not self.has_aws:
+            raise unittest.SkipTest("AWS Credentials not defined.")
+        # Create mpu on S3
+        key = 'mpu_test_' + str(uuid.uuid4())
+        part_size = 5 * 2**20
+        parts = 2
+        self._upload_mpu(key=key, part_size=part_size)
+        # Run migrator with custom migration definition
+        s3_mig = self.s3_migration()
+        migration = {
+            'account': s3_mig['account'],
+            'aws_bucket': self.aws_bucket,
+            'aws_identity': self.aws_identity,
+            'aws_secret': self.aws_secret,
+            'container': s3_mig['container'],
+            'older_than': 0,
+            'prefix': '',
+            'propagate_account_metadata': False,
+            'protocol': 's3',
+            'remote_account': '',
+        }
+        config = {
+            'migrations': [migration],
+            'migrator_settings': {
+                'items_chunk': 1000,
+                'log_file': '/var/log/swift-s3-migrator.log',
+                'log_level': 'debug',
+                'poll_interval': 300,
+                'process': 0,
+                'processes': 1,
+                'status_file': '/var/lib/swift-s3-sync/migrator.status',
+                'workers': 10,
+            },
+        }
+        conn_local = self.conn_for_acct(s3_mig['account'])
+        with tempfile.NamedTemporaryFile() as fp:
+            json.dump(config, fp)
+            fp.flush()
+            status = migrator_utils.TempMigratorStatus(migration)
+            migrator = migrator_utils.MigratorFactory(
+                conf_path=fp.name).get_migrator(migration, status)
+        migrator.next_pass()
+        _, listing = conn_local.get_container(migration['container'])
+        key_entry = [x for x in listing if x['name'] == key]
+        self.assertEqual(1, len(key_entry))
+        key_entry = key_entry[0]
+        slo_hdrs, slo_body = conn_local.get_object(
+            migration['container'], key)
+        content = 'A' * (parts * part_size)
+        self.assertTrue(content == slo_body)
+        _, body = conn_local.get_object(
+            migration['container'], key,
+            query_string='multipart-manifest=get&format=raw')
+        _, listing = conn_local.get_container(
+            migration['container'] + '_segments')
+        names = [x['name'] for x in listing]
+        for entry in json.loads(body):
+            self.assertIn(entry['path'].split('/', 2)[2], names)
+        # Clean up (these aren't standard config)
+        conn = self.conn_for_acct_noshunt(s3_mig['account'])
+        container = migration['container']
+        clear_swift_container(conn, container)
+        clear_swift_container(conn, container + '_segments')
+        conn.delete_container(container)
+        conn.delete_container(container + '_segments')

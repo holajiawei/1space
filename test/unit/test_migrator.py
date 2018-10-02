@@ -566,7 +566,7 @@ class TestMigratorUtils(unittest.TestCase):
         status = s3_sync.migrator.Status(self.status_file_path)
         status.load_status_list()
         migrator = s3_sync.migrator.Migrator(
-            config, status, 10, 5, mock.Mock(max_size=1), None, 0, 1)
+            config, status, 10, 5, mock.Mock(max_size=1), None, 0, 1, 1000000)
         self.assertIn('custom_prefix', migrator.config)
         self.assertEqual('', migrator.config['custom_prefix'])
         status.save_migration(
@@ -680,7 +680,7 @@ class TestMigrator(unittest.TestCase):
         self.stream = StringIO()
         self.logger.addHandler(logging.StreamHandler(self.stream))
         self.migrator = s3_sync.migrator.Migrator(
-            config, None, 1000, 5, pool, self.logger, 0, 1)
+            config, None, 1000, 5, pool, self.logger, 0, 1, 1000000)
         self.migrator.status = mock.Mock()
 
     def get_log_lines(self):
@@ -1164,10 +1164,10 @@ class TestMigrator(unittest.TestCase):
 
             self.migrator.next_pass()
 
-            self.swift_client.upload_object.assert_has_calls(
-                [mock.call(mock.ANY, self.migrator.config['account'],
-                           self.migrator.config['aws_bucket'], name,
-                           objects[name]['expected_headers'])
+            self.swift_client.make_request.assert_has_calls(
+                [mock.call(
+                    'PUT', mock.ANY,
+                    objects[name]['expected_headers'], (2,), mock.ANY)
                  for name in migrated])
 
             for call in self.swift_client.upload_object.mock_calls:
@@ -1505,6 +1505,12 @@ class TestMigrator(unittest.TestCase):
         swift_404_resp = mock.Mock()
         swift_404_resp.status_int = 404
 
+        empty_container_resp = mock.Mock()
+        empty_container_resp.status_int = 200
+        empty_container_resp.body = ''
+
+        container_lookup = {}
+
         def container_exists(_, container):
             return containers[container]
 
@@ -1516,8 +1522,10 @@ class TestMigrator(unittest.TestCase):
             containers[env['PATH_INFO'].split('/')[3]] = True
             return func(200, [])
 
-        def _make_path(account, container):
-            return '/'.join(['http://test/v1', account, container])
+        def _make_path(*args):
+            res = '/'.join(['http://test/v1'] + list(args))
+            container_lookup[res] = args[1]
+            return res
 
         def get_object(name, **args):
             if name not in objects.keys():
@@ -1540,9 +1548,17 @@ class TestMigrator(unittest.TestCase):
             resp.headers = objects[name]['remote_headers']
             return resp
 
-        def upload_object(body, account, container, key, headers):
-            if not containers[container]:
-                raise UnexpectedResponse('', swift_404_resp)
+        def make_request(*args, **kwargs):
+            if args[0] == 'GET':
+                container = args[1].split('/')[5].split('?')[0]
+                if containers[container]:
+                    return empty_container_resp
+                else:
+                    return swift_404_resp
+            if args[0] == 'PUT':
+                (_verb, path, _headers, _statuses, _content) = args
+                if not containers[container_lookup[path]]:
+                    raise UnexpectedResponse('', swift_404_resp)
 
         self.swift_client.container_exists.side_effect = container_exists
         self.swift_client.get_container_metadata.side_effect = \
@@ -1551,7 +1567,7 @@ class TestMigrator(unittest.TestCase):
         self.swift_client.make_path.side_effect = _make_path
         self.swift_client.get_object_metadata.side_effect = UnexpectedResponse(
             '', swift_404_resp)
-        self.swift_client.upload_object.side_effect = upload_object
+        self.swift_client.make_request.side_effect = make_request
         self.migrator._read_account_headers = mock.Mock(return_value={})
 
         bucket_resp = mock.Mock()
@@ -1569,19 +1585,26 @@ class TestMigrator(unittest.TestCase):
 
         self.migrator.next_pass()
 
-        self.swift_client.upload_object.assert_has_calls(
-            [mock.call(mock.ANY, self.migrator.config['account'],
-                       'slo-segments',
-                       'part1',
-                       objects['part1']['expected_headers']),
-             mock.call(mock.ANY, self.migrator.config['account'],
-                       'slo-segments',
-                       'part2',
-                       objects['part2']['expected_headers']),
-             mock.call(mock.ANY, self.migrator.config['account'],
-                       self.migrator.config['container'],
-                       'slo',
-                       objects['slo']['expected_headers'])])
+        self.swift_client.make_request.assert_has_calls(
+            [mock.call(
+                'GET', 'http://test/v1/AUTH_test/bucket?format=json&marker=',
+                {}, (2, 404)),
+             mock.call(
+                'PUT', 'http://test/v1/' + self.migrator.config['account'] +
+                '/slo-segments/part1',
+                objects['part1']['expected_headers'], (2,), mock.ANY),
+             mock.call(
+                'PUT', 'http://test/v1/' + self.migrator.config['account'] +
+                '/slo-segments/part1',
+                objects['part1']['expected_headers'], (2,), mock.ANY),
+             mock.call(
+                'PUT', 'http://test/v1/' + self.migrator.config['account'] +
+                '/slo-segments/part2',
+                objects['part2']['expected_headers'], (2,), mock.ANY),
+             mock.call(
+                'PUT', 'http://test/v1/' + self.migrator.config['account'] +
+                '/' + self.migrator.config['container'] + '/slo',
+                objects['slo']['expected_headers'], (2,), mock.ANY)])
 
         called_env = self.swift_client.app.mock_calls[0][1][0]
         self.assertEqual(self.migrator.config['account'],
@@ -1756,6 +1779,10 @@ class TestMigrator(unittest.TestCase):
         swift_404_resp = mock.Mock()
         swift_404_resp.status_int = 404
 
+        empty_container_response = mock.Mock()
+        empty_container_response.status_int = 200
+        empty_container_response.body = ''
+
         def container_exists(_, container):
             return containers[container]
 
@@ -1767,8 +1794,8 @@ class TestMigrator(unittest.TestCase):
             if not containers[container]:
                 raise UnexpectedResponse('', swift_404_resp)
 
-        def _make_path(account, container):
-            return '/'.join(['http://test/v1', account, container])
+        def _make_path(*args):
+            return '/'.join(['http://test/v1'] + list(args))
 
         def get_object(name, **args):
             if name not in objects.keys():
@@ -1780,9 +1807,17 @@ class TestMigrator(unittest.TestCase):
                 True, 200, objects[name]['remote_headers'],
                 StringIO('object body'))
 
-        def upload_object(body, account, container, key, headers):
-            if not containers[container]:
-                raise UnexpectedResponse('', swift_404_resp)
+        def make_request(*args, **kwargs):
+            if args[0] == 'GET':
+                container = args[1].split('/')[5].split('?')[0]
+                if containers[container]:
+                    return empty_container_response
+                else:
+                    return swift_404_resp
+            if args[0] == 'PUT':
+                container = args[1].split('/')[5]
+                if not containers[container]:
+                    raise UnexpectedResponse('', swift_404_resp)
 
         def list_objects(marker, chunk, prefix, bucket=None):
             if bucket is None or bucket == self.migrator.config['container']:
@@ -1804,7 +1839,7 @@ class TestMigrator(unittest.TestCase):
             get_container_metadata
         self.swift_client.app.side_effect = fake_app
         self.swift_client.make_path.side_effect = _make_path
-        self.swift_client.upload_object.side_effect = upload_object
+        self.swift_client.make_request.side_effect = make_request
         self.migrator._read_account_headers = mock.Mock(return_value={})
 
         bucket_resp = mock.Mock()
@@ -1819,19 +1854,23 @@ class TestMigrator(unittest.TestCase):
 
         self.migrator.next_pass()
 
-        self.swift_client.upload_object.assert_has_calls(
-            [mock.call(mock.ANY, self.migrator.config['account'],
-                       'dlo-segments', '1',
-                       objects['1']['expected_headers']),
-             mock.call(mock.ANY, self.migrator.config['account'],
-                       'dlo-segments', '2',
-                       objects['2']['expected_headers']),
-             mock.call(mock.ANY, self.migrator.config['account'],
-                       'dlo-segments', '3',
-                       objects['3']['expected_headers']),
-             mock.call(mock.ANY, self.migrator.config['account'],
-                       self.migrator.config['container'], 'dlo',
-                       objects['dlo']['expected_headers'])])
+        seg_cont_path = 'http://test/v1/' + self.migrator.config['account'] + \
+            '/dlo-segments'
+        obj_cont_path = 'http://test/v1/' + self.migrator.config['account'] + \
+            '/' + self.migrator.config['container']
+        self.swift_client.make_request.assert_has_calls(
+            [mock.call('GET', obj_cont_path + '?format=json&marker=', {},
+                       (2, 404)),
+             mock.call('GET', seg_cont_path + '?format=json&marker=', {},
+                       (2, 404)),
+             mock.call('PUT', seg_cont_path + '/1',
+                       objects['1']['expected_headers'], (2,), mock.ANY),
+             mock.call('PUT', seg_cont_path + '/2',
+                       objects['2']['expected_headers'], (2,), mock.ANY),
+             mock.call('PUT', seg_cont_path + '/3',
+                       objects['3']['expected_headers'], (2,), mock.ANY),
+             mock.call('PUT', obj_cont_path + '/dlo',
+                       objects['dlo']['expected_headers'], (2,), mock.ANY)])
 
         called_env = self.swift_client.app.mock_calls[0][1][0]
         self.assertEqual(self.migrator.config['account'],
@@ -1949,15 +1988,15 @@ class TestMigrator(unittest.TestCase):
         self.migrator.next_pass()
 
         internal_header = s3_sync.utils.get_sys_migrator_header('object')
-        self.swift_client.upload_object.assert_called_once_with(
+        self.swift_client.make_request.assert_called_with(
+            'PUT',
             mock.ANY,
-            self.migrator.config['account'],
-            self.migrator.config['aws_bucket'],
-            'qux',
             {internal_header: '1500000000.00000',
              'x-timestamp': '1500000000.00000',
              'etag': 'deadbeef',
-             'Content-Length': str(2**10)})
+             'Content-Length': str(2**10)},
+            (2,),
+            mock.ANY)
 
     def test_reconcile_deleted_timestamps(self):
         internal_header = s3_sync.utils.get_sys_migrator_header('object')
@@ -2301,6 +2340,7 @@ class TestMain(unittest.TestCase):
             'node_id': 0,
             'nodes': 1,
             'poll_interval': 30,
+            'segment_size': 1000000,
             'once': True,
         }
 
@@ -2381,10 +2421,10 @@ class TestMain(unittest.TestCase):
             mock_status.assert_called_once_with('/test/status')
             mock_migrator.assert_called_once_with(
                 config['migrations'][0], mock_status.return_value, 42, 1337,
-                mock.ANY, mock.ANY, 0, 15)
+                mock.ANY, mock.ANY, 0, 15, 100000000)
             mock_run.assert_called_once_with(
                 config['migrations'], mock_status.return_value, mock.ANY,
-                mock.ANY, 42, 1337, 0, 15, 60, True)
+                mock.ANY, 42, 1337, 0, 15, 60, 100000000, True)
 
     @mock.patch('s3_sync.migrator.create_provider')
     def test_migrate_all_containers_error(self, create_provider_mock):
@@ -2417,5 +2457,5 @@ class TestMain(unittest.TestCase):
 
         s3_sync.migrator.run(
             migrations, status, mock.Mock(max_size=10), logging.getLogger(),
-            1000, 10, 0, 1, 10, True)
+            1000, 10, 0, 1, 10, 1000000, True)
         self.assertEqual(old_list, status.status_list)

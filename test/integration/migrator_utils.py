@@ -40,4 +40,5 @@ class MigratorFactory(object):
             self.config, self.SWIFT_DIR, self.migrator_config['workers'] + 1)
         return s3_sync.migrator.Migrator(
             migration, status, self.migrator_config['items_chunk'],
-            self.migrator_config['workers'], ic_pool, self.logger, 0, 1)
+            self.migrator_config['workers'], ic_pool, self.logger, 0, 1,
+            self.migrator_config.get('segment_size', 100000000))
