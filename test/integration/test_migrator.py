@@ -78,9 +78,11 @@ class TestMigrator(TestCloudSyncBase):
               'content-disposition': "attachment; filename='test-blob.jpg'",
               'content-encoding': 'identity'})]
 
-        def _check_objects_copied():
-            hdrs, listing = self.local_swift(
-                'get_container', migration['container'])
+        conn_noshunt = self.conn_for_acct_noshunt(migration['account'])
+        conn_local = self.conn_for_acct(migration['account'])
+
+        def _check_objects_copied(conn):
+            hdrs, listing = conn.get_container(migration['container'])
             swift_names = [obj['name'] for obj in listing]
             return set([obj[0] for obj in test_objects]) == set(swift_names)
 
@@ -93,19 +95,25 @@ class TestMigrator(TestCloudSyncBase):
                     Metadata=headers,
                     **kwargs)
 
+        # Sanity-check (not actually migrated yet)
+        self.assertFalse(_check_objects_copied(conn_noshunt))
+
+        # But they are visible through the shunt
+        self.assertTrue(_check_objects_copied(conn_local))
+
         with self.migrator_running():
-            wait_for_condition(5, _check_objects_copied)
+            wait_for_condition(5, partial(_check_objects_copied, conn_noshunt))
 
         for name, expected_body, user_meta, req_headers in test_objects:
-            hdrs, body = self.local_swift(
-                'get_object', migration['container'], name)
-            self.assertEqual(expected_body, body)
-            for k, v in user_meta.items():
-                self.assertIn('x-object-meta-' + k, hdrs)
-                self.assertEqual(v, hdrs['x-object-meta-' + k])
-            for k, v in req_headers.items():
-                self.assertIn(k, hdrs)
-                self.assertEqual(v, hdrs[k])
+            for conn in (conn_noshunt, conn_local):
+                hdrs, body = conn.get_object(migration['container'], name)
+                self.assertEqual(expected_body, body)
+                for k, v in user_meta.items():
+                    self.assertIn('x-object-meta-' + k, hdrs)
+                    self.assertEqual(v, hdrs['x-object-meta-' + k])
+                for k, v in req_headers.items():
+                    self.assertIn(k, hdrs)
+                    self.assertEqual(v, hdrs[k])
 
         for name, expected_body, user_meta, req_headers in test_objects:
             resp = self.s3('get_object', Bucket=migration['aws_bucket'],
@@ -317,7 +325,7 @@ class TestMigrator(TestCloudSyncBase):
         self.assertEqual('dlo-meta', dlo_hdrs.get('x-object-meta-dlo'))
         self.assertTrue(content == dlo_body)
 
-    def test_migrate_new_container_location(self):
+    def test_swift_migrate_new_container_location(self):
         migration = self._find_migration(
             lambda cont: cont['container'] == 'no-auto-migration-swift-reloc')
 
@@ -388,6 +396,80 @@ class TestMigrator(TestCloudSyncBase):
 
         # verify objects are really there
         _verify_objects(conn_noshunt, migration['container'])
+
+    def test_s3_migrate_new_container_location(self):
+        migration = self._find_migration(
+            lambda cont: cont['container'] == 'migration-s3-target')
+
+        test_objects = [
+            ('s3-blob', 's3 content', {}, {}),
+            (u's3-unicod\u00e9', '\xde\xad\xbe\xef', {}, {}),
+            ('s3-with-headers', 'header-blob',
+             {'custom-header': 'value'},
+             {'content-type': 'migrator/test',
+              'content-disposition': "attachment; filename='test-blob.jpg'",
+              'content-encoding': 'identity'})]
+
+        conn_local = self.conn_for_acct(migration['account'])
+        conn_noshunt = self.conn_for_acct_noshunt(migration['account'])
+
+        def _check_objects_copied(conn, container):
+            hdrs, listing = conn.get_container(container)
+            swift_names = [obj['name'] for obj in listing]
+            return set([obj[0] for obj in test_objects]) == set(swift_names)
+
+        def _verify_local_s3_objects(conn, container):
+            # verify original s3 objects that have been shunted or migrated
+            # depending on conn to swift cluster. These s3 objects should
+            # return with swift style custom headers (i.e., 'x-object-meta-')
+            for name, expected_body, user_meta, req_headers in test_objects:
+                hdrs, body = conn.get_object(migration['container'], name)
+                self.assertEqual(expected_body, body)
+                for k, v in user_meta.items():
+                    self.assertIn('x-object-meta-' + k, hdrs)
+                    self.assertEqual(v, hdrs['x-object-meta-' + k])
+                for k, v in req_headers.items():
+                    self.assertIn(k, hdrs)
+                    self.assertEqual(v, hdrs[k])
+
+        def _verify_remote_s3_objects(bucket):
+            for name, expected_body, user_meta, req_headers in test_objects:
+                resp = self.s3('get_object', Bucket=bucket, Key=name)
+                self.assertEqual(user_meta, resp['Metadata'])
+                self.assertEqual(expected_body, resp['Body'].read())
+                for k, v in req_headers.items():
+                    self.assertIn(k, resp['ResponseMetadata']['HTTPHeaders'])
+                    self.assertEqual(
+                        v, resp['ResponseMetadata']['HTTPHeaders'][k])
+
+        # PUT objects in remote location
+        for name, body, headers, req_headers in test_objects:
+            kwargs = dict([('Content' + key.split('-')[1].capitalize(), value)
+                           for key, value in req_headers.items()])
+            self.s3('put_object', Bucket=migration['aws_bucket'],
+                    Key=name,
+                    Body=StringIO.StringIO(body),
+                    Metadata=headers,
+                    **kwargs)
+
+        # verify objects have not migrated yet
+        self.assertFalse(_check_objects_copied(conn_noshunt,
+                                               migration['container']))
+
+        # verify that objects visible through shunt
+        _verify_local_s3_objects(conn_local, migration['container'])
+
+        # verify that objects are where they were put (sanity)
+        _verify_remote_s3_objects(migration['aws_bucket'])
+
+        # run migration
+        with self.migrator_running():
+            wait_for_condition(5, partial(_check_objects_copied,
+                                          conn_noshunt,
+                                          migration['container']))
+
+        # verify objects have migrated over
+        _verify_local_s3_objects(conn_noshunt, migration['container'])
 
     def test_container_meta(self):
         migration = self._find_migration(
@@ -824,7 +906,7 @@ class TestMigrator(TestCloudSyncBase):
         migrator.next_pass()
         self.assertTrue(is_where('local'))
 
-    def test_propagate_object_meta(self):
+    def test_propagate_object_meta_to_remote_swift(self):
         migration = self.swift_migration()
         key = u'test_object-\u062a'
         content = 'test object'
@@ -839,6 +921,29 @@ class TestMigrator(TestCloudSyncBase):
             'head_object', migration['aws_bucket'], key)
         self.assertEqual(u'new object meta \u062a',
                          hdrs.get(u'x-object-meta-migration-\u062a'))
+
+        clear_swift_container(self.swift_dst, migration['aws_bucket'])
+
+    def test_propagate_object_meta_to_remote_s3(self):
+        migration = self.s3_migration()
+        key = u'test_object-\u062a'
+        content = 'test object'
+        expected_meta = {
+            'x-object-meta-custom-migration': 'value'}
+
+        self.s3('put_object', Bucket=migration['aws_bucket'],
+                Key=key,
+                Body=StringIO.StringIO(content))
+        self.local_swift('post_object', migration['container'], key,
+                         headers=expected_meta)
+        resp = self.s3('get_object', Bucket=migration['aws_bucket'], Key=key)
+
+        # sanity, content hasn't changed
+        self.assertEqual(content, resp['Body'].read())
+
+        # should have shunted metadata to the source
+        hdrs = resp['Metadata']
+        self.assertEqual('value', hdrs.get('custom-migration'))
 
         clear_swift_container(self.swift_dst, migration['aws_bucket'])
 

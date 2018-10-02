@@ -467,17 +467,19 @@ class S3SyncShunt(object):
 
     def handle_post(
             self, req, start_response, sync_profile, obj, per_account):
+
         if not obj and sync_profile.get('migration'):
             req.headers[get_sys_migrator_header('container')] =\
                 MigrationContainerStates.MODIFIED
         status, headers, app_iter = req.call_application(self.app)
 
+        # if object has already been migrated, do not shunt post
         if not status.startswith('404'):
             start_response(status, headers)
             return app_iter
 
-        if sync_profile.get('protocol') != 'swift':
-            # TODO: Add S3 support
+        # S3 does not support bucket metadata
+        if not obj and sync_profile.get('protocol') != 'swift':
             start_response(status, headers)
             return app_iter
 

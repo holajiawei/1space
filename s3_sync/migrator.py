@@ -881,9 +881,9 @@ class Migrator(object):
         return marker
 
     def _migrate_object(self, aws_bucket, container, key):
-        args = {'bucket': aws_bucket,
-                'query_string': 'multipart-manifest=get'}
+        args = {'bucket': aws_bucket}
         if self.config.get('protocol', 's3') == 'swift':
+            args['query_string'] = 'multipart-manifest=get'
             args['resp_chunk_size'] = 65536
 
         resp = self.provider.get_object(key, **args)

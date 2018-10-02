@@ -262,6 +262,15 @@ class SyncS3(BaseSync):
             bucket = self.aws_bucket
         return self._call_boto('head_bucket', bucket, None, **options)
 
+    def shunt_post(self, req, swift_key):
+        """Propagate metadata to the remote store
+
+         :returns: (status, headers, body_iter) tuple
+        """
+        headers = dict([(k, req.headers[k]) for k in req.headers.keys()
+                        if req.headers[k]])
+        return self.post_object(swift_key, headers).to_wsgi()
+
     def post_object(self, swift_key, headers):
         s3_key = self.get_s3_name(swift_key)
         content_type = headers.get('content-type', 'application/octet-stream')
@@ -311,13 +320,18 @@ class SyncS3(BaseSync):
            these options are NOOPs. Boto alreaded parses the time to datetime,
            so that parameter is ignored, as well.
         '''
-        resp = self._call_boto('list_buckets')
-        resp.body = [
-            {'last_modified': bucket['CreationDate'],
-             'count': 0,
-             'bytes': 0,
-             'name': bucket['Name']} for bucket in resp.body['Buckets']]
-        return resp
+        with self.client_pool.get_client() as s3_client:
+            resp = s3_client.list_buckets()
+            response_body = [
+                {'last_modified': bucket['CreationDate'],
+                 'count': 0,
+                 'bytes': 0,
+                 'name': bucket['Name']} for bucket in resp.get('Buckets')]
+            return ProviderResponse(
+                True,
+                resp['ResponseMetadata']['HTTPStatusCode'],
+                resp['ResponseMetadata']['HTTPHeaders'],
+                response_body)
 
     def _call_boto(self, op, **args):
         def _perform_op(s3_client):
