@@ -67,7 +67,7 @@ class TestMain(unittest.TestCase):
             mock_logger.reset_mock()
 
     @mock.patch('s3_sync.__main__.os')
-    @mock.patch('s3_sync.__main__.setup_logger')
+    @mock.patch('s3_sync.__main__.initialize_loggers')
     @mock.patch('s3_sync.__main__.setup_context')
     @mock.patch('s3_sync.__main__.ContainerCrawler')
     def test_proxy_settings(self, crawler_mock, context_mock, logger_mock,
@@ -93,7 +93,7 @@ class TestMain(unittest.TestCase):
                 self.assertNotIn('http_proxy', os_mock.environ)
             context_mock.reset_mock()
 
-    @mock.patch('s3_sync.__main__.setup_logger')
+    @mock.patch('s3_sync.__main__.initialize_loggers')
     @mock.patch('s3_sync.__main__.setup_context')
     @mock.patch('s3_sync.__main__.ContainerCrawler')
     def test_run_once(self, crawler_mock, context_mock, logger_mock):

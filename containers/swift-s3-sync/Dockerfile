@@ -42,6 +42,10 @@ RUN bash -c "cd /usr/local/src \
     && patch -p0 < /tmp/tempauth-keystone-groups.patch \
     && rm -f /tmp/tempauth-keystone-groups.patch"
 
+# Have rsyslog listen on UDP port 514
+COPY containers/swift-s3-sync/rsyslog.conf /etc/rsyslog.conf
+RUN touch /var/log/syslog && chown syslog:adm /var/log/syslog
+
 ENV CONF_BUCKET=cloud-connector-conf
 
 CMD ["/bin/bash", "/swift-s3-sync/containers/swift-s3-sync/launch.sh"]

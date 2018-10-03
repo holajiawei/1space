@@ -34,6 +34,11 @@
     "devices": "/srv/node",
     "items_chunk": 1000,
     "log_file": "/var/log/swift-s3-sync.log",
+    "syslog" : {
+        "host": "localhost",
+        "port": 514,
+        "proto": "udp"
+    }
     "poll_interval": 5,
     "status_dir": "/var/lib/swift-s3-sync",
     "workers": 10

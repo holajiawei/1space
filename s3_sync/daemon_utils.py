@@ -22,10 +22,18 @@ import logging.handlers
 import os
 import sys
 import time
+import socket
 
+from .base_sync import LOGGER_NAME
 
 MAX_LOG_SIZE = 100 * 1024 * 1024
 MIN_SWIFT_VERSION = LooseVersion('2.13')
+
+
+def initialize_loggers(config):
+    setup_logger(LOGGER_NAME, config)
+    setup_logger("boto3", config)
+    setup_logger("botocore", config)
 
 
 def setup_logger(logger_name, config):
@@ -42,13 +50,30 @@ def setup_logger(logger_name, config):
                                                        backupCount=5)
     else:
         raise RuntimeError('log file must be set')
+
     handler.setFormatter(formatter)
     logger.addHandler(handler)
 
-    for logname in ['boto3', 'botocore', 's3_sync']:
-        logger = logging.getLogger(logname)
-        logger.setLevel(level)
-        logger.addHandler(handler)
+    if config.get('syslog'):
+        syslog_config = config['syslog']
+
+        host = syslog_config.get('host', 'localhost')
+        port = syslog_config.get('port', 514)
+        proto = syslog_config.get('proto', 'udp')
+
+        if proto == 'udp':
+            socktype = socket.SOCK_DGRAM
+        else:
+            socktype = socket.SOCK_STREAM
+
+        syslog_handler = logging.handlers.SysLogHandler(
+            address=(host, port),
+            socktype=socktype
+        )
+
+        syslog_handler.setFormatter(formatter)
+        logger.addHandler(syslog_handler)
+        logger.debug("Using syslog")
 
 
 def load_swift(logger_name, once=False):

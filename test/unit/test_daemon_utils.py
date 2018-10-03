@@ -3,6 +3,7 @@ import s3_sync.daemon_utils
 import StringIO
 import sys
 import unittest
+import socket
 
 
 class TestDaemonUtils(unittest.TestCase):
@@ -77,7 +78,28 @@ class TestDaemonUtils(unittest.TestCase):
         self.assertEqual('log file must be set', cm.exception.message)
 
     @mock.patch('s3_sync.daemon_utils.logging')
-    def test_log_file_handler(self, logging_mock):
+    def test_initialize_loggers(self, logging_mock):
+        handler = logging_mock.handlers.RotatingFileHandler.return_value
+        s3_sync.daemon_utils.initialize_loggers({'log_file':
+                                                '/test/test_file'})
+        logging_mock.handlers.RotatingFileHandler.assert_called_with(
+            '/test/test_file', maxBytes=s3_sync.daemon_utils.MAX_LOG_SIZE,
+            backupCount=5)
+        self.assertEqual(3,
+                         logging_mock.handlers.RotatingFileHandler.call_count)
+        logging_mock.getLogger.assert_has_calls([
+            mock.call(s3_sync.daemon_utils.LOGGER_NAME),
+            mock.call().setLevel('INFO'),
+            mock.call().addHandler(handler),
+            mock.call('boto3'),
+            mock.call().setLevel('INFO'),
+            mock.call().addHandler(handler),
+            mock.call('botocore'),
+            mock.call().setLevel('INFO'),
+            mock.call().addHandler(handler)])
+
+    @mock.patch('s3_sync.daemon_utils.logging')
+    def test_setup_logger(self, logging_mock):
         handler = logging_mock.handlers.RotatingFileHandler.return_value
         s3_sync.daemon_utils.setup_logger(
             'test logger', {'log_file': '/test/test_file'})
@@ -87,10 +109,21 @@ class TestDaemonUtils(unittest.TestCase):
         logging_mock.getLogger.assert_has_calls([
             mock.call('test logger'),
             mock.call().setLevel('INFO'),
-            mock.call().addHandler(handler),
-            mock.call('boto3'),
-            mock.call().setLevel('INFO'),
-            mock.call().addHandler(handler),
-            mock.call('botocore'),
-            mock.call().setLevel('INFO'),
             mock.call().addHandler(handler)])
+
+    @mock.patch('s3_sync.daemon_utils.logging')
+    def test_setup_logger_syslog_handler(self, logging_mock):
+        handler = logging_mock.handlers.RotatingFileHandler.return_value
+        syslog_handler = logging_mock.handlers.SysLogHandler.return_value
+        s3_sync.daemon_utils.setup_logger(
+            'test logger', {'log_file': '/test/test_file',
+                            'syslog': {'host': 'testhost'}})
+        logging_mock.handlers.SysLogHandler.assert_called_once_with(
+            address=('testhost', 514),
+            socktype=socket.SOCK_DGRAM)
+        logging_mock.getLogger.assert_has_calls([
+            mock.call('test logger'),
+            mock.call().setLevel('INFO'),
+            mock.call().addHandler(handler),
+            mock.call().addHandler(syslog_handler),
+            mock.call().debug('Using syslog')])
