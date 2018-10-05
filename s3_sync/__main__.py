@@ -44,6 +44,12 @@ def main():
         logger.debug('Using HTTPS proxy %r', conf['https_proxy'])
         os.environ['https_proxy'] = conf['https_proxy']
 
+    # Set a reasonable verification slack default for 1space.
+    # ContainerCrawler defaults to 0, but for 1space 1 hour is a more sensible
+    # trade-off to avoid doing useless work. The value is in minutes.
+    if 'verification_slack' not in conf:
+        conf['verification_slack'] = 60
+
     try:
         crawler = ContainerCrawler(conf, SyncContainer, logger)
         if args.once:
