@@ -65,6 +65,15 @@ class TestSyncSwift(unittest.TestCase):
             'aws_endpoint': 'http://swift.url/auth/v1.0',
         }
         self.sync_swift = SyncSwift(self.mapping, max_conns=self.max_conns)
+        self.logger = mock.Mock()
+        self.sync_swift.logger = self.logger
+
+    def tearDown(self):
+        checked_levels = ['error', 'exception']
+        for level in checked_levels:
+            for call in getattr(self.logger, level).mock_calls:
+                print call
+            getattr(self.logger, level).assert_not_called()
 
     @mock.patch('s3_sync.sync_swift.swiftclient.client.Connection')
     def test_put_object(self, mock_swift):
@@ -780,6 +789,7 @@ class TestSyncSwift(unittest.TestCase):
         swift_client = mock.Mock()
         mock_swift.return_value = swift_client
         swift_client.head_object.return_value = remote_meta
+        swift_client.post_object.return_value = None
 
         def _get_object(account, container, key, **kwargs):
             if container != 'container' or key != 'key':
@@ -1041,6 +1051,10 @@ class TestSyncSwift(unittest.TestCase):
             mocked_method.assert_has_calls([test['mock_call']])
             self.assertEqual(
                 test['conns_end'], self.sync_swift.client_pool.free_count())
+            if not isinstance(test['exception'], ClientException):
+                self.logger.exception.assert_called_once_with(
+                    'Error contacting remote swift cluster')
+                self.logger.exception.reset_mock()
 
     @mock.patch('s3_sync.sync_swift.swiftclient.client.Connection')
     def test_per_account_bucket(self, mock_swift):
