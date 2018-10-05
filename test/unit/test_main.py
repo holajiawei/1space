@@ -96,6 +96,28 @@ class TestMain(unittest.TestCase):
     @mock.patch('s3_sync.__main__.initialize_loggers')
     @mock.patch('s3_sync.__main__.setup_context')
     @mock.patch('s3_sync.__main__.ContainerCrawler')
+    def test_verification_slack(self, crawler_mock, context_mock, logger_mock):
+        test_params = [
+            {'verification_slack': 24 * 60},
+            {}
+        ]
+
+        mock_args = mock.Mock(console=False, log_level='debug', once=False)
+
+        for conf in test_params:
+            context_mock.return_value = (mock_args, conf)
+
+            s3_sync.__main__.main()
+            if 'verification_slack' in conf:
+                old_value = conf['verification_slack']
+                self.assertEqual(old_value, conf['verification_slack'])
+            else:
+                self.assertEqual(60, conf['verification_slack'])
+            context_mock.reset_mock()
+
+    @mock.patch('s3_sync.__main__.initialize_loggers')
+    @mock.patch('s3_sync.__main__.setup_context')
+    @mock.patch('s3_sync.__main__.ContainerCrawler')
     def test_run_once(self, crawler_mock, context_mock, logger_mock):
         tests = [mock.Mock(console=False, log_level='debug', once=False),
                  mock.Mock(console=False, log_level='debug', once=True)]
