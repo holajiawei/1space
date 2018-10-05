@@ -51,6 +51,15 @@ class TestSyncS3(unittest.TestCase):
                                'account': 'account',
                                'container': 'container'},
                               max_conns=self.max_conns)
+        self.logger = mock.Mock()
+        self.sync_s3.logger = self.logger
+
+    def tearDown(self):
+        checked_levels = ['error', 'exception']
+        for level in checked_levels:
+            for call in getattr(self.logger, level).mock_calls:
+                print call
+            getattr(self.logger, level).assert_not_called()
 
     @mock.patch('s3_sync.sync_s3.SeekableFileLikeIter')
     def test_put_object(self, mock_seekable):
@@ -427,6 +436,9 @@ class TestSyncS3(unittest.TestCase):
             'Metadata': {'old': 'old'},
             'ETag': '"%s"' % etag
         }
+        self.mock_boto3_client.copy_object.return_value = {
+            'CopyObjectResult': {'LastModified': '2009-10-28T22:32:00',
+                                 'ETag': etag}}
 
         self.sync_s3.upload_object(key, storage_policy, mock_ic)
 
@@ -454,6 +466,9 @@ class TestSyncS3(unittest.TestCase):
             'Metadata': {'old': 'old'},
             'ETag': '"%s"' % etag
         }
+        self.mock_boto3_client.copy_object.return_value = {
+            'CopyObjectResult': {'LastModified': '2009-10-28T22:32:00',
+                                 'ETag': etag}}
         self.sync_s3.endpoint = 'http://127.0.0.1:8080'
 
         self.sync_s3.upload_object(key, storage_policy, mock_ic)
@@ -481,6 +496,9 @@ class TestSyncS3(unittest.TestCase):
             'Metadata': {'old': 'old'},
             'ETag': '"%s"' % etag
         }
+        self.mock_boto3_client.copy_object.return_value = {
+            'CopyObjectResult': {'LastModified': '2009-10-28T22:32:00',
+                                 'ETag': etag}}
         self.sync_s3.endpoint = 'https://storage.googleapis.com'
 
         self.sync_s3.upload_object(key, storage_policy, mock_ic)
@@ -709,9 +727,11 @@ class TestSyncS3(unittest.TestCase):
         swift_req_headers = {'X-Backend-Storage-Policy-Index': storage_policy,
                              'X-Newest': True}
         manifest = [{'name': '/segment_container/slo-object/part1',
-                     'hash': 'deadbeef'},
+                     'hash': 'deadbeef',
+                     'bytes': 5 * 2**20},
                     {'name': '/segment_container/slo-object/part2',
-                     'hash': 'beefdead'}]
+                     'hash': 'beefdead',
+                     'bytes': 5 * 2**20}]
 
         self.mock_boto3_client.head_object.side_effect = ClientError(
             {'Error': {'Code': 'NotFound'},
@@ -938,6 +958,9 @@ class TestSyncS3(unittest.TestCase):
         self.mock_boto3_client.head_object.return_value = {
             'Metadata': {utils.SLO_ETAG_FIELD: 'swift-slo-etag'},
             'ContentType': 'test/blob'}
+        self.mock_boto3_client.copy_object.return_value = {
+            'CopyObjectResult': {'LastModified': '2009-10-28T22:32:00',
+                                 'ETag': 'deadbeef'}}
 
         def get_metadata(account, container, key, headers):
             if key == slo_key:
@@ -1166,19 +1189,24 @@ class TestSyncS3(unittest.TestCase):
         swift_req_headers = {'X-Backend-Storage-Policy-Index': storage_policy,
                              'X-Newest': True}
         manifest = [{'name': '/segment_container/slo-object/part1',
-                     'hash': 'deadbeef'},
+                     'hash': 'deadbeef',
+                     'bytes': 5 * 2**20},
                     {'name': '/segment_container/slo-object/part2',
-                     'hash': 'beefdead'}]
+                     'hash': 'beefdead',
+                     'bytes': 5 * 2**20}]
 
         self.mock_boto3_client.head_object.return_value = {
-            'Metadata': {'new-key': 'foo'},
-            'ETag': '"etag-2"'}
+            'Metadata': {'new-key': 'foo',
+                         utils.SLO_HEADER: 'True'},
+            'ETag': '"etag-2"',
+            'ContentType': 'x-application/test'}
         mock_get_slo_etag.return_value = 'etag-2'
         self.sync_s3.update_slo_metadata = mock.Mock()
         self.sync_s3._upload_slo = mock.Mock()
         slo_meta = {
             utils.SLO_HEADER: 'True',
-            'x-object-meta-new-key': 'foo'
+            'x-object-meta-new-key': 'foo',
+            'content-type': 'x-application/test'
         }
 
         mock_ic = mock.Mock()
@@ -1188,8 +1216,8 @@ class TestSyncS3(unittest.TestCase):
 
         self.sync_s3.upload_object(slo_key, storage_policy, mock_ic)
 
-        self.assertEqual(0, self.sync_s3.update_slo_metadata.call_count)
-        self.assertEqual(0, self.sync_s3._upload_slo.call_count)
+        self.sync_s3.update_slo_metadata.assert_not_called()
+        self.sync_s3._upload_slo.assert_not_called()
         mock_ic.get_object_metadata.assert_called_once_with(
             'account', 'container', slo_key, headers=swift_req_headers)
         mock_ic.get_object.assert_called_once_with(
@@ -1310,26 +1338,43 @@ class TestSyncS3(unittest.TestCase):
         segments = [{'name': '/segment/%d' % i} for i in xrange(10001)]
         self.assertEqual(
             False, self.sync_s3._validate_slo_manifest(segments))
+        self.logger.error.assert_called_once_with(
+            'Cannot upload a manifest with more than 10000 segments')
+        self.logger.error.reset_mock()
 
     def test_validate_manifest_small_part(self):
         segments = [{'name': '/segment/1',
-                     'bytes': 10 * SyncS3.MB},
+                     'bytes': 10 * SyncS3.MB,
+                     'hash': 'deadbeef'},
                     {'name': '/segment/2',
-                     'bytes': 10},
+                     'bytes': 10,
+                     'hash': 'deadbeef'},
                     {'name': '/segment/3',
-                     'bytes': '10'}]
+                     'bytes': '10',
+                     'hash': 'deadbeef'}]
         self.assertEqual(
             False, self.sync_s3._validate_slo_manifest(segments))
+        self.logger.error.assert_called_once_with(
+            'SLO segment /segment/2 must be greater than %d MB' %
+            (self.sync_s3.MIN_PART_SIZE / self.sync_s3.MB))
+        self.logger.error.reset_mock()
 
     def test_validate_manifest_large_part(self):
         segments = [{'name': '/segment/1',
+                     'hash': 'deadbeef',
                      'bytes': 10 * SyncS3.MB},
                     {'name': '/segment/2',
+                     'hash': 'deadbeef',
                      'bytes': 10 * SyncS3.GB},
                     {'name': '/segment/3',
+                     'hash': 'deadbeef',
                      'bytes': '10'}]
         self.assertEqual(
             False, self.sync_s3._validate_slo_manifest(segments))
+        self.logger.error.assert_called_once_with(
+            'SLO segment /segment/2 must be smaller than %d GB' %
+            (self.sync_s3.MAX_PART_SIZE / self.sync_s3.GB))
+        self.logger.error.reset_mock()
 
     def test_validate_manifest_small(self):
         segments = [{'name': '/segment/1',
@@ -1345,6 +1390,9 @@ class TestSyncS3(unittest.TestCase):
                      'bytes': 10}]
         self.assertEqual(
             False, self.sync_s3._validate_slo_manifest(segments))
+        self.logger.error.assert_called_once_with(
+            'Found unsupported "range" parameter for /segment/1 segment')
+        self.logger.error.reset_mock()
 
     def test_is_object_meta_synced(self):
         # The structure for each entry is: swift meta, s3 meta, whether they
@@ -1571,6 +1619,11 @@ class TestSyncS3(unittest.TestCase):
                                            Key=self.sync_s3.get_s3_name(key))
             self.assertEqual(test['conns_end'],
                              self.sync_s3.client_pool.free_count())
+            if not isinstance(test['exception'], ClientError):
+                self.logger.exception.assert_called_once_with(
+                    mock.ANY, test['method'].lower() + '_object', 's3:/',
+                    self.aws_bucket, 'identity', '')
+                self.logger.exception.reset_mock()
 
     def test_list_objects(self):
         prefix = '%s/%s/%s' % (self.sync_s3.get_prefix(), self.sync_s3.account,

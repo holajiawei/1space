@@ -548,7 +548,7 @@ class SyncS3(BaseSync):
         parts = len(manifest)
         if parts > self.MAX_PARTS:
             self.logger.error('Cannot upload a manifest with more than %d '
-                              'segments. ' % self.MAX_PARTS)
+                              'segments' % self.MAX_PARTS)
             return False
 
         for index, segment in enumerate(manifest):
@@ -570,7 +570,7 @@ class SyncS3(BaseSync):
                 return False
             if 'range' in segment:
                 self.logger.error('Found unsupported "range" parameter for %s '
-                                  'segment ' % segment['name'])
+                                  'segment' % segment['name'])
                 return False
         return True
 
@@ -795,7 +795,9 @@ class SyncS3(BaseSync):
                 # object metadata header in front
                 meta[SWIFT_USER_META_PREFIX + SLO_ETAG_FIELD] = \
                     swift_meta['etag']
-            self.post_object(swift_key, meta)
+            resp = self.post_object(swift_key, meta)
+            if not resp.success:
+                resp.reraise()
 
     @staticmethod
     def check_etag(swift_etag, s3_etag):
