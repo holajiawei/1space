@@ -39,6 +39,9 @@ class SyncContainer(container_crawler.base_sync.BaseSync):
                      'retain_local',
                      'propagate_delete']
 
+    PROCESSED_ROW_KEY = 'last_row'
+    VERIFIED_ROW_KEY = 'last_verified_row'
+
     def __init__(self, status_dir, sync_settings, max_conns=10,
                  per_account=False):
         super(SyncContainer, self).__init__(
@@ -51,15 +54,15 @@ class SyncContainer(container_crawler.base_sync.BaseSync):
         self.provider = create_provider(sync_settings, max_conns,
                                         per_account=self._per_account)
 
-    def get_last_row(self, db_id):
+    def _get_status_row(self, row_field, db_id):
         if not os.path.exists(self._status_file):
             return 0
         with open(self._status_file) as f:
             try:
                 status = json.load(f)
                 # First iteration did not include the bucket and DB ID
-                if 'last_row' in status:
-                    return status['last_row']
+                if row_field == 'last_row' and row_field in status:
+                    return status[row_field]
                 if db_id in status:
                     entry = status[db_id]
                     if entry['aws_bucket'] != self.aws_bucket:
@@ -70,37 +73,64 @@ class SyncContainer(container_crawler.base_sync.BaseSync):
                             value = getattr(self, field)
                             if status[db_id]['policy'][field] != value:
                                 return 0
-                    return entry['last_row']
+                    # Happens for the new last_verified_row field.
+                    try:
+                        return entry[row_field]
+                    except KeyError:
+                        if row_field == self.VERIFIED_ROW_KEY:
+                            return entry.get(self.PROCESSED_ROW_KEY, 0)
+                        return 0
                 return 0
             except ValueError:
                 return 0
 
-    def save_last_row(self, row, db_id):
+    def _save_status_row(self, row, row_field, db_id):
+        policy = {}
+        for field in self.POLICY_FIELDS:
+            policy[field] = getattr(self, field)
+
         if not os.path.exists(self._status_account_dir):
             os.mkdir(self._status_account_dir)
         if not os.path.exists(self._status_file):
             with open(self._status_file, 'w') as f:
-                json.dump({db_id: dict(last_row=row,
-                                       aws_bucket=self.aws_bucket)}, f)
+                json.dump({db_id: {row_field: row,
+                                   'aws_bucket': self.aws_bucket,
+                                   'policy': policy}}, f)
                 return
 
         with open(self._status_file, 'r+') as f:
             status = json.load(f)
             # The first version did not include the DB ID and aws_bucket in the
             # status entries
-            policy = {}
-            for field in self.POLICY_FIELDS:
-                policy[field] = getattr(self, field)
-            new_status = dict(last_row=row,
-                              aws_bucket=self.aws_bucket,
+            new_status = dict(aws_bucket=self.aws_bucket,
                               policy=policy)
-            if 'last_row' in status:
-                status = {db_id: new_status}
-            else:
-                status[db_id] = new_status
+            if self.PROCESSED_ROW_KEY in status:
+                new_status[self.PROCESSED_ROW_KEY] =\
+                    status[self.PROCESSED_ROW_KEY]
+            elif self.PROCESSED_ROW_KEY in status[db_id]:
+                new_status[self.PROCESSED_ROW_KEY] =\
+                    status[db_id][self.PROCESSED_ROW_KEY]
+            if db_id in status:
+                new_status[self.VERIFIED_ROW_KEY] = status[db_id].get(
+                    self.VERIFIED_ROW_KEY, 0)
+            new_status[row_field] = row
+            status[db_id] = new_status
+
             f.seek(0)
             json.dump(status, f)
             f.truncate()
+
+    def get_last_processed_row(self, db_id):
+        return self._get_status_row(self.PROCESSED_ROW_KEY, db_id)
+
+    def get_last_verified_row(self, db_id):
+        return self._get_status_row(self.VERIFIED_ROW_KEY, db_id)
+
+    def save_last_processed_row(self, row, db_id):
+        self._save_status_row(row, self.PROCESSED_ROW_KEY, db_id)
+
+    def save_last_verified_row(self, row, db_id):
+        return self._save_status_row(row, self.VERIFIED_ROW_KEY, db_id)
 
     def handle(self, row, swift_client):
         if row['deleted']:

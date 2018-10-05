@@ -77,7 +77,7 @@ class TestSyncContainer(unittest.TestCase):
                                              'container': 'container'})
 
     def test_load_non_existent_meta(self):
-        ret = self.sync_container.get_last_row('db-id')
+        ret = self.sync_container.get_last_processed_row('db-id')
         self.assertEqual(0, ret)
 
     @mock.patch('__builtin__.open')
@@ -87,7 +87,7 @@ class TestSyncContainer(unittest.TestCase):
         fake_status = dict(last_row=42)
         mock_open.return_value = self.MockMetaConf(fake_status)
 
-        status = self.sync_container.get_last_row('db-id')
+        status = self.sync_container.get_last_processed_row('db-id')
         self.assertEqual(fake_status['last_row'], status)
 
         mock_exists.assert_called_with('%s/%s/%s' % (
@@ -105,7 +105,7 @@ class TestSyncContainer(unittest.TestCase):
         mock_exists.return_value = True
         mock_open.return_value = self.MockMetaConf(fake_status)
 
-        status = self.sync_container.get_last_row(db_id)
+        status = self.sync_container.get_last_processed_row(db_id)
         self.assertEqual(0, status)
 
         mock_exists.assert_called_with('%s/%s/%s' % (
@@ -122,7 +122,7 @@ class TestSyncContainer(unittest.TestCase):
         mock_exists.return_value = True
         mock_open.return_value = self.MockMetaConf(fake_status)
 
-        status = self.sync_container.get_last_row('other-db-id')
+        status = self.sync_container.get_last_processed_row('other-db-id')
         self.assertEqual(0, status)
 
         mock_exists.assert_called_with('%s/%s/%s' % (
@@ -147,7 +147,7 @@ class TestSyncContainer(unittest.TestCase):
         mock_exists.return_value = True
         mock_open.return_value = self.MockMetaConf(fake_status)
 
-        status = self.sync_container.get_last_row(db_id)
+        status = self.sync_container.get_last_processed_row(db_id)
         self.assertEqual(0, status)
 
         mock_exists.assert_called_with('%s/%s/%s' % (
@@ -167,7 +167,7 @@ class TestSyncContainer(unittest.TestCase):
         mock_exists.return_value = True
         mock_open.return_value = self.MockMetaConf(fake_status)
 
-        status = self.sync_container.get_last_row(db_id)
+        status = self.sync_container.get_last_processed_row(db_id)
         self.assertEqual(42, status)
 
         mock_exists.assert_called_with('%s/%s/%s' % (
@@ -187,7 +187,7 @@ class TestSyncContainer(unittest.TestCase):
             mock_exists.return_value = True
             mock_open.return_value = self.MockMetaConf(fake_status)
 
-            status = self.sync_container.get_last_row(entry['id'])
+            status = self.sync_container.get_last_processed_row(entry['id'])
             self.assertEqual(entry['last_row'], status)
 
             mock_exists.assert_called_with('%s/%s/%s' % (
@@ -195,7 +195,42 @@ class TestSyncContainer(unittest.TestCase):
                 self.sync_container._container))
 
     @mock.patch('__builtin__.open')
-    def test_save_last_row(self, mock_open):
+    @mock.patch('s3_sync.sync_container.os.path.exists')
+    def test_get_last_verified_row(self, mock_exists, mock_open):
+        db_entries = [{'id': 'db-id-1',
+                       'aws_bucket': 'bucket',
+                       'last_row': 5},
+                      {'id': 'db-id-2',
+                       'aws_bucket': 'bucket',
+                       'last_verified_row': 7},
+                      {'id': 'db-id-3',
+                       'aws_bucket': 'bucket',
+                       'last_row': 100,
+                       'last_verified_row': 10}]
+        for entry in db_entries:
+            self.sync_container.aws_bucket = entry['aws_bucket']
+            fake_status = {entry['id']: dict(aws_bucket=entry['aws_bucket'])}
+            if 'last_row' in entry:
+                fake_status[entry['id']]['last_row'] = entry['last_row']
+            if 'last_verified_row' in entry:
+                fake_status[entry['id']]['last_verified_row'] =\
+                    entry['last_verified_row']
+
+            mock_exists.return_value = True
+            mock_open.return_value = self.MockMetaConf(fake_status)
+
+            status = self.sync_container.get_last_verified_row(entry['id'])
+            if 'last_verified_row' in entry:
+                self.assertEqual(entry['last_verified_row'], status)
+            else:
+                self.assertEqual(entry['last_row'], status)
+
+            mock_exists.assert_called_with('%s/%s/%s' % (
+                self.scratch_space, self.sync_container._account,
+                self.sync_container._container))
+
+    @mock.patch('__builtin__.open')
+    def test_save_last_processed_row(self, mock_open):
         db_entries = {'db-id-1': {'aws_bucket': 'bucket', 'last_row': 5},
                       'db-id-2': {'aws_bucket': 'bucket', 'last_row': 7}}
         new_row = 42
@@ -208,7 +243,7 @@ class TestSyncContainer(unittest.TestCase):
                     as mock_exists:
                 mock_exists.return_value = True
 
-                self.sync_container.save_last_row(new_row, db_id)
+                self.sync_container.save_last_processed_row(new_row, db_id)
                 file_entries = fake_conf_file.fake_status
                 for file_db_id, status in file_entries.items():
                     if file_db_id == db_id:
@@ -216,6 +251,54 @@ class TestSyncContainer(unittest.TestCase):
                     else:
                         self.assertEqual(db_entries[file_db_id]['last_row'],
                                          status['last_row'])
+                    if db_id != file_db_id:
+                        continue
+                    else:
+                        self.assertIn('policy', status)
+                    for field in SyncContainer.POLICY_FIELDS:
+                        self.assertEqual(status['policy'][field],
+                                         getattr(self.sync_container, field))
+
+                self.assertEqual(
+                    [mock.call('%s/%s' % (self.scratch_space,
+                                          self.sync_container._account)),
+                     mock.call('%s/%s/%s' % (self.scratch_space,
+                                             self.sync_container._account,
+                                             self.sync_container._container))],
+                    mock_exists.call_args_list)
+
+    @mock.patch('__builtin__.open')
+    def test_save_last_verified_row(self, mock_open):
+        db_entries = {'db-id-1': {'aws_bucket': 'bucket',
+                                  'last_row': 100,
+                                  'last_verified_row': 10},
+                      'db-id-2': {'aws_bucket': 'bucket',
+                                  'last_row': 200,
+                                  'last_verified_row': 50},
+                      'db-id-3': {'aws_bucket': 'bucket',
+                                  'last_row': 1000}}
+        new_row = 99
+        for db_id, entry in db_entries.items():
+            self.sync_container.aws_bucket = entry['aws_bucket']
+            fake_conf_file = self.MockMetaConf(db_entries)
+            mock_open.return_value = fake_conf_file
+
+            with mock.patch('s3_sync.sync_container.os.path.exists')\
+                    as mock_exists:
+                mock_exists.return_value = True
+
+                self.sync_container.save_last_verified_row(new_row, db_id)
+                file_entries = fake_conf_file.fake_status
+                for file_db_id, status in file_entries.items():
+                    if file_db_id == db_id:
+                        self.assertEqual(new_row, status['last_verified_row'])
+                    elif 'last_verified_row' in db_entries[file_db_id]:
+                        self.assertEqual(
+                            db_entries[file_db_id]['last_verified_row'],
+                            status['last_verified_row'])
+                    self.assertEqual(
+                        db_entries[file_db_id]['last_row'],
+                        status['last_row'])
                     if db_id != file_db_id:
                         continue
                     else:
@@ -251,7 +334,7 @@ class TestSyncContainer(unittest.TestCase):
         mock_exists.side_effect = existence_check
         mock_open.return_value = fake_conf_file
 
-        self.sync_container.save_last_row(42, 'db-id')
+        self.sync_container.save_last_processed_row(42, 'db-id')
         self.assertEqual(42, fake_conf_file.fake_status['db-id']['last_row'])
         self.assertEqual('bucket',
                          fake_conf_file.fake_status['db-id']['aws_bucket'])
@@ -266,7 +349,7 @@ class TestSyncContainer(unittest.TestCase):
 
     @mock.patch('__builtin__.open')
     @mock.patch('s3_sync.sync_container.os.path.exists')
-    def test_save_last_row_new_bucket(self, mock_exists, mock_open):
+    def test_save_last_processed_row_new_bucket(self, mock_exists, mock_open):
         db_entries = {'db-id-1': {'aws_bucket': 'bucket', 'last_row': 5},
                       'db-id-2': {'aws_bucket': 'old-bucket', 'last_row': 7}}
         new_row = 42
@@ -278,7 +361,7 @@ class TestSyncContainer(unittest.TestCase):
             with mock.patch('s3_sync.sync_container.os.path.exists')\
                     as mock_exists:
                 mock_exists.return_value = True
-                self.sync_container.save_last_row(new_row, db_id)
+                self.sync_container.save_last_processed_row(new_row, db_id)
                 file_entries = fake_conf_file.fake_status
                 for file_db_id, status in file_entries.items():
                     if file_db_id == db_id:
