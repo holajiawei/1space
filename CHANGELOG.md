@@ -1,3 +1,11 @@
+## 0.1.47 (2018-10-08)
+
+Improvements:
+
+- Support the updated ContainerCrawler library.
+- Added the ability to configure syslog for the 1space daemons
+  (swift-s3-sync and swift-s3-migrator).
+
 ## 0.1.46 (2018-09-25)
 
 Improvements:
