@@ -1,3 +1,10 @@
+## 0.1.47.1 (2018-10-08)
+
+Bug fixes:
+
+- Resolve an upgrade issue where the verified row is always set to 0 from prior
+  versions of 1space for sync/lifecycle policies.
+
 ## 0.1.47 (2018-10-08)
 
 Improvements:
