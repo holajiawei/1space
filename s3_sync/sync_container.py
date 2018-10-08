@@ -61,7 +61,7 @@ class SyncContainer(container_crawler.base_sync.BaseSync):
             try:
                 status = json.load(f)
                 # First iteration did not include the bucket and DB ID
-                if row_field == 'last_row' and row_field in status:
+                if row_field == self.PROCESSED_ROW_KEY and row_field in status:
                     return status[row_field]
                 if db_id in status:
                     entry = status[db_id]
@@ -73,10 +73,10 @@ class SyncContainer(container_crawler.base_sync.BaseSync):
                             value = getattr(self, field)
                             if status[db_id]['policy'][field] != value:
                                 return 0
-                    # Happens for the new last_verified_row field.
                     try:
                         return entry[row_field]
                     except KeyError:
+                        # Happens for the new last_verified_row field.
                         if row_field == self.VERIFIED_ROW_KEY:
                             return entry.get(self.PROCESSED_ROW_KEY, 0)
                         return 0
@@ -93,28 +93,30 @@ class SyncContainer(container_crawler.base_sync.BaseSync):
             os.mkdir(self._status_account_dir)
         if not os.path.exists(self._status_file):
             with open(self._status_file, 'w') as f:
-                json.dump({db_id: {row_field: row,
-                                   'aws_bucket': self.aws_bucket,
-                                   'policy': policy}}, f)
+                new_entry = {self.PROCESSED_ROW_KEY: 0,
+                             self.VERIFIED_ROW_KEY: 0,
+                             'aws_bucket': self.aws_bucket,
+                             'policy': policy}
+                new_entry[row_field] = row
+                json.dump({db_id: new_entry}, f)
                 return
 
         with open(self._status_file, 'r+') as f:
             status = json.load(f)
+            old_entry = status.get(db_id, {})
+            new_entry = {'aws_bucket': self.aws_bucket,
+                         'policy': policy}
             # The first version did not include the DB ID and aws_bucket in the
             # status entries
-            new_status = dict(aws_bucket=self.aws_bucket,
-                              policy=policy)
             if self.PROCESSED_ROW_KEY in status:
-                new_status[self.PROCESSED_ROW_KEY] =\
+                new_entry[self.PROCESSED_ROW_KEY] =\
                     status[self.PROCESSED_ROW_KEY]
-            elif self.PROCESSED_ROW_KEY in status[db_id]:
-                new_status[self.PROCESSED_ROW_KEY] =\
-                    status[db_id][self.PROCESSED_ROW_KEY]
-            if db_id in status:
-                new_status[self.VERIFIED_ROW_KEY] = status[db_id].get(
-                    self.VERIFIED_ROW_KEY, 0)
-            new_status[row_field] = row
-            status[db_id] = new_status
+            new_entry[self.PROCESSED_ROW_KEY] = old_entry.get(
+                self.PROCESSED_ROW_KEY, 0)
+            new_entry[self.VERIFIED_ROW_KEY] = old_entry.get(
+                self.VERIFIED_ROW_KEY, new_entry[self.PROCESSED_ROW_KEY])
+            new_entry[row_field] = row
+            status[db_id] = new_entry
 
             f.seek(0)
             json.dump(status, f)

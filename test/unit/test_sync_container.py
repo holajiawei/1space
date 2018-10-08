@@ -248,6 +248,8 @@ class TestSyncContainer(unittest.TestCase):
                 for file_db_id, status in file_entries.items():
                     if file_db_id == db_id:
                         self.assertEqual(new_row, status['last_row'])
+                        self.assertEqual(
+                            entry['last_row'], status['last_verified_row'])
                     else:
                         self.assertEqual(db_entries[file_db_id]['last_row'],
                                          status['last_row'])
@@ -336,6 +338,8 @@ class TestSyncContainer(unittest.TestCase):
 
         self.sync_container.save_last_processed_row(42, 'db-id')
         self.assertEqual(42, fake_conf_file.fake_status['db-id']['last_row'])
+        self.assertEqual(
+            0, fake_conf_file.fake_status['db-id']['last_verified_row'])
         self.assertEqual('bucket',
                          fake_conf_file.fake_status['db-id']['aws_bucket'])
 
