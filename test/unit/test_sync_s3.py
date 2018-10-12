@@ -1691,39 +1691,6 @@ class TestSyncS3(unittest.TestCase):
                     self.aws_bucket, 'identity', '')
                 self.logger.exception.reset_mock()
 
-    def test_list_buckets(self):
-        now_date = datetime.datetime.now()
-        self.mock_boto3_client.list_buckets.return_value = {
-            'Owner': [
-                dict(DisplayName='test:tester',
-                     ID='test:tester')
-            ],
-            'Buckets': [
-                dict(CreationDate=now_date,
-                     Name='bucket'),
-                dict(CreationDate=now_date,
-                     Name='test-bucket')
-            ],
-            'ResponseMetadata': {
-                'HTTPStatusCode': 200,
-                'HTTPHeaders': {}
-            }
-        }
-        resp = self.sync_s3.list_buckets(None, None, None)
-        self.assertEqual(200, resp.status)
-        self.assertEqual(
-            dict(last_modified=now_date,
-                 count=0,
-                 bytes=0,
-                 name='bucket'),
-            resp.body[0])
-        self.assertEqual(
-            dict(last_modified=now_date,
-                 count=0,
-                 bytes=0,
-                 name='test-bucket'),
-            resp.body[1])
-
     def test_list_objects(self):
         prefix = '%s/%s/%s' % (self.sync_s3.get_prefix(), self.sync_s3.account,
                                self.sync_s3.container)

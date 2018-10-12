@@ -934,9 +934,7 @@ def iter_listing(list_func, logger, marker, limit, prefix, *args):
                     marker = item['name']
                 else:
                     marker = item['subdir']
-
-                if 'content_location' in item:
-                    item['content_location'] = [item['content_location']]
+                item['content_location'] = [item['content_location']]
 
                 yield item, marker
             # WSGI supplies the request parameters as UTF-8 encoded

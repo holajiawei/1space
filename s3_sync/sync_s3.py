@@ -320,18 +320,8 @@ class SyncS3(BaseSync):
            these options are NOOPs. Boto alreaded parses the time to datetime,
            so that parameter is ignored, as well.
         '''
-        with self.client_pool.get_client() as s3_client:
-            resp = s3_client.list_buckets()
-            response_body = [
-                {'last_modified': bucket['CreationDate'],
-                 'count': 0,
-                 'bytes': 0,
-                 'name': bucket['Name']} for bucket in resp.get('Buckets')]
-            return ProviderResponse(
-                True,
-                resp['ResponseMetadata']['HTTPStatusCode'],
-                resp['ResponseMetadata']['HTTPHeaders'],
-                response_body)
+        # TODO: S3 list_buckets is not implemented yet
+        return ProviderResponse(False, 501, {}, iter(['Not Implemented']))
 
     def _call_boto(self, op, **args):
         def _perform_op(s3_client):
