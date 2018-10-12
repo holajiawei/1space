@@ -663,22 +663,21 @@ class ClosingResourceIterable(object):
             raise ValueError('No closeable to close the data source defined')
 
         try:
-            iter(self.data_src)
-            self.iterable = True
+            self.iterator = iter(self.data_src)
         except TypeError:
-            self.iterable = False
+            self.iterator = None
 
-        if not self.iterable and not hasattr(self.data_src, 'read'):
+        if not self.iterator and not hasattr(self.data_src, 'read'):
             raise TypeError('Cannot iterate over the data source')
-        if not self.iterable and length is None:
+        if not self.iterator and length is None:
             raise ValueError('Must supply length with non-iterable objects')
 
     def next(self):
         if self.closed:
             raise ValueError()
         try:
-            if self.iterable:
-                return next(self.data_src)
+            if self.iterator:
+                return next(self.iterator)
             else:
                 if self.amt_read == self.length:
                     raise StopIteration
