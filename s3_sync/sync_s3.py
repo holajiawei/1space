@@ -183,7 +183,10 @@ class SyncS3(BaseSync):
             )
             if self._is_amazon() and self.encryption:
                 params['ServerSideEncryption'] = 'AES256'
-            s3_client.put_object(**params)
+            try:
+                s3_client.put_object(**params)
+            finally:
+                wrapper_stream.close()
         return True
 
     def delete_object(self, swift_key):
@@ -537,12 +540,15 @@ class SyncS3(BaseSync):
         with self.client_pool.get_client() as s3_client:
             slo_wrapper = SLOFileWrapper(
                 internal_client, self.account, manifest, metadata, req_hdrs)
-            s3_client.put_object(Bucket=self.aws_bucket,
-                                 Key=s3_key,
-                                 Body=slo_wrapper,
-                                 Metadata=slo_wrapper.get_s3_headers(),
-                                 ContentLength=len(slo_wrapper),
-                                 ContentType=metadata['content-type'])
+            try:
+                s3_client.put_object(Bucket=self.aws_bucket,
+                                     Key=s3_key,
+                                     Body=slo_wrapper,
+                                     Metadata=slo_wrapper.get_s3_headers(),
+                                     ContentLength=len(slo_wrapper),
+                                     ContentType=metadata['content-type'])
+            finally:
+                slo_wrapper.close()
 
     def _validate_slo_manifest(self, manifest):
         parts = len(manifest)
@@ -673,13 +679,16 @@ class SyncS3(BaseSync):
                     # do not read for more than 60 seconds.
                     wrapper = FileWrapper(internal_client, self.account,
                                           container, obj, req_headers)
-                    resp = s3_client.upload_part(
-                        Bucket=self.aws_bucket,
-                        Key=s3_key,
-                        Body=wrapper,
-                        ContentLength=len(wrapper),
-                        UploadId=upload_id,
-                        PartNumber=part_number)
+                    try:
+                        resp = s3_client.upload_part(
+                            Bucket=self.aws_bucket,
+                            Key=s3_key,
+                            Body=wrapper,
+                            ContentLength=len(wrapper),
+                            UploadId=upload_id,
+                            PartNumber=part_number)
+                    finally:
+                        wrapper.close()
                     if not self.check_etag(segment['hash'], resp['ETag']):
                         self.logger.error('Part %d ETag mismatch (%s): %s %s',
                                           part_number,

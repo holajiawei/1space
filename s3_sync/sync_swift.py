@@ -415,12 +415,14 @@ class SyncSwift(BaseSync):
             self.logger.debug('Uploading %s with meta: %r' % (
                 key, headers))
 
-            swift_client.put_object(dst_container,
-                                    key,
-                                    wrapper_stream,
-                                    etag=wrapper_stream.get_headers()['etag'],
-                                    headers=self._client_headers(headers),
-                                    content_length=len(wrapper_stream))
+            try:
+                swift_client.put_object(
+                    dst_container, key, wrapper_stream,
+                    etag=wrapper_stream.get_headers()['etag'],
+                    headers=self._client_headers(headers),
+                    content_length=len(wrapper_stream))
+            finally:
+                wrapper_stream.close()
         return True
 
     def _make_content_location(self, bucket):

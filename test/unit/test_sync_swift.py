@@ -228,6 +228,36 @@ class TestSyncSwift(unittest.TestCase):
             etag='deadbeef', content_length=0)
 
     @mock.patch('s3_sync.sync_swift.swiftclient.client.Connection')
+    @mock.patch('s3_sync.sync_swift.check_slo')
+    def test_upload_object_failure(self, mock_check_slo, mock_swift):
+        key = 'monkey-\xf0\x9f\x90\xb5'
+        storage_policy = 42
+        body = FakeStream(1024)
+        swift_client = mock.Mock()
+        mock_swift.return_value = swift_client
+
+        not_found = swiftclient.exceptions.ClientException('not found',
+                                                           http_status=404)
+        swift_client.head_object.side_effect = not_found
+        swift_client.put_object.side_effect = RuntimeError('Failed to PUT')
+
+        mock_check_slo.return_value = False
+        mock_ic = mock.Mock()
+        mock_ic.get_object_metadata.return_value = {
+            'content-type': 'application/test'}
+        mock_ic.get_object.return_value = (
+            200, {'Content-Length': len(body),
+                  'etag': 'deadbeef'}, body)
+
+        with self.assertRaises(RuntimeError):
+            self.sync_swift.upload_object(key, storage_policy, mock_ic)
+
+        swift_client.put_object.assert_called_with(
+            self.aws_bucket, key, mock.ANY, headers={},
+            etag='deadbeef', content_length=len(body))
+        self.assertTrue(body.closed)
+
+    @mock.patch('s3_sync.sync_swift.swiftclient.client.Connection')
     def test_upload_changed_meta(self, mock_swift):
         key = 'key'
         storage_policy = 42

@@ -1065,6 +1065,72 @@ class TestSyncS3(unittest.TestCase):
                 ]}
             )
 
+    @mock.patch('s3_sync.sync_s3.traceback')
+    def test_internal_slo_upload_failure(self, tb_mock):
+        slo_key = 'slo-object'
+        slo_meta = {'x-object-meta-foo': 'bar', 'content-type': 'test/blob'}
+        s3_key = self.sync_s3.get_s3_name(slo_key)
+        storage_policy = 42
+        swift_req_headers = {'X-Backend-Storage-Policy-Index': storage_policy,
+                             'X-Newest': True}
+        manifest = [{'name': '/segment_container/slo-object/part1',
+                     'hash': 'deadbeef',
+                     'bytes': 100},
+                    {'name': '/segment_container/slo-object/part2',
+                     'hash': 'beefdead',
+                     'bytes': 200}]
+
+        self.mock_boto3_client.create_multipart_upload.return_value = {
+            'UploadId': 'mpu-key-for-slo'}
+
+        self.mock_boto3_client.upload_part.side_effect = RuntimeError(
+            'Failed to upload part')
+
+        chunk_len = 5 * SyncS3.MB
+        fake_app_iter = [
+            (200, {'Content-Length': chunk_len}, FakeStream(chunk_len)),
+            (200, {'Content-Length': chunk_len}, FakeStream(chunk_len))]
+        mock_ic = mock.Mock()
+        mock_ic.get_object.side_effect = fake_app_iter
+        tb_mock.format_exc.return_value = 'traceback'
+
+        with self.assertRaises(RuntimeError):
+            self.sync_s3._upload_slo(
+                manifest, slo_meta, s3_key, swift_req_headers, mock_ic)
+
+        self.mock_boto3_client.create_multipart_upload.assert_called_once_with(
+            Bucket=self.aws_bucket,
+            Key=self.sync_s3.get_s3_name(slo_key),
+            Metadata={'foo': 'bar'},
+            ServerSideEncryption='AES256',
+            ContentType='test/blob')
+        self.mock_boto3_client.upload_part.assert_has_calls([
+            mock.call(Bucket=self.aws_bucket,
+                      Key=self.sync_s3.get_s3_name(slo_key),
+                      PartNumber=1,
+                      ContentLength=chunk_len,
+                      Body=mock.ANY,
+                      UploadId='mpu-key-for-slo'),
+            mock.call(Bucket=self.aws_bucket,
+                      Key=self.sync_s3.get_s3_name(slo_key),
+                      PartNumber=2,
+                      ContentLength=chunk_len,
+                      Body=mock.ANY,
+                      UploadId='mpu-key-for-slo')
+        ])
+        self.mock_boto3_client.complete_multipart_upload\
+            .assert_not_called()
+        for _, _, body in fake_app_iter:
+            self.assertTrue(body.closed)
+
+        self.assertEqual(
+            [mock.call('Failed to upload part %d for '
+                       'account/segment_container/slo-object/part%d: %s' % (
+                           i, i, 'traceback'))
+             for i in range(1, 3)],
+            self.logger.error.mock_calls)
+        self.logger.error.reset_mock()
+
     def test_internal_slo_upload_encryption(self):
         slo_key = 'slo-object'
         slo_meta = {'x-object-meta-foo': 'bar', 'content-type': 'test/blob'}
@@ -1721,3 +1787,23 @@ class TestSyncS3(unittest.TestCase):
             self.sync_s3.upload_object('key', 0, mock_ic)
 
         self.assertIn('tragic error', context.exception.message)
+
+    def test_upload_object_boto_failure(self):
+        self.mock_boto3_client.head_object.side_effect = ClientError(
+            dict(Error=dict(Code='NotFound', Message='Not found'),
+                 ResponseMetadata=dict(HTTPStatusCode=404, HTTPReaders={})),
+            'head_object')
+        self.mock_boto3_client.put_object.side_effect = RuntimeError(
+            'Failed to upload')
+        object_body = FakeStream(1024)
+        mock_ic = mock.Mock(
+            get_object_metadata=mock.Mock(return_value={
+                'content-type': 'application/test'}),
+            get_object=mock.Mock(return_value=(
+                200, {'Content-Length': len(object_body)},
+                object_body)))
+
+        with self.assertRaises(RuntimeError):
+            self.sync_s3.upload_object('key', 0, mock_ic)
+
+        self.assertTrue(object_body.closed)

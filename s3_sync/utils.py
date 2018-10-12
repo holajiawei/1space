@@ -409,6 +409,10 @@ class SLOFileWrapper(object):
     def get_s3_headers(self):
         return self._s3_headers
 
+    def close(self):
+        if self._segment:
+            self._segment.close()
+
 
 class BlobstorePutWrapper(object):
     def __init__(self, chunk_size, chunk_queue):

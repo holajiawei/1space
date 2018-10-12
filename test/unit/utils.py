@@ -43,5 +43,8 @@ class FakeStream(object):
     def __iter__(self):
         return self
 
+    def __len__(self):
+        return self.size
+
     def close(self):
         self.closed = True
