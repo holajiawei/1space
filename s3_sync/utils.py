@@ -320,8 +320,8 @@ class FileWrapper(SeekableFileLikeIter):
         _bytes_read = self.tell()
         if called_from_read:
             _bytes_read += len(the_data)
-        # TODO: we do not need to read an extra byte after
-        # https://review.openstack.org/#/c/363199/ is released
+        # TODO: we do not need to read an extra byte once we drop support for
+        # swift<2.10.0 (see https://github.com/openstack/swift/commit/66c905e)
         if self.length is not None and _bytes_read == len(self):
             try:
                 next(self.iterator)
