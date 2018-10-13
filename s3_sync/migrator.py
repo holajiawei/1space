@@ -25,6 +25,7 @@ import errno
 import json
 import logging
 import os
+import re
 import sys
 import tempfile
 import time
@@ -41,7 +42,7 @@ from .utils import (convert_to_local_headers, convert_to_swift_headers,
                     get_sys_migrator_header, MigrationContainerStates,
                     diff_account_headers)
 from swift.common.http import HTTP_NOT_FOUND, HTTP_CONFLICT
-from swift.common import swob
+from swift.common import swob, constraints
 from swift.common.internal_client import UnexpectedResponse
 from swift.common.utils import FileLikeIter, Timestamp, quote
 
@@ -57,6 +58,7 @@ IGNORE_KEYS = set(('status', 'aws_secret', 'all_buckets', 'custom_prefix'))
 MigrateObjectWork = namedtuple('MigrateObjectWork', 'aws_bucket container key')
 UploadObjectWork = namedtuple('UploadObjectWork', 'container key object '
                               'headers aws_bucket')
+S3_MPU_RE = re.compile('[0-9a-z]+-\d+$')
 
 
 class MigrationError(Exception):
@@ -821,6 +823,29 @@ class Migrator(object):
             remote['last_modified'], SWIFT_TIME_FMT)
         return remote_time < now - older_than
 
+    def _is_large(self, entry):
+        # Temporary check until the large file support exists
+        if S3_MPU_RE.match(entry['hash']):
+            self.logger.warn(
+                'Skipping %s: Multipart objects not supported yet' %
+                (entry['name'],))
+            return True
+        if self.config.get('protocol') != 'swift' and \
+                int(entry['bytes']) > constraints.MAX_FILE_SIZE:
+            self.logger.warn(
+                'Skipping %s: non-swift large objects not supported yet'
+                % (entry['name'],))
+            return True
+        return False
+
+    def object_queue_put(self, aws_bucket, container, remote):
+        if self._is_large(remote):
+            return
+        if not self._old_enough(remote):
+            return
+        work = MigrateObjectWork(aws_bucket, container, remote['name'])
+        self.object_queue.put(work)
+
     def _find_missing_objects(
             self, container, aws_bucket, marker, prefix, list_all):
 
@@ -842,10 +867,7 @@ class Migrator(object):
             # the keys that were returned in the listing and restart on the
             # following iteration.
             if not local or local['name'] > remote['name']:
-                if self._old_enough(remote):
-                    work = MigrateObjectWork(aws_bucket, container,
-                                             remote['name'])
-                    self.object_queue.put(work)
+                self.object_queue_put(aws_bucket, container, remote)
                 scanned += 1
                 remote = next(source_iter)
                 if remote:
@@ -863,10 +885,8 @@ class Migrator(object):
                         self._check_large_objects(
                             aws_bucket, container, remote['name'], ic)
                 else:
-                    if cmp_ret < 0 and self._old_enough(remote):
-                        work = MigrateObjectWork(aws_bucket, container,
-                                                 remote['name'])
-                        self.object_queue.put(work)
+                    if cmp_ret < 0:
+                        self.object_queue_put(aws_bucket, container, remote)
                 remote = next(source_iter)
                 local = next(local_iter)
                 scanned += 1
