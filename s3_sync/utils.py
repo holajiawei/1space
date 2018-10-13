@@ -76,6 +76,7 @@ ACCOUNT_ACL_KEY = 'x-account-access-control'
 SYSMETA_ACCOUNT_ACL_KEY = \
     get_sys_meta_prefix('account') + 'core-access-control'
 PFS_ETAG_PREFIX = 'pfs'
+DEFAULT_CHUNK_SIZE = 65536
 
 
 class MigrationContainerStates(object):
@@ -130,10 +131,9 @@ class RemoteHTTPError(Exception):
 class IterableFromFileLike(object):
     def __init__(self, filelike):
         self.filelike = filelike
-        self.chunksize = 2**16
 
     def next(self):
-        got = self.filelike.read(self.chunksize)
+        got = self.filelike.read(DEFAULT_CHUNK_SIZE)
         if got:
             return got
         raise StopIteration
@@ -450,8 +450,6 @@ class BlobstorePutWrapper(object):
 
 
 class SwiftPutWrapper(object):
-    CHUNK_SIZE = 65536
-
     def __init__(self, body, headers, path, app, logger):
         self.body = body
         self.app = app
@@ -459,7 +457,7 @@ class SwiftPutWrapper(object):
         self.path = path
         self.logger = logger
         self.queue = eventlet.queue.Queue(maxsize=15)
-        self.put_wrapper = BlobstorePutWrapper(self.CHUNK_SIZE, self.queue)
+        self.put_wrapper = BlobstorePutWrapper(DEFAULT_CHUNK_SIZE, self.queue)
         self.put_thread = eventlet.greenthread.spawn(
             self._create_put_request().get_response, self.app)
 
@@ -472,8 +470,8 @@ class SwiftPutWrapper(object):
             headers=self.headers)
 
     def _read_chunk(self, size):
-        if size == -1 or size > self.CHUNK_SIZE:
-            size = self.CHUNK_SIZE
+        if size == -1 or size > DEFAULT_CHUNK_SIZE:
+            size = DEFAULT_CHUNK_SIZE
         if hasattr(self.body, 'read'):
             chunk = self.body.read(size)
         else:
@@ -502,7 +500,7 @@ class SwiftPutWrapper(object):
         return self
 
     def next(self):
-        chunk = self.read(self.CHUNK_SIZE)
+        chunk = self.read(DEFAULT_CHUNK_SIZE)
         if not chunk:
             raise StopIteration
         return chunk
@@ -623,7 +621,7 @@ class SwiftSloPutWrapper(SwiftPutWrapper):
                 return chunk
 
             self.segment_index += 1
-            self.put_wrapper = BlobstorePutWrapper(self.CHUNK_SIZE, self.queue)
+            self.put_wrapper = BlobstorePutWrapper(DEFAULT_CHUNK_SIZE, self.queue)
             self.put_thread = eventlet.greenthread.spawn(
                 self._create_put_request().get_response, self.app)
             self.queue.put(chunk[self.remainder:])
@@ -643,7 +641,7 @@ class ClosingResourceIterable(object):
         data is consumed.
     """
     def __init__(self, resource, data_src, close_callable=None,
-                 read_chunk=65536, length=None):
+                 read_chunk=DEFAULT_CHUNK_SIZE, length=None):
         self.closed = False
         self.exhausted = False
         self.data_src = data_src
