@@ -395,9 +395,10 @@ class SLOFileWrapper(object):
         return data
 
     def next(self):
-        data = self.read()
-        if not data:
-            raise StopIteration()
+        data = self.read(DEFAULT_CHUNK_SIZE)
+        if data:
+            return data
+        raise StopIteration()
 
     def __iter__(self):
         return self

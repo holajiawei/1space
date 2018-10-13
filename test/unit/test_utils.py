@@ -642,6 +642,49 @@ class TestSLOFileWrapper(unittest.TestCase):
         self.assertEqual(True, part1_content.closed)
         self.assertEqual(True, part2_content.closed)
 
+    @mock.patch.object(utils, 'DEFAULT_CHUNK_SIZE', 10)
+    def test_iter_manifest(self):
+        part1_content = FakeStream(content='A' * 15)
+        part1_content.chunk_size = 100
+        part2_content = FakeStream(content='B' * 30)
+        part2_content.chunk_size = 100
+        part3_content = FakeStream(content='C' * 3)
+        part3_content.chunk_size = 100
+
+        def get_object(account, container, key, headers={}):
+            if account != 'account':
+                raise RuntimeError('unknown account')
+            if container != 'foo':
+                raise RuntimeError('unknown container')
+            if key == 'part1':
+                return (200, {'Content-Length': 15}, part1_content)
+            if key == 'part2':
+                return (200, {'Content-Length': 30}, part2_content)
+            if key == 'part3':
+                return (200, {'Content-Length': 3}, part3_content)
+            raise RuntimeError('unknown key')
+
+        self.swift.get_object.side_effect = get_object
+        slo = utils.SLOFileWrapper(self.swift, 'account', [
+            {'name': '/foo/part1',
+             'bytes': 15},
+            {'name': '/foo/part2',
+             'bytes': 30},
+            {'name': '/foo/part3',
+             'bytes': 3},
+        ], {'etag': 'deadbeef'})
+        self.assertEqual([x for x in slo], [
+            'A' * 10, 'A' * 5,
+            'B' * 10, 'B' * 10, 'B' * 10,
+            'C' * 3
+        ])
+
+        self.swift.get_object.has_calls(
+            mock.call('account', 'foo', 'part1', {}),
+            mock.call('account', 'foo', 'part2', {}))
+        self.assertEqual(True, part1_content.closed)
+        self.assertEqual(True, part2_content.closed)
+
 
 class TestClosingResourceIterable(unittest.TestCase):
     def test_resource_close_afted_read(self):
