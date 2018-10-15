@@ -1,3 +1,17 @@
+## 0.1.48 (2018-10-15)
+
+Features:
+
+- Added support (functional tests and necessary code changes) for migrations
+  from S3 to an internal Swift cluster. Currently, large objects (larger than
+  the Swift object size limit) and multi-part objects are not supported.
+
+Bug fixes:
+
+- Resolved an issue where 1space daemons could leave internal Swift requests
+  unclosed if an error was encountered when transferring the object to the
+  remote blob store.
+
 ## 0.1.47.1 (2018-10-08)
 
 Bug fixes:
