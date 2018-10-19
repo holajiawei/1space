@@ -73,7 +73,22 @@ class TestMigrator(TestCloudSyncBase):
             ('s3-blob', 's3 content', {}, {}),
             (u's3-unicod\u00e9', '\xde\xad\xbe\xef', {}, {}),
             ('s3-with-headers', 'header-blob',
-             {'custom-header': 'value'},
+             {'custom-header': 'value',
+              'unreadable-prefix': '=?UTF-8?Q?=04w?=',
+              'unreadable-suffix': '=?UTF-8?Q?h=04?=',
+              'lots-of-unprintable': '=?UTF-8?B?BAQEBAQ=?='},
+             {'content-type': 'migrator/test',
+              'content-disposition': "attachment; filename='test-blob.jpg'",
+              'content-encoding': 'identity'})]
+
+        expected_objects = [
+            ('s3-blob', 's3 content', {}, {}),
+            (u's3-unicod\u00e9', '\xde\xad\xbe\xef', {}, {}),
+            ('s3-with-headers', 'header-blob',
+             {'x-object-meta-custom-header': 'value',
+              'x-object-meta-unreadable-prefix': '\x04w',
+              'x-object-meta-unreadable-suffix': 'h\x04',
+              'x-object-meta-lots-of-unprintable': 5 * '\x04'},
              {'content-type': 'migrator/test',
               'content-disposition': "attachment; filename='test-blob.jpg'",
               'content-encoding': 'identity'})]
@@ -104,13 +119,13 @@ class TestMigrator(TestCloudSyncBase):
         with self.migrator_running():
             wait_for_condition(5, partial(_check_objects_copied, conn_noshunt))
 
-        for name, expected_body, user_meta, req_headers in test_objects:
+        for name, expected_body, user_meta, req_headers in expected_objects:
             for conn in (conn_noshunt, conn_local):
                 hdrs, body = conn.get_object(migration['container'], name)
                 self.assertEqual(expected_body, body)
                 for k, v in user_meta.items():
-                    self.assertIn('x-object-meta-' + k, hdrs)
-                    self.assertEqual(v, hdrs['x-object-meta-' + k])
+                    self.assertIn(k, hdrs)
+                    self.assertEqual(v, hdrs[k])
                 for k, v in req_headers.items():
                     self.assertIn(k, hdrs)
                     self.assertEqual(v, hdrs[k])

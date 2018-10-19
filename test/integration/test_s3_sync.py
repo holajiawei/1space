@@ -475,6 +475,9 @@ class TestCloudSync(TestCloudSyncBase):
             'content-length': 88,  # take an int for convenience
             'content-type': 'text/plain',
             'x-object-meta-foobie-bar': 'bam',
+            'x-object-meta-unreadable-prefix': u'\x04w'.encode('utf8'),
+            'x-object-meta-unreadable-suffix': u'h\x04'.encode('utf8'),
+            'x-object-meta-lots-of-unprintable': 5 * '\x04'.encode('utf8'),
         }, repeat('a'))
         self.assertTrue(resp.success)
 
@@ -484,6 +487,12 @@ class TestCloudSync(TestCloudSyncBase):
         self.assertEqual('text/plain', resp['ContentType'])
         self.assertEqual('a' * 88, resp['Body'].read())
         self.assertEqual('bam', resp['Metadata']['foobie-bar'])
+        self.assertEqual('=?UTF-8?Q?=04w?=',
+                         resp['Metadata']['unreadable-prefix'])
+        self.assertEqual('=?UTF-8?Q?h=04?=',
+                         resp['Metadata']['unreadable-suffix'])
+        self.assertEqual('=?UTF-8?B?BAQEBAQ=?=',
+                         resp['Metadata']['lots-of-unprintable'])
 
     def test_provider_s3_put_object_no_prefix(self):
         mapping = self.s3_sync_mapping()

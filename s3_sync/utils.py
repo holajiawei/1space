@@ -17,9 +17,12 @@ limitations under the License.
 import eventlet
 import hashlib
 import json
-from lxml import etree
+import string
 import StringIO
 import urllib
+
+from email.header import Header, decode_header
+from lxml import etree
 
 # Old (prior to 2.11) versions of swift cannot import this, but cloud sync
 # cannot be set up for such old clusters. This just allows the cloud shunt to
@@ -626,7 +629,8 @@ class SwiftSloPutWrapper(SwiftPutWrapper):
                 return chunk
 
             self.segment_index += 1
-            self.put_wrapper = BlobstorePutWrapper(DEFAULT_CHUNK_SIZE, self.queue)
+            self.put_wrapper = BlobstorePutWrapper(
+                DEFAULT_CHUNK_SIZE, self.queue)
             self.put_thread = eventlet.greenthread.spawn(
                 self._create_put_request().get_response, self.app)
             self.queue.put(chunk[self.remainder:])
@@ -836,13 +840,33 @@ def convert_to_s3_headers(swift_headers):
     for hdr in swift_headers.keys():
         if hdr.lower().startswith(SWIFT_USER_META_PREFIX):
             s3_header_name = hdr[len(SWIFT_USER_META_PREFIX):].lower()
-            s3_headers[s3_header_name] = urllib.quote(swift_headers[hdr])
+            s3_headers[s3_header_name] = sanitize_s3_header(swift_headers[hdr])
         elif hdr.lower() == MANIFEST_HEADER:
             s3_headers[MANIFEST_HEADER] = urllib.quote(swift_headers[hdr])
         elif hdr.lower() == SLO_HEADER:
             s3_headers[SLO_HEADER] = urllib.quote(swift_headers[hdr])
 
     return s3_headers
+
+
+def sanitize_s3_header(value):
+    if set(value).issubset(string.printable):
+        return value
+
+    value = Header(value, 'UTF-8').encode()
+    if value.startswith('=?utf-8?q?'):
+        return '=?UTF-8?Q?' + value[10:]
+    elif value.startswith('=?utf-8?b?'):
+        return '=?UTF-8?B?' + value[10:]
+    else:
+        return value
+
+
+def decode_s3_header(value):
+    header, charset = decode_header(value)[0]
+    if charset not in ('utf-8', 'UTF-8', 'utf8'):
+        return value
+    return header
 
 
 def convert_to_swift_headers(s3_headers):
@@ -854,7 +878,7 @@ def convert_to_swift_headers(s3_headers):
             swift_headers[header[len(S3_USER_META_PREFIX):]] = value
         elif header.startswith(S3_USER_META_PREFIX):
             key = SWIFT_USER_META_PREFIX + header[len(S3_USER_META_PREFIX):]
-            swift_headers[key] = value
+            swift_headers[key] = decode_s3_header(value)
         elif header == 'content-length':
             # Capitalize, so eventlet doesn't try to add its own
             swift_headers['Content-Length'] = value
@@ -862,7 +886,7 @@ def convert_to_swift_headers(s3_headers):
             # S3 returns ETag in quotes
             swift_headers['etag'] = value[1:-1]
         else:
-            swift_headers[header] = value
+            swift_headers[header] = decode_s3_header(value)
     return swift_headers
 
 

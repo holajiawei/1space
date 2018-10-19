@@ -34,6 +34,9 @@ class TestUtilsFunctions(unittest.TestCase):
                       'x-object-meta-Bar': 'Bar',
                       'X-Object-Meta-upper': '1',
                       'X-ObJeCT-Meta-CraZy': 'CrAzY',
+                      'x-object-meta-non-ascii': '\xc3\xa9',
+                      'x-object-meta-non-ascii-prefix': '\x04w',
+                      'x-object-meta-non-ascii-suffix': 'h\x04',
                       'X-Object-Manifest': 'container/key/123415/prefix',
                       'Content-Type': 'application/testing'}
         out = utils.convert_to_s3_headers(input_hdrs)
@@ -41,9 +44,37 @@ class TestUtilsFunctions(unittest.TestCase):
                          key, value in input_hdrs.items() if
                          key.lower().startswith(utils.SWIFT_USER_META_PREFIX)])
         expected[utils.MANIFEST_HEADER] = input_hdrs['X-Object-Manifest']
+        expected['non-ascii'] = '=?UTF-8?B?w6k=?='
+        expected['non-ascii-prefix'] = '=?UTF-8?Q?=04w?='
+        expected['non-ascii-suffix'] = '=?UTF-8?Q?h=04?='
         self.assertEqual(set(expected.keys()), set(out.keys()))
         for key in out.keys():
             self.assertEqual(expected[key], out[key])
+
+    def test_swift_headers_conversion(self):
+        input_hdrs = {'x-amz-meta-custom-header': 'value',
+                      'x-amz-meta-unreadable-prefix': '=?UTF-8?Q?=04w?=',
+                      'x-amz-meta-unreadable-suffix': '=?UTF-8?Q?h=04?=',
+                      'x-amz-meta-lots-of-unprint': '=?UTF-8?B?BAQEBAQ=?=',
+                      'content-length': '128',
+                      'etag': '"deadbeef"',
+                      'content-type': 'migrator/test',
+                      'content-disposition': "attachment; filename='test.jpg'",
+                      'content-encoding': 'identity'}
+
+        exp_hdrs = {'x-object-meta-custom-header': 'value',
+                    'x-object-meta-unreadable-prefix': '\x04w',
+                    'x-object-meta-unreadable-suffix': 'h\x04',
+                    'x-object-meta-lots-of-unprint': 5 * '\x04',
+                    'Content-Length': '128',
+                    'etag': 'deadbeef',
+                    'content-type': 'migrator/test',
+                    'content-disposition': "attachment; filename='test.jpg'",
+                    'content-encoding': 'identity'}
+        out = utils.convert_to_swift_headers(input_hdrs)
+        self.assertEqual(set(exp_hdrs.keys()), set(out.keys()))
+        for key in out.keys():
+            self.assertEqual(exp_hdrs[key], out[key])
 
     def test_get_slo_etag(self):
         sample_manifest = [{'hash': 'abcdef'}, {'hash': 'fedcba'}]
