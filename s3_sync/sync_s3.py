@@ -84,7 +84,8 @@ class SyncS3(BaseSync):
         else:
             # For the other providers, we default to v2 signer, as a lot of
             # them don't support v4 (e.g. Google)
-            boto_config = boto3.session.Config(s3={'addressing_style': 'path'})
+            boto_config = boto3.session.Config(signature_version='s3',
+                                               s3={'addressing_style': 'path'})
             if self._google():
                 boto_config.user_agent = "%s %s" % (
                     self.GOOGLE_UA_STRING, boto_session._session.user_agent())
@@ -117,7 +118,9 @@ class SyncS3(BaseSync):
     @staticmethod
     def _close_conn(conn):
         if conn._endpoint and conn._endpoint.http_session:
-            conn._endpoint.http_session.close()
+            close = getattr(conn._endpoint.http_session, 'close', None)
+            if close:
+                close()
 
     def upload_object(self, swift_key, storage_policy_index, internal_client):
         s3_key = self.get_s3_name(swift_key)

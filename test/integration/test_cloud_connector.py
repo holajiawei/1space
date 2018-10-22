@@ -16,6 +16,7 @@ limitations under the License.
 
 import boto3
 import hashlib
+import urllib
 from swiftclient import ClientException
 
 from . import TestCloudSyncBase, clear_swift_container, clear_s3_bucket
@@ -54,7 +55,8 @@ class TestCloudConnector(TestCloudSyncBase):
         session = boto3.session.Session(
             aws_access_key_id=self.cc_mapping['aws_identity'],
             aws_secret_access_key=self.cc_mapping['aws_secret'])
-        conf = boto3.session.Config(s3={'addressing_style': 'path'})
+        conf = boto3.session.Config(signature_version='s3',
+                                    s3={'addressing_style': 'path'})
         self._orig_s3_client = self.s3_client
         self.s3_client = session.client('s3', config=conf,
                                         endpoint_url=self.cc_endpoint)
@@ -77,8 +79,8 @@ class TestCloudConnector(TestCloudSyncBase):
                 obj_name, {'content-length': str(len(obj_name) + 1),
                            'content-type': 'application/party-time'},
                 body_iter)
-            exp_etags[obj_name] = '"' + \
-                hashlib.md5(''.join(body_iter)).hexdigest() + '"'
+            etag = '"' + hashlib.md5(''.join(body_iter)).hexdigest() + '"'
+            exp_etags[obj_name] = urllib.quote(etag)
             self.assertEqual(200, resp.status)  # S3 sez 200
             self.assertEqual('', ''.join(resp.body))
 
@@ -109,8 +111,8 @@ class TestCloudConnector(TestCloudSyncBase):
                 obj_name, {'content-length': str(len(obj_name) + 1),
                            'content-type': 'application/party-time'},
                 body_iter)
-            exp_etags[obj_name] = '"' + \
-                hashlib.md5(''.join(body_iter)).hexdigest() + '"'
+            etag = '"' + hashlib.md5(''.join(body_iter)).hexdigest() + '"'
+            exp_etags[obj_name] = urllib.quote(etag)
             self.assertEqual(200, resp.status)  # S3 sez 200
             self.assertEqual('', ''.join(resp.body))
         # remotes
@@ -123,7 +125,7 @@ class TestCloudConnector(TestCloudSyncBase):
                 contents=body)
             self.assertEqual(got_etag,
                              hashlib.md5(body).hexdigest())
-            exp_etags[obj_name] = '"' + got_etag + '"'
+            exp_etags[obj_name] = urllib.quote('"' + got_etag + '"')
 
         list_resp = self.s3_client.list_objects_v2(
             Bucket=self.cc_mapping['aws_bucket'],
@@ -152,8 +154,8 @@ class TestCloudConnector(TestCloudSyncBase):
                 obj_name, {'content-length': str(len(obj_name) + 1),
                            'content-type': 'application/party-time'},
                 body_iter)
-            exp_etags[obj_name] = '"' + \
-                hashlib.md5(''.join(body_iter)).hexdigest() + '"'
+            etag = '"' + hashlib.md5(''.join(body_iter)).hexdigest() + '"'
+            exp_etags[obj_name] = urllib.quote(etag)
             self.assertEqual(200, resp.status)  # S3 sez 200
             self.assertEqual('', ''.join(resp.body))
         # remotes
@@ -166,7 +168,7 @@ class TestCloudConnector(TestCloudSyncBase):
                 contents=body)
             self.assertEqual(got_etag,
                              hashlib.md5(body).hexdigest())
-            exp_etags[obj_name] = '"' + got_etag + '"'
+            exp_etags[obj_name] = urllib.quote('"' + got_etag + '"')
 
         list_resp = self.s3_client.list_objects_v2(
             Bucket=self.cc_mapping['aws_bucket'],
@@ -196,7 +198,7 @@ class TestCloudConnector(TestCloudSyncBase):
                 contents=body)
             self.assertEqual(got_etag,
                              hashlib.md5(body).hexdigest())
-            exp_etags[obj_name] = '"' + got_etag + '"'
+            exp_etags[obj_name] = urllib.quote('"' + got_etag + '"')
 
         list_resp = self.s3_client.list_objects_v2(
             Bucket=self.cc_mapping['aws_bucket'],
@@ -231,8 +233,8 @@ class TestCloudConnector(TestCloudSyncBase):
                 obj_name, {'content-length': str(len(obj_name) + 1),
                            'content-type': 'application/party-time'},
                 body_iter)
-            exp_etags[obj_name] = '"' + \
-                hashlib.md5(''.join(body_iter)).hexdigest() + '"'
+            etag = '"' + hashlib.md5(''.join(body_iter)).hexdigest() + '"'
+            exp_etags[obj_name] = urllib.quote(etag)
             self.assertEqual(200, resp.status)  # S3 sez 200
             self.assertEqual('', ''.join(resp.body))
 
@@ -311,7 +313,8 @@ class TestCloudConnector(TestCloudSyncBase):
             Delimiter='|',
             Prefix=u'\u062a|',
             MaxKeys=1,
-            ContinuationToken=list_resp['NextContinuationToken'],
+            ContinuationToken=urllib.unquote(
+                list_resp['NextContinuationToken']),
         )
         self.assertNotIn('Contents', list_resp)
         self.assertEqual([
@@ -374,8 +377,8 @@ class TestCloudConnector(TestCloudSyncBase):
                     obj_name, {'content-length': str(len(obj_name) + 1),
                                'content-type': 'application/party-time'},
                     body_iter)
-                exp_etags[obj_name] = '"' + \
-                    hashlib.md5(''.join(body_iter)).hexdigest() + '"'
+                etag = '"' + hashlib.md5(''.join(body_iter)).hexdigest() + '"'
+                exp_etags[obj_name] = urllib.quote(etag)
                 self.assertEqual(200, resp.status)  # S3 sez 200
                 self.assertEqual('', ''.join(resp.body))
             else:
@@ -387,7 +390,7 @@ class TestCloudConnector(TestCloudSyncBase):
                     contents=body)
                 self.assertEqual(got_etag,
                                  hashlib.md5(body).hexdigest())
-                exp_etags[obj_name] = '"' + got_etag + '"'
+                exp_etags[obj_name] = urllib.quote('"' + got_etag + '"')
 
         list_resp = self.s3_client.list_objects_v2(
             Bucket=self.cc_mapping['aws_bucket'],
@@ -464,7 +467,8 @@ class TestCloudConnector(TestCloudSyncBase):
             Delimiter='|',
             Prefix=u'\u062a|',
             MaxKeys=1,
-            ContinuationToken=list_resp['NextContinuationToken'],
+            ContinuationToken=urllib.unquote(
+                list_resp['NextContinuationToken']),
         )
         self.assertNotIn('Contents', list_resp)
         self.assertEqual([
@@ -529,7 +533,7 @@ class TestCloudConnector(TestCloudSyncBase):
                 contents=body)
             self.assertEqual(got_etag,
                              hashlib.md5(body).hexdigest())
-            exp_etags[obj_name] = '"' + got_etag + '"'
+            exp_etags[obj_name] = urllib.quote('"' + got_etag + '"')
 
         list_resp = self.s3_client.list_objects_v2(
             Bucket=self.cc_mapping['aws_bucket'],
@@ -606,7 +610,8 @@ class TestCloudConnector(TestCloudSyncBase):
             Delimiter='/',
             Prefix=u'\u062a/',
             MaxKeys=1,
-            ContinuationToken=list_resp['NextContinuationToken'],
+            ContinuationToken=urllib.unquote(
+                list_resp['NextContinuationToken']),
         )
         self.assertNotIn('Contents', list_resp)
         self.assertEqual([
@@ -817,7 +822,8 @@ class TestCloudConnector(TestCloudSyncBase):
         session = boto3.session.Session(
             aws_access_key_id=self.cc_mapping['aws_identity'],
             aws_secret_access_key=self.cc_mapping['aws_secret'])
-        conf = boto3.session.Config(s3={'addressing_style': 'path'})
+        conf = boto3.session.Config(signature_version='s3',
+                                    s3={'addressing_style': 'path'})
         s3_client = session.client('s3', config=conf,
                                    endpoint_url=self.cc_endpoint)
 
@@ -909,7 +915,8 @@ class TestCloudConnector(TestCloudSyncBase):
         session = boto3.session.Session(
             aws_access_key_id=self.cc_mapping['aws_identity'],
             aws_secret_access_key=self.cc_mapping['aws_secret'])
-        conf = boto3.session.Config(s3={'addressing_style': 'path'})
+        conf = boto3.session.Config(signature_version='s3',
+                                    s3={'addressing_style': 'path'})
         s3_client = session.client('s3', config=conf,
                                    endpoint_url=self.cc_endpoint)
 

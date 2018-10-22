@@ -706,7 +706,8 @@ class TestSyncS3(unittest.TestCase):
                     'account': 'account',
                     'container': 'container',
                     'aws_endpoint': 'http://test.com'})
-            conf_mock.assert_called_once_with(s3={'addressing_style': 'path'})
+            conf_mock.assert_called_once_with(signature_version='s3',
+                                              s3={'addressing_style': 'path'})
 
     @mock.patch('s3_sync.sync_s3.boto3.session.Session')
     def test_session_token_plumbing(self, session_mock):
