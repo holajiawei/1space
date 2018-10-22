@@ -47,10 +47,10 @@ the remote store in the common case).
 `swift-s3-sync` depends on:
 
 - [container-crawler library](https://github.com/swiftstack/container-crawler)
-- [botocore](https://github.com/swiftstack/botocore/tree/1.4.32.5)
+- [botocore](https://github.com/swiftstack/botocore/tree/1.12.23.1)
   (unfortunately, we had to use our own fork, as a number of patches were
   difficult to merge upstream)
-- [boto](https://github.com/boto/boto3/tree/1.3.1)
+- [boto](https://github.com/boto/boto3)
 - [eventlet](https://github.com/eventlet/eventlet)
 
 Until we can merge the boto patches, you will also have to install botocore from
