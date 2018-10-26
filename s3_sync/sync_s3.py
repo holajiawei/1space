@@ -83,8 +83,9 @@ class SyncS3(BaseSync):
         if not self.endpoint or self.endpoint.endswith('amazonaws.com'):
             # We always use v4 signer with Amazon, as it will support all
             # regions.
-            boto_config = boto3.session.Config(signature_version='s3v4',
-                                               s3={'aws_chunked': True})
+            boto_config = boto3.session.Config(
+                signature_version='s3v4',
+                s3={'payload_signing_enabled': False})
         else:
             # For the other providers, we default to v2 signer, as a lot of
             # them don't support v4 (e.g. Google)

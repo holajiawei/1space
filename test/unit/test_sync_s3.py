@@ -746,8 +746,9 @@ class TestSyncS3(unittest.TestCase):
                     'aws_secret': 'credential',
                     'account': 'account',
                     'container': 'container'})
-            conf_mock.assert_called_once_with(signature_version='s3v4',
-                                              s3={'aws_chunked': True})
+            conf_mock.assert_called_once_with(
+                signature_version='s3v4',
+                s3={'payload_signing_enabled': False})
 
         with mock.patch(config_class) as conf_mock:
             SyncS3({'aws_bucket': self.aws_bucket,
@@ -925,7 +926,8 @@ class TestSyncS3(unittest.TestCase):
                                      called_config.s3)
                 else:
                     self.assertEqual('s3v4', called_config.signature_version)
-                    self.assertEqual({'aws_chunked': True}, called_config.s3)
+                    self.assertEqual(
+                        {'payload_signing_enabled': False}, called_config.s3)
                 self.assertEqual(endpoint == SyncS3.GOOGLE_API,
                                  sync._google())
 
