@@ -1,0 +1,93 @@
+#!/bin/bash
+
+# Note that these port numbers must match the configured values for the
+# various servers in their configuration files.
+declare -A port=(["account.builder"]=6012 ["container.builder"]=6011 \
+    ["object.builder"]=6010)
+
+print_usage() {
+    echo "
+        NAME
+            nasconnector-gen-builders - Registers nas shares to be accessed by
+            object storage.
+        SYNOPSIS
+            nasconnector-gen-builders [-v] [-h] share_mount_point ...
+        DESCRIPTION
+            Register share volumes to be accessed over OpenStack Swift object
+            storage.
+        OPTIONS
+            -v or --verbose
+              Verbose
+            -h or --help
+              Prints help screen
+        EXAMPLES
+            nasconnector-gen-builders myvol1 myvol2
+            -Creates new ring files with myvol1 and myvol2
+
+            nasconnector-gen-builders myvol2
+            -Creates new ring files by removing myvol1
+            "
+}
+
+builder_files="account.builder container.builder object.builder"
+
+function create {
+    swift-ring-builder $1 create 1 1 1 >> /tmp/out
+}
+
+function add {
+    swift-ring-builder $1 add --region 1 --zone $2 --ip 127.0.0.1 --port $3 \
+        --device $4 --weight 100.0 --meta "_"
+}
+
+function rebalance {
+    swift-ring-builder $1 rebalance
+}
+
+function build {
+    swift-ring-builder $1
+}
+
+verbose=0
+outdev="/dev/null"
+
+if [ "$1" = "-v" ] || [ "$1" = "--verbose" ]; then
+        verbose=1
+        outdev="/dev/stdout"
+        shift
+fi
+
+if [ "x$1" = "x" ]; then
+    echo "Please specify the share volume name to use."
+    print_usage
+    exit 1
+fi
+
+if [ "$1" = "-h" ] || [ "$1" = "--help" ]; then
+        print_usage
+        exit 0
+fi
+
+
+if ! cd "/etc/swift"; then
+    echo "The path /etc/swift not accessible. Please check if it exists."
+    exit 1
+fi
+
+for builder_file in $builder_files
+do
+    create $builder_file
+
+    zone=1
+    for volname in $@
+    do
+        add $builder_file $zone ${port[$builder_file]} $volname >& $outdev
+        zone=$(expr $zone + 1)
+    done
+
+    rebalance $builder_file >& $outdev
+    build $builder_file >& $outdev
+
+done
+
+echo "Ring files are prepared in /etc/swift. Please restart object store services"
