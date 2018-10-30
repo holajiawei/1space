@@ -68,17 +68,15 @@ class TestVerify(TestCloudSyncBase):
         # specified bucket.
         # ...which is basically the same as `test_swift_bad_container` but with
         # an admin user.
-        actual = s3_sync.verify.main([
+        msg = ('Unexpected status code checking PUT: 404 Not Found')
+        self.assertEqual(msg, s3_sync.verify.main([
             '--protocol=swift',
             '--endpoint=' + self.SWIFT_CREDS['authurl'],
             '--username=' + self.SWIFT_CREDS['admin']['user'],
             '--password=' + self.SWIFT_CREDS['admin']['key'],
             '--account=AUTH_test',
             '--bucket=' + self.swift_container,
-        ])
-        self.assertIn('404 Not Found', actual)
-        self.assertTrue(actual.startswith(
-            'Unexpected error validating credentials: Object PUT failed: '))
+        ]))
 
     @swift_is_unchanged
     def test_swift_all_containers(self):
@@ -92,8 +90,7 @@ class TestVerify(TestCloudSyncBase):
 
     @swift_is_unchanged
     def test_swift_bad_creds(self):
-        msg = ('Invalid credentials. Please check the Access Key ID and '
-               'Secret Access Key.')
+        msg = ('Unexpected status code checking PUT: 401 Unauthorized')
         self.assertEqual(msg, s3_sync.verify.main([
             '--protocol=swift',
             '--endpoint=' + self.SWIFT_CREDS['authurl'],
@@ -104,16 +101,14 @@ class TestVerify(TestCloudSyncBase):
 
     @swift_is_unchanged
     def test_swift_bad_container(self):
-        actual = s3_sync.verify.main([
+        msg = ('Unexpected status code checking PUT: 404 Not Found')
+        self.assertEqual(msg, s3_sync.verify.main([
             '--protocol=swift',
             '--endpoint=' + self.SWIFT_CREDS['authurl'],
             '--username=' + self.SWIFT_CREDS['dst']['user'],
             '--password=' + self.SWIFT_CREDS['dst']['key'],
             '--bucket=does-not-exist',
-        ])
-        self.assertIn('404 Not Found', actual)
-        self.assertTrue(actual.startswith(
-            'Unexpected error validating credentials: Object PUT failed: '))
+        ]))
 
     @s3_is_unchanged
     def test_s3_no_bucket(self):
@@ -136,8 +131,7 @@ class TestVerify(TestCloudSyncBase):
 
     @s3_is_unchanged
     def test_s3_bad_creds(self):
-        msg = ('Invalid credentials. Please check the Access Key ID and '
-               'Secret Access Key.')
+        msg = ('Unexpected status code checking PUT: 403 Forbidden')
         self.assertEqual(msg, s3_sync.verify.main([
             '--protocol=s3',
             '--endpoint=' + self.S3_CREDS['endpoint'],
@@ -148,8 +142,7 @@ class TestVerify(TestCloudSyncBase):
 
     @s3_is_unchanged
     def test_s3_bad_bucket(self):
-        msg = ("Unexpected error validating credentials: 'The specified "
-               "bucket does not exist'")
+        msg = ('Unexpected status code checking PUT: 404 Not Found')
         self.assertEqual(msg, s3_sync.verify.main([
             '--protocol=s3',
             '--endpoint=' + self.S3_CREDS['endpoint'],

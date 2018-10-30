@@ -370,18 +370,26 @@ class TestMainTrackClientCalls(unittest.TestCase):
     def test_aws_with_bucket(self, mock_get_client):
         mock_client = \
             mock_get_client.return_value.__enter__.return_value
-        mock_client.head_object.side_effect = [
-            None,
-            {  # HEAD after PUT
-                'Body': [''],
-                'ResponseMetadata': {
-                    'HTTPStatusCode': 200,
-                    'HTTPHeaders': {
-                        'x-amz-meta-cloud-sync': 'fabcab',
-                    },
+
+        mock_client.put_object.return_value = {
+            'Body': [''],
+            'ResponseMetadata': {
+                'HTTPStatusCode': 201,
+                'HTTPHeaders': {}
+            }
+        }
+        mock_client.head_object.return_value = {
+            'Body': [''],
+            'ResponseMetadata': {
+                'HTTPStatusCode': 200,
+                'HTTPHeaders': {
+                    'x-amz-meta-cloud-sync': 'fabcab',
                 },
             },
-        ]
+        }
+        mock_client.copy_object.return_value = {
+            'CopyObjectResult': {}
+        }
         mock_client.list_objects.return_value = {
             'Contents': [],
             'ResponseMetadata': {
@@ -405,13 +413,10 @@ class TestMainTrackClientCalls(unittest.TestCase):
         self.assertEqual(exit_arg, 0)
         key = u'9f9835/verify-auth/testing-\U0001f44d/fabcab/cloud_sync_test'
         self.assert_calls(mock_client, [
-            mock.call.head_object(
-                Bucket='some-bucket',
-                Key=key),
             mock.call.put_object(
-                Body=mock.ANY,
+                Body='1space-test',
                 Bucket='some-bucket',
-                ContentLength=15,
+                ContentLength=11,
                 ContentType='text/plain',
                 Key=key,
                 Metadata={},
@@ -439,18 +444,23 @@ class TestMainTrackClientCalls(unittest.TestCase):
     def test_aws_with_bucket_and_prefix(self, mock_get_client):
         mock_client = \
             mock_get_client.return_value.__enter__.return_value
-        mock_client.head_object.side_effect = [
-            None,
-            {  # HEAD after PUT
-                'Body': [''],
-                'ResponseMetadata': {
-                    'HTTPStatusCode': 200,
-                    'HTTPHeaders': {
-                        'x-amz-meta-cloud-sync': 'fabcab',
-                    },
+        mock_client.put_object.return_value = {
+            'Body': [''],
+            'ResponseMetadata': {
+                'HTTPStatusCode': 201,
+                'HTTPHeaders': {}
+            }
+        }
+        mock_client.head_object.return_value = {
+            'Body': [''],
+            'ResponseMetadata': {
+                'HTTPStatusCode': 200,
+                'HTTPHeaders': {
+                    'x-amz-meta-cloud-sync': 'fabcab',
                 },
             },
-        ]
+        }
+        mock_client.copy_object.return_value = {'CopyObjectResult': {}}
         mock_client.list_objects.return_value = {
             'Contents': [],
             'ResponseMetadata': {
@@ -475,13 +485,10 @@ class TestMainTrackClientCalls(unittest.TestCase):
         self.assertEqual(exit_arg, 0)
         key = u'heehee/hawhaw/cloud_sync_test'
         self.assert_calls(mock_client, [
-            mock.call.head_object(
-                Bucket='some-bucket',
-                Key=key),
             mock.call.put_object(
-                Body=mock.ANY,
+                Body='1space-test',
                 Bucket='some-bucket',
-                ContentLength=15,
+                ContentLength=11,
                 ContentType='text/plain',
                 Key=key,
                 Metadata={},
@@ -523,18 +530,31 @@ class TestMainTrackClientCalls(unittest.TestCase):
     def test_google_with_bucket(self, mock_get_client):
         mock_client = \
             mock_get_client.return_value.__enter__.return_value
-        mock_client.head_object.side_effect = [
-            None,
-            {  # HEAD after PUT
-                'Body': [''],
-                'ResponseMetadata': {
-                    'HTTPStatusCode': 200,
-                    'HTTPHeaders': {
-                        'x-amz-meta-cloud-sync': 'fabcab',
-                    },
+        mock_client.put_object.return_value = {
+            'Body': [''],
+            'ResponseMetadata': {
+                'HTTPStatusCode': 201,
+                'HTTPHeaders': {}
+            }
+        }
+        mock_client.head_object.return_value = {
+            'Body': [''],
+            'ResponseMetadata': {
+                'HTTPStatusCode': 200,
+                'HTTPHeaders': {
+                    'x-amz-meta-cloud-sync': 'fabcab',
                 },
             },
-        ]
+        }
+
+        mock_client.copy_object.return_value = {
+            'Body': [''],
+            'ResponseMetadata': {
+                'HTTPStatusCode': 200,
+            },
+            'CopyObjectResult': {}
+        }
+
         mock_client.list_objects.return_value = {
             'Contents': [],
             'ResponseMetadata': {
@@ -554,13 +574,10 @@ class TestMainTrackClientCalls(unittest.TestCase):
         self.assertEqual(exit_arg, 0)
         key = u'9f9835/verify-auth/testing-\U0001f44d/fabcab/cloud_sync_test'
         self.assert_calls(mock_client, [
-            mock.call.head_object(
-                Bucket='some-bucket',
-                Key=key),
             mock.call.put_object(
-                Body=mock.ANY,
+                Body='1space-test',
                 Bucket='some-bucket',
-                ContentLength=15,
+                ContentLength=11,
                 ContentType='text/plain',
                 Key=key,
                 Metadata={}),
@@ -598,10 +615,15 @@ class TestMainTrackClientCalls(unittest.TestCase):
         ])
 
     def test_swift_with_bucket(self, mock_get_client):
+        def _fake_put_object(*args, **kwargs):
+            kwargs['response_dict']['headers'] = {}
+            kwargs['response_dict']['status'] = 201
+            return 'deadbeef'
+
         mock_client = \
             mock_get_client.return_value.__enter__.return_value
+        mock_client.put_object.side_effect = _fake_put_object
         mock_client.head_object.side_effect = [
-            None,
             {'x-object-meta-cloud-sync': 'fabcab'},
             {'x-object-meta-cloud-sync': 'fabcab'},  # One extra for the DELETE
         ]
@@ -617,12 +639,11 @@ class TestMainTrackClientCalls(unittest.TestCase):
         ])
         self.assertEqual(exit_arg, 0)
         self.assertEqual(mock_client.mock_calls, [
-            mock.call.head_object('some-bucket', 'cloud_sync_test_object',
-                                  headers={}),
             mock.call.put_object(
-                'some-bucket', 'cloud_sync_test_object', mock.ANY,
-                content_length=15, etag=mock.ANY,
-                headers={'content-type': 'text/plain'}),
+                'some-bucket', 'cloud_sync_test_object',
+                contents='1space-test',
+                headers={'content-type': 'text/plain'},
+                response_dict=mock.ANY, query_string=None),
             mock.call.post_object(
                 'some-bucket', 'cloud_sync_test_object', headers={
                     'content-type': 'text/plain',
@@ -638,11 +659,16 @@ class TestMainTrackClientCalls(unittest.TestCase):
         ])
 
     def test_swift_with_bucket_and_prefix(self, mock_get_client):
+        def _fake_put_object(*args, **kwargs):
+            kwargs['response_dict']['headers'] = {}
+            kwargs['response_dict']['status'] = 201
+            return 'deadbeef'
+
         # custom_prefix doesn't do much (anything?) for Swift provider
         mock_client = \
             mock_get_client.return_value.__enter__.return_value
+        mock_client.put_object.side_effect = _fake_put_object
         mock_client.head_object.side_effect = [
-            None,
             {'x-object-meta-cloud-sync': 'fabcab'},
             {'x-object-meta-cloud-sync': 'fabcab'},  # One extra for the DELETE
         ]
@@ -659,12 +685,12 @@ class TestMainTrackClientCalls(unittest.TestCase):
         ])
         self.assertEqual(exit_arg, 0)
         self.assertEqual(mock_client.mock_calls, [
-            mock.call.head_object('some-bucket', 'cloud_sync_test_object',
-                                  headers={}),
             mock.call.put_object(
-                'some-bucket', 'cloud_sync_test_object', mock.ANY,
-                content_length=15, etag=mock.ANY,
-                headers={'content-type': 'text/plain'}),
+                'some-bucket', 'cloud_sync_test_object',
+                contents='1space-test',
+                headers={'content-type': 'text/plain'},
+                response_dict=mock.ANY,
+                query_string=None),
             mock.call.post_object(
                 'some-bucket', 'cloud_sync_test_object', headers={
                     'content-type': 'text/plain',

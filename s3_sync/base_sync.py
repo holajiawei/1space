@@ -65,12 +65,12 @@ class ProviderResponse(object):
         # reraise(), which allows a receiver of a ProviderResponse to reraise a
         # prior client library exception.
         self.exc_info = exc_info
+        # WSGI expects an HTTP status + reason string
+        self.wsgi_status = '%d %s' % (
+            self.status, swob.RESPONSE_REASONS[self.status][0])
 
     def to_wsgi(self):
-        # WSGI expects an HTTP status + reason string
-        wsgi_status = '%d %s' % (
-            self.status, swob.RESPONSE_REASONS[self.status][0])
-        return wsgi_status, self.headers.items(), self.body
+        return self.wsgi_status, self.headers.items(), self.body
 
     def to_swob_response(self, req=None):
         headers = dict(filter_hop_by_hop_headers(self.headers.items()))

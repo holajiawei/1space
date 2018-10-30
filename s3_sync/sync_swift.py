@@ -142,9 +142,9 @@ class SyncSwift(BaseSync):
         return self._call_swiftclient('head_account', None, None)
 
     def put_object(self, swift_key, headers, body_iter, query_string=None):
-        return self._call_swiftclient('put_object', self.container, swift_key,
-                                      contents=body_iter, headers=headers,
-                                      query_string=query_string)
+        return self._call_swiftclient(
+            'put_object', self.remote_container, swift_key, contents=body_iter,
+            headers=headers, query_string=query_string)
 
     def upload_object(self, swift_key, policy, internal_client):
         if self._per_account and not self.verified_container:
