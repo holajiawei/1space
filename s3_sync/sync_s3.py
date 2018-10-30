@@ -18,6 +18,7 @@ import boto3
 import botocore.exceptions
 from botocore.handlers import (
     conditionally_calculate_md5, set_list_objects_encoding_type_url)
+from container_crawler import RetryError
 import eventlet
 import hashlib
 import json
@@ -27,6 +28,8 @@ import traceback
 import urllib
 
 from swift.common.internal_client import UnexpectedResponse
+from swift.common.utils import decode_timestamps
+
 from .base_sync import BaseSync, ProviderResponse, match_item
 from .utils import (
     convert_to_s3_headers, convert_to_swift_headers, FileWrapper,
@@ -122,7 +125,8 @@ class SyncS3(BaseSync):
             if close:
                 close()
 
-    def upload_object(self, swift_key, storage_policy_index, internal_client):
+    def upload_object(self, row, internal_client):
+        swift_key = row['name']
         s3_key = self.get_s3_name(swift_key)
         try:
             with self.client_pool.get_client() as s3_client:
@@ -135,9 +139,7 @@ class SyncS3(BaseSync):
             else:
                 raise e
         swift_req_hdrs = {
-            'X-Backend-Storage-Policy-Index': storage_policy_index,
-            'X-Newest': True
-        }
+            'X-Backend-Storage-Policy-Index': row['storage_policy_index']}
 
         try:
             metadata = internal_client.get_object_metadata(
@@ -147,6 +149,9 @@ class SyncS3(BaseSync):
             if '404 Not Found' in e.message:
                 return
             raise
+        _, _, metadata_timestamp = decode_timestamps(row['created_at'])
+        if float(metadata['x-timestamp']) < metadata_timestamp.timestamp:
+            raise RetryError('Stale object %s' % row['name'])
 
         if not match_item(metadata, self.selection_criteria):
             self.logger.debug(
@@ -156,8 +161,7 @@ class SyncS3(BaseSync):
 
         self.logger.debug("Metadata: %s" % str(metadata))
         if check_slo(metadata):
-            self.upload_slo(swift_key, storage_policy_index, s3_meta,
-                            internal_client)
+            self.upload_slo(row, s3_meta, internal_client)
             return True
 
         if s3_meta and self.check_etag(metadata['etag'], s3_meta['ETag']):
@@ -469,8 +473,7 @@ class SyncS3(BaseSync):
                 e.response['ResponseMetadata']['HTTPHeaders'],
                 e.message)
 
-    def upload_slo(self, swift_key, storage_policy_index, s3_meta,
-                   internal_client):
+    def upload_slo(self, row, s3_meta, internal_client):
         # Converts an SLO into a multipart upload. We use the segments as
         # is, for the part sizes.
         # NOTE: If the SLO segment is < 5MB and is not the last segment, the
@@ -482,9 +485,8 @@ class SyncS3(BaseSync):
         # to fail the upload. With GCS _compose_, we could support larger
         # objects, but defer this work for the time being.
         swift_req_hdrs = {
-            'X-Backend-Storage-Policy-Index': storage_policy_index,
-            'X-Newest': True
-        }
+            'X-Backend-Storage-Policy-Index': row['storage_policy_index']}
+        swift_key = row['name']
         status, headers, body = internal_client.get_object(
             self.account, self.container, swift_key, headers=swift_req_hdrs)
         if status != 200:
@@ -492,6 +494,9 @@ class SyncS3(BaseSync):
             raise RuntimeError('Failed to get the manifest')
         manifest = json.loads(''.join(body))
         body.close()
+        _, _, metadata_timestamp = decode_timestamps(row['created_at'])
+        if float(headers['x-timestamp']) < metadata_timestamp.timestamp:
+            raise RetryError('Stale object %s' % row['name'])
         self.logger.debug("JSON manifest: %s" % str(manifest))
         s3_key = self.get_s3_name(swift_key)
 
@@ -512,8 +517,7 @@ class SyncS3(BaseSync):
                         return
                     self.update_metadata(swift_key, headers)
                     return
-            self._upload_google_slo(manifest, headers, s3_key, swift_req_hdrs,
-                                    internal_client)
+            self._upload_google_slo(manifest, headers, s3_key, internal_client)
         else:
             expected_etag = get_slo_etag(manifest)
 
@@ -524,8 +528,7 @@ class SyncS3(BaseSync):
                     self.update_slo_metadata(headers, manifest, s3_key,
                                              swift_req_hdrs, internal_client)
                     return
-            self._upload_slo(manifest, headers, s3_key, swift_req_hdrs,
-                             internal_client)
+            self._upload_slo(manifest, headers, s3_key, internal_client)
 
         with self.client_pool.get_client() as s3_client:
             # We upload the manifest so that we can restore the object in
@@ -541,12 +544,10 @@ class SyncS3(BaseSync):
                 params['ServerSideEncryption'] = 'AES256'
             s3_client.put_object(**params)
 
-    def _upload_google_slo(self, manifest, metadata, s3_key, req_hdrs,
-                           internal_client):
-
+    def _upload_google_slo(self, manifest, metadata, s3_key, internal_client):
         with self.client_pool.get_client() as s3_client:
             slo_wrapper = SLOFileWrapper(
-                internal_client, self.account, manifest, metadata, req_hdrs)
+                internal_client, self.account, manifest, metadata)
             try:
                 s3_client.put_object(Bucket=self.aws_bucket,
                                      Key=s3_key,
@@ -599,8 +600,7 @@ class SyncS3(BaseSync):
                 params['ServerSideEncryption'] = 'AES256'
             return s3_client.create_multipart_upload(**params)
 
-    def _upload_slo(self, manifest, object_meta, s3_key, req_headers,
-                    internal_client):
+    def _upload_slo(self, manifest, object_meta, s3_key, internal_client):
         multipart_resp = self._create_multipart_upload(object_meta, s3_key)
         upload_id = multipart_resp['UploadId']
 
@@ -610,8 +610,7 @@ class SyncS3(BaseSync):
         for _ in range(0, self.SLO_WORKERS):
             workers.append(
                 worker_pool.spawn(self._upload_part_worker, upload_id, s3_key,
-                                  req_headers, work_queue, len(manifest),
-                                  internal_client))
+                                  work_queue, len(manifest), internal_client))
         for segment_number, segment in enumerate(manifest, 1):
             work_queue.put((segment_number, segment))
 
@@ -664,8 +663,8 @@ class SyncS3(BaseSync):
                 # in via an HTTP header (boto requires this to be `int`)
                 PartNumber=int(part_number))
 
-    def _upload_part_worker(self, upload_id, s3_key, req_headers, queue,
-                            part_count, internal_client):
+    def _upload_part_worker(self, upload_id, s3_key, queue, part_count,
+                            internal_client):
         errors = []
         while True:
             work = queue.get()
@@ -685,7 +684,7 @@ class SyncS3(BaseSync):
                     # open Swift connection and the request will timeout if we
                     # do not read for more than 60 seconds.
                     wrapper = FileWrapper(internal_client, self.account,
-                                          container, obj, req_headers)
+                                          container, obj)
                     try:
                         resp = s3_client.upload_part(
                             Bucket=self.aws_bucket,

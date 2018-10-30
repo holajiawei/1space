@@ -20,6 +20,7 @@ import boto3
 from botocore.exceptions import ClientError
 from botocore.response import StreamingBody
 from botocore.vendored.requests.exceptions import RequestException
+from container_crawler import RetryError
 from cStringIO import StringIO
 import datetime
 import hashlib
@@ -270,8 +271,7 @@ class TestSyncS3(unittest.TestCase):
     def test_upload_new_object(self, mock_file_wrapper):
         key = 'key'
         storage_policy = 42
-        swift_req_headers = {'X-Backend-Storage-Policy-Index': storage_policy,
-                             'X-Newest': True}
+        swift_req_headers = {'X-Backend-Storage-Policy-Index': storage_policy}
 
         wrapper = mock.Mock()
         wrapper.__len__ = lambda s: 0
@@ -284,9 +284,13 @@ class TestSyncS3(unittest.TestCase):
         self.sync_s3.check_slo.return_value = False
         mock_ic = mock.Mock()
         mock_ic.get_object_metadata.return_value = {
-            'content-type': 'test/blob'}
+            'content-type': 'test/blob',
+            'x-timestamp': str(1e9)}
 
-        self.sync_s3.upload_object(key, storage_policy, mock_ic)
+        self.sync_s3.upload_object(
+            {'name': key,
+             'storage_policy_index': storage_policy,
+             'created_at': str(1e9)}, mock_ic)
 
         mock_file_wrapper.assert_called_with(mock_ic,
                                              self.sync_s3.account,
@@ -306,8 +310,7 @@ class TestSyncS3(unittest.TestCase):
     def test_upload_object_without_encryption(self, mock_file_wrapper):
         key = 'key'
         storage_policy = 42
-        swift_req_headers = {'X-Backend-Storage-Policy-Index': storage_policy,
-                             'X-Newest': True}
+        swift_req_headers = {'X-Backend-Storage-Policy-Index': storage_policy}
 
         self.sync_s3.endpoint = 'http://127.0.0.1:8080'
 
@@ -322,9 +325,13 @@ class TestSyncS3(unittest.TestCase):
         self.sync_s3.check_slo.return_value = False
         mock_ic = mock.Mock()
         mock_ic.get_object_metadata.return_value = {
-            'content-type': 'test/blob'}
+            'content-type': 'test/blob',
+            'x-timestamp': str(1e9)}
 
-        self.sync_s3.upload_object(key, storage_policy, mock_ic)
+        self.sync_s3.upload_object(
+            {'name': key,
+             'storage_policy_index': storage_policy,
+             'created_at': str(1e9)}, mock_ic)
 
         mock_file_wrapper.assert_called_with(mock_ic,
                                              self.sync_s3.account,
@@ -343,8 +350,7 @@ class TestSyncS3(unittest.TestCase):
     def test_google_upload_encryption(self, mock_file_wrapper):
         key = 'key'
         storage_policy = 42
-        swift_req_headers = {'X-Backend-Storage-Policy-Index': storage_policy,
-                             'X-Newest': True}
+        swift_req_headers = {'X-Backend-Storage-Policy-Index': storage_policy}
 
         self.sync_s3.endpoint = 'https://storage.googleapis.com'
 
@@ -359,9 +365,13 @@ class TestSyncS3(unittest.TestCase):
         self.sync_s3.check_slo.return_value = False
         mock_ic = mock.Mock()
         mock_ic.get_object_metadata.return_value = {
-            'content-type': 'test/blob'}
+            'content-type': 'test/blob',
+            'x-timestamp': str(1e9)}
 
-        self.sync_s3.upload_object(key, storage_policy, mock_ic)
+        self.sync_s3.upload_object(
+            {'name': key,
+             'storage_policy_index': storage_policy,
+             'created_at': str(1e9)}, mock_ic)
 
         mock_file_wrapper.assert_called_with(mock_ic,
                                              self.sync_s3.account,
@@ -390,8 +400,7 @@ class TestSyncS3(unittest.TestCase):
     def test_upload_unicode_object_name(self, mock_file_wrapper):
         key = 'monkey-\xf0\x9f\x90\xb5'
         storage_policy = 42
-        swift_req_headers = {'X-Backend-Storage-Policy-Index': storage_policy,
-                             'X-Newest': True}
+        swift_req_headers = {'X-Backend-Storage-Policy-Index': storage_policy}
 
         wrapper = mock.Mock()
         wrapper.__len__ = lambda s: 0
@@ -404,9 +413,13 @@ class TestSyncS3(unittest.TestCase):
         self.sync_s3.check_slo.return_value = False
         mock_ic = mock.Mock()
         mock_ic.get_object_metadata.return_value = {
-            'content-type': 'test/blob'}
+            'content-type': 'test/blob',
+            'x-timestamp': str(1e9)}
 
-        self.sync_s3.upload_object(key, storage_policy, mock_ic)
+        self.sync_s3.upload_object(
+            {'name': key,
+             'storage_policy_index': storage_policy,
+             'created_at': str(1e9)}, mock_ic)
 
         mock_file_wrapper.assert_called_with(mock_ic,
                                              self.sync_s3.account,
@@ -429,7 +442,8 @@ class TestSyncS3(unittest.TestCase):
         swift_object_meta = {'x-object-meta-new': 'new',
                              'x-object-meta-old': 'updated',
                              'etag': etag,
-                             'content-type': 'test/blob'}
+                             'content-type': 'test/blob',
+                             'x-timestamp': str(1e9)}
         mock_ic = mock.Mock()
         mock_ic.get_object_metadata.return_value = swift_object_meta
         self.mock_boto3_client.head_object.return_value = {
@@ -440,7 +454,10 @@ class TestSyncS3(unittest.TestCase):
             'CopyObjectResult': {'LastModified': '2009-10-28T22:32:00',
                                  'ETag': etag}}
 
-        self.sync_s3.upload_object(key, storage_policy, mock_ic)
+        self.sync_s3.upload_object(
+            {'name': key,
+             'storage_policy_index': storage_policy,
+             'created_at': str(1e9)}, mock_ic)
 
         self.mock_boto3_client.copy_object.assert_called_with(
             CopySource={'Bucket': self.aws_bucket,
@@ -459,7 +476,8 @@ class TestSyncS3(unittest.TestCase):
         swift_object_meta = {'x-object-meta-new': 'new',
                              'x-object-meta-old': 'updated',
                              'etag': etag,
-                             'content-type': 'test/blob'}
+                             'content-type': 'test/blob',
+                             'x-timestamp': str(1e9)}
         mock_ic = mock.Mock()
         mock_ic.get_object_metadata.return_value = swift_object_meta
         self.mock_boto3_client.head_object.return_value = {
@@ -471,7 +489,10 @@ class TestSyncS3(unittest.TestCase):
                                  'ETag': etag}}
         self.sync_s3.endpoint = 'http://127.0.0.1:8080'
 
-        self.sync_s3.upload_object(key, storage_policy, mock_ic)
+        self.sync_s3.upload_object(
+            {'name': key,
+             'storage_policy_index': storage_policy,
+             'created_at': str(1e9)}, mock_ic)
 
         self.mock_boto3_client.copy_object.assert_called_with(
             CopySource={'Bucket': self.aws_bucket,
@@ -489,7 +510,8 @@ class TestSyncS3(unittest.TestCase):
         swift_object_meta = {'x-object-meta-new': 'new',
                              'x-object-meta-old': 'updated',
                              'etag': etag,
-                             'content-type': 'test/blob'}
+                             'content-type': 'test/blob',
+                             'x-timestamp': str(1e9)}
         mock_ic = mock.Mock()
         mock_ic.get_object_metadata.return_value = swift_object_meta
         self.mock_boto3_client.head_object.return_value = {
@@ -501,7 +523,10 @@ class TestSyncS3(unittest.TestCase):
                                  'ETag': etag}}
         self.sync_s3.endpoint = 'https://storage.googleapis.com'
 
-        self.sync_s3.upload_object(key, storage_policy, mock_ic)
+        self.sync_s3.upload_object(
+            {'name': key,
+             'storage_policy_index': storage_policy,
+             'created_at': str(1e9)}, mock_ic)
 
         self.mock_boto3_client.copy_object.assert_called_with(
             CopySource={'Bucket': self.aws_bucket,
@@ -516,13 +541,13 @@ class TestSyncS3(unittest.TestCase):
     def test_upload_changed_meta_glacier(self, mock_file_wrapper):
         key = 'key'
         storage_policy = 42
-        swift_req_headers = {'X-Backend-Storage-Policy-Index': storage_policy,
-                             'X-Newest': True}
+        swift_req_headers = {'X-Backend-Storage-Policy-Index': storage_policy}
         etag = '1234'
         swift_object_meta = {'x-object-meta-new': 'new',
                              'x-object-meta-old': 'updated',
                              'etag': etag,
-                             'content-type': 'test/blob'}
+                             'content-type': 'test/blob',
+                             'x-timestamp': str(1e9)}
         mock_ic = mock.Mock()
         mock_ic.get_object_metadata.return_value = swift_object_meta
         self.mock_boto3_client.head_object.return_value = {
@@ -537,7 +562,10 @@ class TestSyncS3(unittest.TestCase):
         wrapper.get_s3_headers.return_value = {'new': 'new', 'old': 'updated'}
         mock_file_wrapper.return_value = wrapper
 
-        self.sync_s3.upload_object(key, storage_policy, mock_ic)
+        self.sync_s3.upload_object(
+            {'name': key,
+             'storage_policy_index': storage_policy,
+             'created_at': str(1e9)}, mock_ic)
 
         mock_file_wrapper.assert_called_with(mock_ic,
                                              self.sync_s3.account,
@@ -560,7 +588,8 @@ class TestSyncS3(unittest.TestCase):
         swift_object_meta = {'x-object-meta-new': 'new',
                              'x-object-meta-old': 'updated',
                              'etag': 2,
-                             'content-type': 'test/blob'}
+                             'content-type': 'test/blob',
+                             'x-timestamp': str(1e9)}
         mock_ic = mock.Mock()
         mock_ic.get_object_metadata.return_value = swift_object_meta
         self.mock_boto3_client.head_object.return_value = {
@@ -575,7 +604,10 @@ class TestSyncS3(unittest.TestCase):
         wrapper.__len__ = lambda s: 42
         mock_file_wrapper.return_value = wrapper
 
-        self.sync_s3.upload_object(key, storage_policy, mock_ic)
+        self.sync_s3.upload_object(
+            {'name': key,
+             'storage_policy_index': storage_policy,
+             'created_at': str(1e9)}, mock_ic)
 
         self.mock_boto3_client.put_object.assert_called_with(
             Bucket=self.aws_bucket,
@@ -592,7 +624,8 @@ class TestSyncS3(unittest.TestCase):
         etag = '1234'
         swift_object_meta = {'x-object-meta-foo': 'foo',
                              'etag': etag,
-                             'content-type': 'test/blob'}
+                             'content-type': 'test/blob',
+                             'x-timestamp': str(1e9)}
         mock_ic = mock.Mock()
         mock_ic.get_object_metadata.return_value = swift_object_meta
         self.mock_boto3_client.head_object.return_value = {
@@ -601,7 +634,10 @@ class TestSyncS3(unittest.TestCase):
             'ContentType': 'test/blob'
         }
 
-        self.sync_s3.upload_object(key, storage_policy, mock_ic)
+        self.sync_s3.upload_object(
+            {'name': key,
+             'storage_policy_index': storage_policy,
+             'created_at': str(1e9)}, mock_ic)
 
         self.mock_boto3_client.copy_object.assert_not_called()
         self.mock_boto3_client.put_object.assert_not_called()
@@ -725,8 +761,7 @@ class TestSyncS3(unittest.TestCase):
     def test_slo_upload(self):
         slo_key = 'slo-object'
         storage_policy = 42
-        swift_req_headers = {'X-Backend-Storage-Policy-Index': storage_policy,
-                             'X-Newest': True}
+        swift_req_headers = {'X-Backend-Storage-Policy-Index': storage_policy}
         manifest = [{'name': '/segment_container/slo-object/part1',
                      'hash': 'deadbeef',
                      'bytes': 5 * 2**20},
@@ -740,12 +775,15 @@ class TestSyncS3(unittest.TestCase):
 
         def get_metadata(account, container, key, headers):
             if key == slo_key:
-                return {utils.SLO_HEADER: 'True'}
+                return {utils.SLO_HEADER: 'True',
+                        'x-timestamp': str(1e9)}
             raise RuntimeError('Unknown key')
 
         def get_object(account, container, key, headers):
             if key == slo_key:
-                return (200, {utils.SLO_HEADER: 'True'},
+                return (200,
+                        {utils.SLO_HEADER: 'True',
+                         'x-timestamp': str(1e9)},
                         FakeStream(content=json.dumps(manifest)))
             raise RuntimeError('Unknown key!')
 
@@ -754,7 +792,10 @@ class TestSyncS3(unittest.TestCase):
         mock_ic.get_object.side_effect = get_object
         self.sync_s3._upload_slo = mock.Mock()
 
-        self.sync_s3.upload_object(slo_key, storage_policy, mock_ic)
+        self.sync_s3.upload_object(
+            {'name': slo_key,
+             'storage_policy_index': storage_policy,
+             'created_at': str(1e9)}, mock_ic)
 
         self.mock_boto3_client.head_object.assert_called_once_with(
             Bucket=self.aws_bucket,
@@ -886,8 +927,7 @@ class TestSyncS3(unittest.TestCase):
         self.sync_s3._google = lambda: True
         slo_key = 'slo-object'
         storage_policy = 42
-        swift_req_headers = {'X-Backend-Storage-Policy-Index': storage_policy,
-                             'X-Newest': True}
+        swift_req_headers = {'X-Backend-Storage-Policy-Index': storage_policy}
         manifest = [{'name': '/segment_container/slo-object/part1',
                      'hash': 'deadbeef',
                      'bytes': 5 * SyncS3.MB},
@@ -901,13 +941,15 @@ class TestSyncS3(unittest.TestCase):
 
         def get_metadata(account, container, key, headers):
             if key == slo_key:
-                return {utils.SLO_HEADER: 'True'}
+                return {utils.SLO_HEADER: 'True',
+                        'x-timestamp': str(1e9)}
             raise RuntimeError('Unknown key')
 
         def get_object(account, container, key, headers):
             if key == slo_key:
                 return (200, {'etag': 'swift-slo-etag',
-                              'content-type': 'test/blob'},
+                              'content-type': 'test/blob',
+                              'x-timestamp': str(1e9)},
                         FakeStream(content=json.dumps(manifest)))
             raise RuntimeError('Unknown key!')
 
@@ -915,7 +957,10 @@ class TestSyncS3(unittest.TestCase):
         mock_ic.get_object_metadata.side_effect = get_metadata
         mock_ic.get_object.side_effect = get_object
 
-        self.sync_s3.upload_object(slo_key, storage_policy, mock_ic)
+        self.sync_s3.upload_object(
+            {'name': slo_key,
+             'storage_policy_index': storage_policy,
+             'created_at': str(1e9)}, mock_ic)
 
         self.mock_boto3_client.head_object.assert_called_once_with(
             Bucket=self.aws_bucket,
@@ -967,7 +1012,8 @@ class TestSyncS3(unittest.TestCase):
             if key == slo_key:
                 return {utils.SLO_HEADER: 'True',
                         'x-object-meta-foo': 'bar',
-                        'content-type': 'test/blob'}
+                        'content-type': 'test/blob',
+                        'x-timestamp': str(1e9)}
             raise RuntimeError('Unknown key')
 
         def get_object(account, container, key, headers):
@@ -975,7 +1021,8 @@ class TestSyncS3(unittest.TestCase):
                 return (200, {'etag': 'swift-slo-etag',
                               'x-object-meta-foo': 'bar',
                               utils.SLO_HEADER: 'True',
-                              'content-type': 'test/blob'},
+                              'content-type': 'test/blob',
+                              'x-timestamp': str(1e9)},
                         FakeStream(content=json.dumps(manifest)))
             raise RuntimeError('Unknown key!')
 
@@ -983,7 +1030,10 @@ class TestSyncS3(unittest.TestCase):
         mock_ic.get_object_metadata.side_effect = get_metadata
         mock_ic.get_object.side_effect = get_object
 
-        self.sync_s3.upload_object(slo_key, storage_policy, mock_ic)
+        self.sync_s3.upload_object(
+            {'name': slo_key,
+             'storage_policy_index': storage_policy,
+             'created_at': str(1e9)}, mock_ic)
 
         self.mock_boto3_client.copy_object.assert_called_with(
             CopySource={'Bucket': self.aws_bucket,
@@ -1000,9 +1050,6 @@ class TestSyncS3(unittest.TestCase):
         slo_key = 'slo-object'
         slo_meta = {'x-object-meta-foo': 'bar', 'content-type': 'test/blob'}
         s3_key = self.sync_s3.get_s3_name(slo_key)
-        storage_policy = 42
-        swift_req_headers = {'X-Backend-Storage-Policy-Index': storage_policy,
-                             'X-Newest': True}
         manifest = [{'name': '/segment_container/slo-object/part1',
                      'hash': 'deadbeef',
                      'bytes': 100},
@@ -1032,8 +1079,7 @@ class TestSyncS3(unittest.TestCase):
         fake_app_iter = FakeStream(chunk_len)
         mock_ic = mock.Mock()
         mock_ic.get_object.side_effect = _get_object
-        self.sync_s3._upload_slo(manifest, slo_meta, s3_key, swift_req_headers,
-                                 mock_ic)
+        self.sync_s3._upload_slo(manifest, slo_meta, s3_key, mock_ic)
 
         self.mock_boto3_client.create_multipart_upload.assert_called_once_with(
             Bucket=self.aws_bucket,
@@ -1071,9 +1117,6 @@ class TestSyncS3(unittest.TestCase):
         slo_key = 'slo-object'
         slo_meta = {'x-object-meta-foo': 'bar', 'content-type': 'test/blob'}
         s3_key = self.sync_s3.get_s3_name(slo_key)
-        storage_policy = 42
-        swift_req_headers = {'X-Backend-Storage-Policy-Index': storage_policy,
-                             'X-Newest': True}
         manifest = [{'name': '/segment_container/slo-object/part1',
                      'hash': 'deadbeef',
                      'bytes': 100},
@@ -1097,7 +1140,7 @@ class TestSyncS3(unittest.TestCase):
 
         with self.assertRaises(RuntimeError):
             self.sync_s3._upload_slo(
-                manifest, slo_meta, s3_key, swift_req_headers, mock_ic)
+                manifest, slo_meta, s3_key, mock_ic)
 
         self.mock_boto3_client.create_multipart_upload.assert_called_once_with(
             Bucket=self.aws_bucket,
@@ -1136,9 +1179,6 @@ class TestSyncS3(unittest.TestCase):
         slo_key = 'slo-object'
         slo_meta = {'x-object-meta-foo': 'bar', 'content-type': 'test/blob'}
         s3_key = self.sync_s3.get_s3_name(slo_key)
-        storage_policy = 42
-        swift_req_headers = {'X-Backend-Storage-Policy-Index': storage_policy,
-                             'X-Newest': True}
         manifest = [{'name': '/segment_container/slo-object/part1',
                      'hash': 'deadbeef',
                      'bytes': 100}]
@@ -1160,8 +1200,7 @@ class TestSyncS3(unittest.TestCase):
             200, {'Content-Length': str(5 * SyncS3.MB)}, fake_app_iter)
 
         self.sync_s3.encryption = True
-        self.sync_s3._upload_slo(manifest, slo_meta, s3_key, swift_req_headers,
-                                 mock_ic)
+        self.sync_s3._upload_slo(manifest, slo_meta, s3_key, mock_ic)
 
         self.mock_boto3_client.create_multipart_upload.assert_called_once_with(
             Bucket=self.aws_bucket,
@@ -1174,8 +1213,7 @@ class TestSyncS3(unittest.TestCase):
     def test_slo_meta_changed(self, mock_get_slo_etag):
         slo_key = 'slo-object'
         storage_policy = 42
-        swift_req_headers = {'X-Backend-Storage-Policy-Index': storage_policy,
-                             'X-Newest': True}
+        swift_req_headers = {'X-Backend-Storage-Policy-Index': storage_policy}
         manifest = [{'name': '/segment_container/slo-object/part1',
                      'hash': 'deadbeef',
                      'bytes': 5 * SyncS3.MB},
@@ -1191,14 +1229,18 @@ class TestSyncS3(unittest.TestCase):
         self.sync_s3._upload_slo = mock.Mock()
         slo_meta = {
             utils.SLO_HEADER: 'True',
-            'x-object-meta-new-key': 'foo'
+            'x-object-meta-new-key': 'foo',
+            'x-timestamp': str(1e9)
         }
         mock_ic = mock.Mock()
         mock_ic.get_object_metadata.return_value = slo_meta
         mock_ic.get_object.return_value = (
             200, slo_meta, FakeStream(content=json.dumps(manifest)))
 
-        self.sync_s3.upload_object(slo_key, storage_policy, mock_ic)
+        self.sync_s3.upload_object(
+            {'name': slo_key,
+             'storage_policy_index': storage_policy,
+             'created_at': str(1e9)}, mock_ic)
 
         self.sync_s3.update_slo_metadata.assert_called_once_with(
             slo_meta, manifest, self.sync_s3.get_s3_name(slo_key),
@@ -1213,8 +1255,7 @@ class TestSyncS3(unittest.TestCase):
     def test_slo_meta_update_glacier(self, mock_get_slo_etag):
         slo_key = 'slo-object'
         storage_policy = 42
-        swift_req_headers = {'X-Backend-Storage-Policy-Index': storage_policy,
-                             'X-Newest': True}
+        swift_req_headers = {'X-Backend-Storage-Policy-Index': storage_policy}
         manifest = [{'name': '/segment_container/slo-object/part1',
                      'hash': 'deadbeef',
                      'bytes': 5 * SyncS3.MB},
@@ -1231,19 +1272,21 @@ class TestSyncS3(unittest.TestCase):
         self.sync_s3._upload_slo = mock.Mock()
         slo_meta = {
             utils.SLO_HEADER: 'True',
-            'x-object-meta-new-key': 'foo'
-        }
+            'x-object-meta-new-key': 'foo',
+            'x-timestamp': str(1e9)}
         mock_ic = mock.Mock()
         mock_ic.get_object_metadata.return_value = slo_meta
         mock_ic.get_object.return_value = (
             200, slo_meta, FakeStream(content=json.dumps(manifest)))
 
-        self.sync_s3.upload_object(slo_key, storage_policy, mock_ic)
+        self.sync_s3.upload_object(
+            {'name': slo_key,
+             'storage_policy_index': storage_policy,
+             'created_at': str(1e9)}, mock_ic)
 
         self.assertEqual(0, self.sync_s3.update_slo_metadata.call_count)
         self.sync_s3._upload_slo.assert_called_once_with(
-            manifest, slo_meta, self.sync_s3.get_s3_name(slo_key),
-            swift_req_headers, mock_ic)
+            manifest, slo_meta, self.sync_s3.get_s3_name(slo_key), mock_ic)
         mock_ic.get_object_metadata.assert_called_once_with(
             'account', 'container', slo_key, headers=swift_req_headers)
         mock_ic.get_object.assert_called_once_with(
@@ -1253,8 +1296,7 @@ class TestSyncS3(unittest.TestCase):
     def test_slo_no_changes(self, mock_get_slo_etag):
         slo_key = 'slo-object'
         storage_policy = 42
-        swift_req_headers = {'X-Backend-Storage-Policy-Index': storage_policy,
-                             'X-Newest': True}
+        swift_req_headers = {'X-Backend-Storage-Policy-Index': storage_policy}
         manifest = [{'name': '/segment_container/slo-object/part1',
                      'hash': 'deadbeef',
                      'bytes': 5 * 2**20},
@@ -1273,7 +1315,8 @@ class TestSyncS3(unittest.TestCase):
         slo_meta = {
             utils.SLO_HEADER: 'True',
             'x-object-meta-new-key': 'foo',
-            'content-type': 'x-application/test'
+            'content-type': 'x-application/test',
+            'x-timestamp': str(1e9)
         }
 
         mock_ic = mock.Mock()
@@ -1281,7 +1324,10 @@ class TestSyncS3(unittest.TestCase):
         mock_ic.get_object.return_value = (
             200, slo_meta, FakeStream(content=json.dumps(manifest)))
 
-        self.sync_s3.upload_object(slo_key, storage_policy, mock_ic)
+        self.sync_s3.upload_object(
+            {'name': slo_key,
+             'storage_policy_index': storage_policy,
+             'created_at': str(1e9)}, mock_ic)
 
         self.sync_s3.update_slo_metadata.assert_not_called()
         self.sync_s3._upload_slo.assert_not_called()
@@ -1305,8 +1351,7 @@ class TestSyncS3(unittest.TestCase):
         s3_key = self.sync_s3.get_s3_name('slo-object')
         segment_lengths = [12 * SyncS3.MB, 14 * SyncS3.MB]
         storage_policy = 42
-        swift_req_headers = {'X-Backend-Storage-Policy-Index': storage_policy,
-                             'X-Newest': True}
+        swift_req_headers = {'X-Backend-Storage-Policy-Index': storage_policy}
 
         def get_object_metadata(account, container, key, headers={}):
             return {'content-length': segment_lengths[int(key[-1]) - 1]}
@@ -1774,7 +1819,10 @@ class TestSyncS3(unittest.TestCase):
             'head_object')
 
         with self.assertRaises(ClientError) as context:
-            self.sync_s3.upload_object('key', 0, mock.Mock())
+            self.sync_s3.upload_object(
+                {'name': 'key',
+                 'storage_policy_index': '0',
+                 'created_at': str(1e9)}, mock.Mock())
 
         self.assertIn('failed to HEAD',
                       context.exception.response['Error']['Message'])
@@ -1785,7 +1833,10 @@ class TestSyncS3(unittest.TestCase):
             side_effect=UnexpectedResponse('tragic error', None)))
 
         with self.assertRaises(UnexpectedResponse) as context:
-            self.sync_s3.upload_object('key', 0, mock_ic)
+            self.sync_s3.upload_object(
+                {'name': 'key',
+                 'storage_policy_index': 0,
+                 'created_at': str(1e9)}, mock_ic)
 
         self.assertIn('tragic error', context.exception.message)
 
@@ -1799,12 +1850,27 @@ class TestSyncS3(unittest.TestCase):
         object_body = FakeStream(1024)
         mock_ic = mock.Mock(
             get_object_metadata=mock.Mock(return_value={
-                'content-type': 'application/test'}),
+                'content-type': 'application/test',
+                'x-timestamp': str(1e9)}),
             get_object=mock.Mock(return_value=(
                 200, {'Content-Length': len(object_body)},
                 object_body)))
 
         with self.assertRaises(RuntimeError):
-            self.sync_s3.upload_object('key', 0, mock_ic)
+            self.sync_s3.upload_object(
+                {'name': 'key',
+                 'storage_policy_index': '0',
+                 'created_at': str(1e9)}, mock_ic)
 
         self.assertTrue(object_body.closed)
+
+    def test_retry_error_stale_object(self):
+        self.mock_boto3_client.head_object.return_value = {}
+        mock_ic = mock.Mock(get_object_metadata=mock.Mock(
+            return_value={'x-timestamp': 1e9}))
+
+        with self.assertRaises(RetryError):
+            self.sync_s3.upload_object(
+                {'name': 'key',
+                 'storage_policy_index': 0,
+                 'created_at': str(2e9)}, mock_ic)

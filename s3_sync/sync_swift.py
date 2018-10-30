@@ -14,13 +14,14 @@ See the License for the specific language governing permissions and
 limitations under the License.
 """
 
+from container_crawler import RetryError
 import datetime
 import eventlet
 import hashlib
 import json
 import swiftclient
 from swift.common.internal_client import UnexpectedResponse
-from swift.common.utils import FileLikeIter
+from swift.common.utils import FileLikeIter, decode_timestamps
 import sys
 import traceback
 import urllib
@@ -146,7 +147,7 @@ class SyncSwift(BaseSync):
             'put_object', self.remote_container, swift_key, contents=body_iter,
             headers=headers, query_string=query_string)
 
-    def upload_object(self, swift_key, policy, internal_client):
+    def upload_object(self, row, internal_client):
         if self._per_account and not self.verified_container:
             with self.client_pool.get_client() as swift_client:
                 try:
@@ -159,14 +160,9 @@ class SyncSwift(BaseSync):
                                                headers=self._client_headers())
             self.verified_container = True
 
-        swift_req_hdrs = {
-            'X-Backend-Storage-Policy-Index': policy,
-            'X-Newest': True
-        }
-
         return self._upload_object(
-            self.container, self.remote_container, swift_key, swift_req_hdrs,
-            internal_client, segment=False)
+            self.container, self.remote_container, row, internal_client,
+            segment=False)
 
     def delete_object(self, swift_key):
         """Delete an object from the remote cluster.
@@ -353,8 +349,13 @@ class SyncSwift(BaseSync):
             with self.client_pool.get_client() as swift_client:
                 return _perform_op(swift_client)
 
-    def _upload_object(self, src_container, dst_container, key, req_hdrs,
+    def _upload_object(self, src_container, dst_container, row,
                        internal_client, segment=False):
+        key = row['name']
+        req_hdrs = {}
+        if 'storage_policy_index' in row:
+            req_hdrs['X-Backend-Storage-Policy-Index'] = row[
+                'storage_policy_index']
         try:
             with self.client_pool.get_client() as swift_client:
                 remote_meta = swift_client.head_object(
@@ -374,6 +375,11 @@ class SyncSwift(BaseSync):
                 return True
             raise
 
+        if not segment:
+            _, _, internal_timestamp = decode_timestamps(row['created_at'])
+            if float(metadata['x-timestamp']) < internal_timestamp.timestamp:
+                raise RetryError('Stale object %s' % key)
+
         if not segment and not match_item(metadata, self.selection_criteria):
             self.logger.debug(
                 'Not archiving %s as metadata does not match: %s %s' % (
@@ -392,7 +398,7 @@ class SyncSwift(BaseSync):
                 if not self._is_meta_synced(metadata, remote_meta):
                     self.update_metadata(key, metadata, dst_container)
                 return True
-            self._upload_slo(key, req_hdrs, internal_client)
+            self._upload_slo(key, internal_client, req_hdrs)
             return True
 
         if remote_meta and metadata['etag'] == remote_meta['etag']:
@@ -453,9 +459,9 @@ class SyncSwift(BaseSync):
         user_headers = self._get_user_headers(metadata)
         self.post_object(swift_key, user_headers, container)
 
-    def _upload_slo(self, name, swift_headers, internal_client):
+    def _upload_slo(self, key, internal_client, swift_req_headers):
         headers, manifest = self._get_internal_manifest(
-            name, internal_client, swift_headers)
+            key, internal_client, swift_req_headers)
         self.logger.debug("JSON manifest: %s" % str(manifest))
 
         work_queue = eventlet.queue.Queue(self.SLO_QUEUE_SIZE)
@@ -463,8 +469,8 @@ class SyncSwift(BaseSync):
         workers = []
         for _ in range(0, self.SLO_WORKERS):
             workers.append(
-                worker_pool.spawn(self._upload_slo_worker, swift_headers,
-                                  work_queue, internal_client))
+                worker_pool.spawn(
+                    self._upload_slo_worker, work_queue, internal_client))
         for segment in manifest:
             work_queue.put(segment)
         work_queue.join()
@@ -478,7 +484,7 @@ class SyncSwift(BaseSync):
         # TODO: errors list contains the failed segments. We should retry
         # them on failure.
         if errors:
-            raise RuntimeError('Failed to upload an SLO %s' % name)
+            raise RuntimeError('Failed to upload an SLO %s' % key)
 
         new_manifest = []
         for segment in manifest:
@@ -497,7 +503,7 @@ class SyncSwift(BaseSync):
         # Upload the manifest itself
         with self.client_pool.get_client() as swift_client:
             swift_client.put_object(
-                self.remote_container, name, json.dumps(new_manifest),
+                self.remote_container, key, json.dumps(new_manifest),
                 headers=manifest_hdrs,
                 query_string='multipart-manifest=put')
 
@@ -527,7 +533,7 @@ class SyncSwift(BaseSync):
         body.close()
         return headers, manifest
 
-    def _upload_slo_worker(self, req_headers, work_queue, internal_client):
+    def _upload_slo_worker(self, work_queue, internal_client):
         errors = []
         while True:
             segment = work_queue.get()
@@ -536,7 +542,7 @@ class SyncSwift(BaseSync):
                 return errors
 
             try:
-                self._upload_segment(segment, req_headers, internal_client)
+                self._upload_segment(segment, internal_client)
             except:
                 errors.append(segment)
                 self.logger.error('Failed to upload segment %s: %s' % (
@@ -544,13 +550,13 @@ class SyncSwift(BaseSync):
             finally:
                 work_queue.task_done()
 
-    def _upload_segment(self, segment, req_headers, internal_client):
+    def _upload_segment(self, segment, internal_client):
         container, obj = segment['name'].split('/', 2)[1:]
         dst_container = self.remote_segments_container(container)
 
         try:
             self._upload_object(
-                container, dst_container, obj, req_headers,
+                container, dst_container, {'name': obj},
                 internal_client, segment=True)
         except swiftclient.exceptions.ClientException as e:
             # The segments may not exist, so we need to create it

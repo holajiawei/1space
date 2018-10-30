@@ -443,12 +443,13 @@ class TestSyncContainer(unittest.TestCase):
             time_mock.time.return_value = current + settings['copy_after'] + 1
             sync = SyncContainer(self.scratch_space, settings)
             sync.provider = mock.Mock()
-            sync.handle({'deleted': 0,
-                         'created_at': str(time.time()),
-                         'name': 'foo',
-                         'storage_policy_index': 99}, None)
+            row = {'deleted': 0,
+                   'created_at': str(time.time()),
+                   'name': 'foo',
+                   'storage_policy_index': 99}
+            sync.handle(row, None)
             sync.provider.upload_object.assert_called_once_with(
-                'foo', 99, None)
+                row, None)
 
     @mock.patch('s3_sync.sync_s3.boto3.session.Session')
     def test_retain_copy(self, session_mock):
@@ -473,7 +474,7 @@ class TestSyncContainer(unittest.TestCase):
         swift_ts.offset += 1
 
         sync.provider.upload_object.assert_called_once_with(
-            row['name'], 99, swift_client)
+            row, swift_client)
         swift_client.delete_object.assert_called_once_with(
             settings['account'], settings['container'], row['name'],
             headers={'X-Timestamp': Timestamp(swift_ts).internal})

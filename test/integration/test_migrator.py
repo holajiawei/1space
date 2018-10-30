@@ -1099,6 +1099,9 @@ class TestMigrator(TestCloudSyncBase):
 
     def test_deleted_source_objects(self):
         migration = self.swift_migration()
+        status = migrator_utils.TempMigratorStatus(migration)
+        migrator = migrator_utils.MigratorFactory().get_migrator(
+            migration, status)
 
         objects = [
             (u'test-blob-\u062a-1', 'blob content',
@@ -1113,35 +1116,35 @@ class TestMigrator(TestCloudSyncBase):
         conn_remote = self.conn_for_acct(migration['aws_account'])
         conn_local = self.conn_for_acct(migration['account'])
 
-        def _check_objects_copied():
-            hdrs, listing = conn_local.get_container(migration['container'])
-            swift_names = [obj['name'] for obj in listing
-                           if 'swift' in obj.get('content_location', '')]
-            return set([obj[0] for obj in objects]) == set(swift_names)
-
-        def _check_unmodified_objects_removed(expected):
-            _, listing = conn_local.get_container(migration['container'])
-            local_objects = [obj['name'] for obj in listing
-                             if 'swift' in obj.get('content_location', '')]
-            return expected == local_objects
-
         for test in tests:
             for name, body, headers in objects:
                 conn_remote.put_object(migration['aws_bucket'], name,
                                        StringIO.StringIO(body),
                                        headers=headers)
-            self.assertFalse(_check_objects_copied())
-            with self.migrator_running():
-                wait_for_condition(5, _check_objects_copied)
+            _, listing = conn_local.get_container(migration['container'])
+            swift_names = [obj['name'] for obj in listing
+                           if 'swift' not in obj.get('content_location', '')]
+            self.assertEqual(
+                set([obj[0] for obj in objects]), set(swift_names))
+            migrator.next_pass()
+
+            _, listing = conn_local.get_container(migration['container'])
+            swift_names = [obj['name'] for obj in listing
+                           if 'swift' in obj.get('content_location', '')]
+            self.assertEqual(
+                set([obj[0] for obj in objects]), set(swift_names))
 
             for obj in test:
                 conn_remote.delete_object(migration['aws_bucket'], obj)
 
             expected = [obj[0] for obj in objects if obj[0] not in test]
 
-            with self.migrator_running():
-                wait_for_condition(
-                    5, partial(_check_unmodified_objects_removed, expected))
+            migrator.next_pass()
+            _, listing = conn_local.get_container(migration['container'])
+            local_objects = [obj['name'] for obj in listing
+                             if 'swift' in obj.get('content_location', '')]
+            self.assertEqual(expected, local_objects)
+
             clear_swift_container(conn_local, migration['container'])
             clear_swift_container(conn_remote, migration['aws_bucket'])
 

@@ -946,7 +946,7 @@ class TestCloudSync(TestCloudSyncBase):
             return 'x-object-meta-test-hdr' in self.remote_swift(
                 'head_object', mapping['aws_bucket'], key)
 
-        wait_for_condition(5, _check_slo_header)
+        wait_for_condition(10, _check_slo_header)
 
         headers = self.remote_swift(
             'head_object', mapping['aws_bucket'], key)

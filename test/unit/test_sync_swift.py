@@ -14,6 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 """
 
+from container_crawler import RetryError
 import hashlib
 import json
 import mock
@@ -162,8 +163,7 @@ class TestSyncSwift(unittest.TestCase):
             self, mock_file_wrapper, mock_check_slo, mock_swift):
         key = 'key'
         storage_policy = 42
-        swift_req_headers = {'X-Backend-Storage-Policy-Index': storage_policy,
-                             'X-Newest': True}
+        swift_req_headers = {'X-Backend-Storage-Policy-Index': storage_policy}
         swift_client = mock.Mock()
         mock_swift.return_value = swift_client
 
@@ -179,9 +179,13 @@ class TestSyncSwift(unittest.TestCase):
 
         mock_check_slo.return_value = False
         mock_ic = mock.Mock()
-        mock_ic.get_object_metadata.return_value = {}
+        mock_ic.get_object_metadata.return_value = {
+            'x-timestamp': str(1e9)}
 
-        self.sync_swift.upload_object(key, storage_policy, mock_ic)
+        self.sync_swift.upload_object(
+            {'name': key,
+             'storage_policy_index': storage_policy,
+             'created_at': str(1e9)}, mock_ic)
         mock_file_wrapper.assert_called_with(mock_ic,
                                              self.sync_swift.account,
                                              self.sync_swift.container,
@@ -200,8 +204,7 @@ class TestSyncSwift(unittest.TestCase):
             self, mock_file_wrapper, mock_check_slo, mock_swift):
         key = 'monkey-\xf0\x9f\x90\xb5'
         storage_policy = 42
-        swift_req_headers = {'X-Backend-Storage-Policy-Index': storage_policy,
-                             'X-Newest': True}
+        swift_req_headers = {'X-Backend-Storage-Policy-Index': storage_policy}
         swift_client = mock.Mock()
         mock_swift.return_value = swift_client
 
@@ -215,9 +218,13 @@ class TestSyncSwift(unittest.TestCase):
 
         mock_check_slo.return_value = False
         mock_ic = mock.Mock()
-        mock_ic.get_object_metadata.return_value = {}
+        mock_ic.get_object_metadata.return_value = {
+            'x-timestamp': str(1e9)}
 
-        self.sync_swift.upload_object(key, storage_policy, mock_ic)
+        self.sync_swift.upload_object(
+            {'name': key,
+             'storage_policy_index': storage_policy,
+             'created_at': str(1e9)}, mock_ic)
         mock_file_wrapper.assert_called_with(mock_ic,
                                              self.sync_swift.account,
                                              self.sync_swift.container,
@@ -244,13 +251,17 @@ class TestSyncSwift(unittest.TestCase):
         mock_check_slo.return_value = False
         mock_ic = mock.Mock()
         mock_ic.get_object_metadata.return_value = {
-            'content-type': 'application/test'}
+            'content-type': 'application/test',
+            'x-timestamp': str(1e9)}
         mock_ic.get_object.return_value = (
             200, {'Content-Length': len(body),
                   'etag': 'deadbeef'}, body)
 
         with self.assertRaises(RuntimeError):
-            self.sync_swift.upload_object(key, storage_policy, mock_ic)
+            self.sync_swift.upload_object(
+                {'name': key,
+                 'storage_policy_index': storage_policy,
+                 'created_at': str(1e9)}, mock_ic)
 
         swift_client.put_object.assert_called_with(
             self.aws_bucket, key, mock.ANY, headers={},
@@ -265,7 +276,8 @@ class TestSyncSwift(unittest.TestCase):
         swift_object_meta = {'x-object-meta-new': 'new',
                              'x-object-meta-old': 'updated',
                              'Content-Type': 'application/bar',
-                             'etag': etag}
+                             'etag': etag,
+                             'x-timestamp': str(1e9)}
         swift_client = mock.Mock()
         mock_swift.return_value = swift_client
 
@@ -278,7 +290,10 @@ class TestSyncSwift(unittest.TestCase):
         swift_client.post_object.return_value = None
         swift_client.delete_object.return_value = None
 
-        self.sync_swift.upload_object(key, storage_policy, mock_ic)
+        self.sync_swift.upload_object(
+            {'name': key,
+             'storage_policy_index': storage_policy,
+             'created_at': str(1e9)}, mock_ic)
 
         swift_client.post_object.assert_called_with(
             self.aws_bucket, key, headers={
@@ -293,7 +308,8 @@ class TestSyncSwift(unittest.TestCase):
         etag = '1234'
         swift_object_meta = {'x-object-meta-new': '\xf0\x9f\x91\x8d',
                              'x-object-meta-old': 'updated',
-                             'etag': etag}
+                             'etag': etag,
+                             'x-timestamp': str(1e9)}
         mock_ic = mock.Mock()
         mock_ic.get_object_metadata.return_value = swift_object_meta
         swift_client = mock.Mock()
@@ -303,7 +319,10 @@ class TestSyncSwift(unittest.TestCase):
         swift_client.post_object.return_value = None
         swift_client.delete_object.return_value = None
 
-        self.sync_swift.upload_object(key, storage_policy, mock_ic)
+        self.sync_swift.upload_object(
+            {'name': key,
+             'storage_policy_index': storage_policy,
+             'created_at': str(1e9)}, mock_ic)
 
         swift_client.post_object.assert_called_with(
             self.aws_bucket, key, headers={
@@ -317,7 +336,8 @@ class TestSyncSwift(unittest.TestCase):
         storage_policy = 42
         swift_object_meta = {'x-object-meta-new': 'new',
                              'x-object-meta-old': 'updated',
-                             'etag': '2'}
+                             'etag': '2',
+                             'x-timestamp': str(1e9)}
         mock_ic = mock.Mock()
         mock_ic.get_object_metadata.return_value = swift_object_meta
         swift_client = mock.Mock()
@@ -330,7 +350,10 @@ class TestSyncSwift(unittest.TestCase):
         wrapper.__len__ = lambda s: 42
         mock_file_wrapper.return_value = wrapper
 
-        self.sync_swift.upload_object(key, storage_policy, mock_ic)
+        self.sync_swift.upload_object(
+            {'name': key,
+             'storage_policy_index': storage_policy,
+             'created_at': str(1e9)}, mock_ic)
 
         swift_client.put_object.assert_called_with(
             self.aws_bucket,
@@ -347,7 +370,8 @@ class TestSyncSwift(unittest.TestCase):
         storage_policy = 42
         etag = '1234'
         swift_object_meta = {'x-object-meta-foo': 'foo',
-                             'etag': etag}
+                             'etag': etag,
+                             'x-timestamp': str(1e9)}
         mock_ic = mock.Mock()
         mock_ic.get_object_metadata.return_value = swift_object_meta
         swift_client = mock.Mock()
@@ -355,7 +379,10 @@ class TestSyncSwift(unittest.TestCase):
         swift_client.head_object.return_value = {
             'x-object-meta-foo': 'foo', 'etag': '%s' % etag}
 
-        self.sync_swift.upload_object(key, storage_policy, mock_ic)
+        self.sync_swift.upload_object(
+            {'name': key,
+             'storage_policy_index': storage_policy,
+             'created_at': str(1e9)}, mock_ic)
 
         swift_client.post_object.assert_not_called()
         swift_client.put_object.assert_not_called()
@@ -364,8 +391,7 @@ class TestSyncSwift(unittest.TestCase):
     def test_upload_slo(self, mock_swift):
         slo_key = 'slo-object'
         storage_policy = 42
-        swift_req_headers = {'X-Backend-Storage-Policy-Index': storage_policy,
-                             'X-Newest': True}
+        swift_req_headers = {'X-Backend-Storage-Policy-Index': storage_policy}
         manifest = [{'name': '/segment_container/slo-object/part1',
                      'hash': 'deadbeef',
                      'bytes': 1024},
@@ -383,7 +409,8 @@ class TestSyncSwift(unittest.TestCase):
         def get_metadata(account, container, key, headers):
             if key == slo_key:
                 return {utils.SLO_HEADER: 'True',
-                        'Content-Type': 'application/slo'}
+                        'Content-Type': 'application/slo',
+                        'x-timestamp': str(1e9)}
             if key == 'slo-object/part1' or key == 'slo-object/part2':
                 return {}
             raise RuntimeError('Unknown key: %s' % key)
@@ -391,7 +418,8 @@ class TestSyncSwift(unittest.TestCase):
         def get_object(account, container, key, headers):
             if key == slo_key:
                 return (200, {utils.SLO_HEADER: 'True',
-                              'Content-Type': 'application/slo'},
+                              'Content-Type': 'application/slo',
+                              'x-timestamp': str(1e9)},
                         FakeStream(content=json.dumps(manifest)))
             if container == 'segment_container':
                 if key == 'slo-object/part1':
@@ -406,7 +434,10 @@ class TestSyncSwift(unittest.TestCase):
         mock_ic.get_object_metadata.side_effect = get_metadata
         mock_ic.get_object.side_effect = get_object
 
-        self.sync_swift.upload_object(slo_key, storage_policy, mock_ic)
+        self.sync_swift.upload_object(
+            {'name': slo_key,
+             'storage_policy_index': storage_policy,
+             'created_at': str(1e9)}, mock_ic)
 
         swift_client.head_object.assert_has_calls([
             mock.call(self.aws_bucket, slo_key, headers={}),
@@ -451,16 +482,16 @@ class TestSyncSwift(unittest.TestCase):
             [mock.call('account', 'container', slo_key,
                        headers=swift_req_headers),
              mock.call('account', 'segment_container', 'slo-object/part1',
-                       headers=swift_req_headers),
+                       headers={}),
              mock.call('account', 'segment_container', 'slo-object/part2',
-                       headers=swift_req_headers)])
+                       headers={})])
         mock_ic.get_object.assert_has_calls([
             mock.call('account', 'container', slo_key,
                       headers=swift_req_headers),
             mock.call('account', 'segment_container', 'slo-object/part1',
-                      headers=swift_req_headers),
+                      headers={}),
             mock.call('account', 'segment_container', 'slo-object/part2',
-                      headers=swift_req_headers)])
+                      headers={})])
 
     @mock.patch('s3_sync.sync_swift.swiftclient.client.Connection')
     def test_upload_slo_extra_headers(self, mock_swift):
@@ -469,8 +500,7 @@ class TestSyncSwift(unittest.TestCase):
 
         slo_key = 'slo-object'
         storage_policy = 42
-        swift_req_headers = {'X-Backend-Storage-Policy-Index': storage_policy,
-                             'X-Newest': True}
+        swift_req_headers = {'X-Backend-Storage-Policy-Index': storage_policy}
         manifest = [{'name': '/segment_container/slo-object/part1',
                      'hash': 'deadbeef',
                      'bytes': 1024},
@@ -488,7 +518,8 @@ class TestSyncSwift(unittest.TestCase):
         def get_metadata(account, container, key, headers):
             if key == slo_key:
                 return {utils.SLO_HEADER: 'True',
-                        'Content-Type': 'application/slo'}
+                        'Content-Type': 'application/slo',
+                        'x-timestamp': str(1e9)}
             if key.startswith('slo-object/'):
                 return {}
             raise RuntimeError('Unknown key')
@@ -496,7 +527,8 @@ class TestSyncSwift(unittest.TestCase):
         def get_object(account, container, key, headers):
             if key == slo_key:
                 return (200, {utils.SLO_HEADER: 'True',
-                              'Content-Type': 'application/slo'},
+                              'Content-Type': 'application/slo',
+                              'x-timestamp': str(1e9)},
                         FakeStream(content=json.dumps(manifest)))
             if container == 'segment_container':
                 if key == 'slo-object/part1':
@@ -511,7 +543,10 @@ class TestSyncSwift(unittest.TestCase):
         mock_ic.get_object_metadata.side_effect = get_metadata
         mock_ic.get_object.side_effect = get_object
 
-        self.sync_swift.upload_object(slo_key, storage_policy, mock_ic)
+        self.sync_swift.upload_object(
+            {'name': slo_key,
+             'storage_policy_index': storage_policy,
+             'created_at': str(1e9)}, mock_ic)
 
         swift_client.head_object.assert_has_calls(
             [mock.call(self.aws_bucket, slo_key,
@@ -559,25 +594,24 @@ class TestSyncSwift(unittest.TestCase):
             [mock.call('account', 'container', slo_key,
                        headers=swift_req_headers),
              mock.call('account', 'segment_container', 'slo-object/part1',
-                       headers=swift_req_headers),
+                       headers={}),
              mock.call('account', 'segment_container', 'slo-object/part2',
-                       headers=swift_req_headers)])
+                       headers={})])
 
         mock_ic.get_object.assert_has_calls([
             mock.call('account', 'container', slo_key,
                       headers=swift_req_headers),
             mock.call('account', 'segment_container', 'slo-object/part1',
-                      headers=swift_req_headers),
+                      headers={}),
             mock.call('account', 'segment_container', 'slo-object/part2',
-                      headers=swift_req_headers)])
+                      headers={})])
 
     @mock.patch('s3_sync.sync_swift.swiftclient.client.Connection')
     def test_slo_upload_per_account(self, mock_swift):
         slo_key = 'slo-object'
         storage_policy = 42
         segment_container = 'segment_container'
-        swift_req_headers = {'X-Backend-Storage-Policy-Index': storage_policy,
-                             'X-Newest': True}
+        swift_req_headers = {'X-Backend-Storage-Policy-Index': storage_policy}
         manifest = [{'name': '/%s/slo-object/part1' % segment_container,
                      'hash': 'deadbeef',
                      'bytes': 1024},
@@ -595,7 +629,8 @@ class TestSyncSwift(unittest.TestCase):
         def get_metadata(account, container, key, headers):
             if key == slo_key:
                 return {utils.SLO_HEADER: 'True',
-                        'Content-Type': 'application/slo'}
+                        'Content-Type': 'application/slo',
+                        'x-timestamp': str(1e9)}
             if key.startswith('slo-object/part'):
                 return {}
             raise RuntimeError('Unknown key')
@@ -603,7 +638,8 @@ class TestSyncSwift(unittest.TestCase):
         def get_object(account, container, key, headers):
             if key == slo_key:
                 return (200, {utils.SLO_HEADER: 'True',
-                              'Content-Type': 'application/slo'},
+                              'Content-Type': 'application/slo',
+                              'x-timestamp': str(1e9)},
                         FakeStream(content=json.dumps(manifest)))
             if container == 'segment_container':
                 if key == 'slo-object/part1':
@@ -623,7 +659,10 @@ class TestSyncSwift(unittest.TestCase):
         sync_swift = SyncSwift(
             mapping, max_conns=self.max_conns,
             per_account=True)
-        sync_swift.upload_object(slo_key, storage_policy, mock_ic)
+        sync_swift.upload_object(
+            {'name': slo_key,
+             'storage_policy_index': storage_policy,
+             'created_at': str(1e9)}, mock_ic)
 
         swift_client.head_object.assert_has_calls(
             [mock.call(mapping['aws_bucket'] + mapping['container'], slo_key,
@@ -669,16 +708,16 @@ class TestSyncSwift(unittest.TestCase):
             [mock.call('account', 'container', slo_key,
                        headers=swift_req_headers),
              mock.call('account', 'segment_container', 'slo-object/part1',
-                       headers=swift_req_headers),
+                       headers={}),
              mock.call('account', 'segment_container', 'slo-object/part2',
-                       headers=swift_req_headers)])
+                       headers={})])
         mock_ic.get_object.assert_has_calls([
             mock.call('account', 'container', slo_key,
                       headers=swift_req_headers),
             mock.call('account', segment_container, 'slo-object/part1',
-                      headers=swift_req_headers),
+                      headers={}),
             mock.call('account', segment_container, 'slo-object/part2',
-                      headers=swift_req_headers)])
+                      headers={})])
 
     @mock.patch('s3_sync.sync_swift.swiftclient.client.Connection')
     def test_slo_metadata_update(self, mock_swift):
@@ -688,7 +727,8 @@ class TestSyncSwift(unittest.TestCase):
         swift_object_meta = {'x-object-meta-new': 'new',
                              'x-object-meta-old': 'updated',
                              'x-static-large-object': 'True',
-                             'etag': 'foobar'}
+                             'etag': 'foobar',
+                             'x-timestamp': str(1e9)}
 
         manifest = [{'path': '/segments/part1', 'hash': 'deadbeef'}]
 
@@ -707,7 +747,10 @@ class TestSyncSwift(unittest.TestCase):
             'etag': '"%s"' % slo_etag}
         swift_client.post_object.return_value = None
 
-        self.sync_swift.upload_object(key, storage_policy, mock_ic)
+        self.sync_swift.upload_object(
+            {'name': key,
+             'storage_policy_index': storage_policy,
+             'created_at': str(1e9)}, mock_ic)
 
         mock_ic.get_object.assert_called_once_with(
             self.sync_swift.account, self.sync_swift.container, key,
@@ -725,7 +768,8 @@ class TestSyncSwift(unittest.TestCase):
         meta = {'x-object-meta-new': 'new',
                 'x-object-meta-old': 'updated',
                 'x-static-large-object': 'True',
-                'etag': 'foobar'}
+                'etag': 'foobar',
+                'x-timestamp': str(1e9)}
 
         remote_meta = {
             'x-object-meta-new': 'new',
@@ -746,7 +790,10 @@ class TestSyncSwift(unittest.TestCase):
         mock_swift.return_value = swift_client
         swift_client.head_object.return_value = remote_meta
 
-        self.sync_swift.upload_object(key, storage_policy, mock_ic)
+        self.sync_swift.upload_object(
+            {'name': key,
+             'storage_policy_index': storage_policy,
+             'created_at': str(1e9)}, mock_ic)
 
         mock_ic.get_object.assert_called_once_with(
             self.sync_swift.account, self.sync_swift.container, key,
@@ -763,7 +810,8 @@ class TestSyncSwift(unittest.TestCase):
         meta = {'x-object-meta-new': 'new',
                 'x-object-meta-old': 'updated',
                 'x-static-large-object': 'True',
-                'etag': 'foobar'}
+                'etag': 'foobar',
+                'x-timestamp': str(1e9)}
 
         mock_ic = mock.Mock()
         mock_ic.get_object_metadata.return_value = meta
@@ -791,7 +839,10 @@ class TestSyncSwift(unittest.TestCase):
         swift_client.head_object.return_value
         mock_ic.get_object.side_effect = _get_object
 
-        self.sync_swift.upload_object(key, storage_policy, mock_ic)
+        self.sync_swift.upload_object(
+            {'name': key,
+             'storage_policy_index': storage_policy,
+             'created_at': str(1e9)}, mock_ic)
 
         swift_client.post_object.assert_not_called()
 
@@ -804,7 +855,8 @@ class TestSyncSwift(unittest.TestCase):
         slo_etag = hashlib.md5('deadbeef').hexdigest()
         meta = {'x-object-meta-new': 'new',
                 'x-static-large-object': 'True',
-                'etag': 'foobar'}
+                'etag': 'foobar',
+                'x-timestamp': str(1e9)}
 
         mock_ic = mock.Mock()
         mock_ic.get_object_metadata.return_value = meta
@@ -833,7 +885,10 @@ class TestSyncSwift(unittest.TestCase):
         swift_client.head_object.return_value
         mock_ic.get_object.side_effect = _get_object
 
-        self.sync_swift.upload_object(key, storage_policy, mock_ic)
+        self.sync_swift.upload_object(
+            {'name': key,
+             'storage_policy_index': storage_policy,
+             'created_at': str(1e9)}, mock_ic)
 
         swift_client.post_object.assert_called_once_with(
             self.sync_swift.remote_container, key,
@@ -1114,13 +1169,17 @@ class TestSyncSwift(unittest.TestCase):
             'not found', http_status=404, http_reason='Not Found')
         self.sync_swift._per_account = True
         self.assertFalse(self.sync_swift.verified_container)
-        self.sync_swift.upload_object('foo', 'policy', mock_ic)
+        self.sync_swift.upload_object(
+            {'name': 'foo',
+             'storage_policy_index': 'policy'}, mock_ic)
         swift_client.put_container.assert_called_once_with(
             self.aws_bucket + 'container', headers={})
         self.assertTrue(self.sync_swift.verified_container)
 
         swift_client.reset_mock()
-        self.sync_swift.upload_object('foo', 'policy', mock_ic)
+        self.sync_swift.upload_object(
+            {'name': 'foo',
+             'storage_policy_index': 'policy'}, mock_ic)
         swift_client.head_object.assert_called_once_with(
             self.aws_bucket + self.mapping['aws_bucket'], 'foo', headers={})
 
@@ -1252,3 +1311,16 @@ class TestSyncSwift(unittest.TestCase):
                 project_name=settings['project_name'],
                 project_domain_name=settings['project_domain_name'],
                 user_domain_name=settings['user_domain_name']))
+
+    @mock.patch('s3_sync.sync_swift.swiftclient.client.Connection')
+    def test_retry_error_stale_object(self, mock_swift):
+        swift_object_meta = {'x-timestamp': str(1e9)}
+        mock_swift.return_value.head_object.return_value = {}
+        mock_ic = mock.Mock()
+        mock_ic.get_object_metadata.return_value = swift_object_meta
+
+        with self.assertRaises(RetryError):
+            self.sync_swift.upload_object(
+                {'name': 'key',
+                 'storage_policy_index': 0,
+                 'created_at': str(2e9)}, mock_ic)
