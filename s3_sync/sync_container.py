@@ -21,9 +21,11 @@ import json
 import logging
 import os
 import os.path
+import pystatsd.statsd
 from swift.common.utils import decode_timestamps, Timestamp
 from swift.common.internal_client import UnexpectedResponse
 import time
+import urllib
 
 import container_crawler.base_sync
 from .provider_factory import create_provider
@@ -43,7 +45,7 @@ class SyncContainer(container_crawler.base_sync.BaseSync):
     VERIFIED_ROW_KEY = 'last_verified_row'
 
     def __init__(self, status_dir, sync_settings, max_conns=10,
-                 per_account=False):
+                 per_account=False, statsd_client=None):
         super(SyncContainer, self).__init__(
             status_dir, sync_settings, per_account)
         self.logger = logging.getLogger(LOGGER_NAME)
@@ -51,8 +53,21 @@ class SyncContainer(container_crawler.base_sync.BaseSync):
         self.copy_after = int(sync_settings.get('copy_after', 0))
         self.retain_local = sync_settings.get('retain_local', True)
         self.propagate_delete = sync_settings.get('propagate_delete', True)
+        self._settings = sync_settings
         self.provider = create_provider(sync_settings, max_conns,
                                         per_account=self._per_account)
+        self.statsd_client = statsd_client
+
+        statsd_prefix_parts = [
+            self._settings.get('aws_endpoint', 'S3'),
+            '/'.join(filter(
+                None, [self.aws_bucket, self._settings.get('custom_prefix')])),
+            self._settings['account'],
+            self._settings['container']
+        ]
+        self.statsd_prefix = '.'.join(
+            [urllib.quote(part.encode('utf-8'), safe='').replace('.', '%2E')
+             for part in statsd_prefix_parts])
 
     def _get_status_row(self, row_field, db_id):
         if not os.path.exists(self._status_file):
@@ -134,10 +149,17 @@ class SyncContainer(container_crawler.base_sync.BaseSync):
     def save_last_verified_row(self, row, db_id):
         return self._save_status_row(row, self.VERIFIED_ROW_KEY, db_id)
 
+    def statsd_increment(self, metric, value):
+        if not self.statsd_client:
+            return
+        self.statsd_client.increment(
+            '.'.join([self.statsd_prefix, metric]), value)
+
     def handle(self, row, swift_client):
         if row['deleted']:
             if self.propagate_delete:
                 self.provider.delete_object(row['name'])
+            self.statsd_increment('deleted_objects', 1)
         else:
             # The metadata timestamp should always be the latest timestamp
             _, _, meta_ts = decode_timestamps(row['created_at'])
@@ -146,6 +168,8 @@ class SyncContainer(container_crawler.base_sync.BaseSync):
             uploaded = self.provider.upload_object(row['name'],
                                                    row['storage_policy_index'],
                                                    swift_client)
+            if uploaded:
+                self.statsd_increment('copied_objects', 1)
 
             if not self.retain_local and uploaded:
                 # NOTE: We rely on the DELETE object X-Timestamp header to
@@ -166,7 +190,7 @@ class SyncContainer(container_crawler.base_sync.BaseSync):
 
 class SyncContainerFactory(object):
     def __init__(self, config):
-        if not config.get('status_dir'):
+        if 'status_dir' not in config:
             raise RuntimeError('Configuration option "status_dir" is missing')
         self.config = config
 
@@ -174,5 +198,16 @@ class SyncContainerFactory(object):
         return 'SyncContainer'
 
     def instance(self, settings, per_account=False):
+        if 'statsd_host' in self.config:
+            statsd_client = pystatsd.statsd.Client(
+                self.config['statsd_host'],
+                self.config.get('statsd_port', 8125),
+                self.config.get('statsd_prefix'))
+        else:
+            statsd_client = None
+
         return SyncContainer(
-            self.config['status_dir'], settings, per_account=per_account)
+            self.config['status_dir'],
+            settings,
+            per_account=per_account,
+            statsd_client=statsd_client)

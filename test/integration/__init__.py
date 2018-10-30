@@ -30,6 +30,8 @@ import time
 import unittest
 import urllib
 
+import utils
+
 
 class WaitTimedOut(RuntimeError):
     pass
@@ -414,8 +416,13 @@ class TestCloudSyncBase(unittest.TestCase):
         conn = klass.conn_for_acct(u"AUTH_\u062aacct2")
         conn.post_account({ACCOUNT_ACL_KEY: acl})
 
+        klass.statsd_server = utils.StatsdServer()
+        klass.statsd_server.serve()
+
     @classmethod
     def tearDownClass(klass):
+        klass.statsd_server.stop()
+
         if 'NO_TEARDOWN' in os.environ:
             return
         # We'll use the shunt-bypassing connections for tear-down just in case

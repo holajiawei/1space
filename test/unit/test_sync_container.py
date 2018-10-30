@@ -533,3 +533,29 @@ class TestSyncContainerFactory(unittest.TestCase):
         instance = factory.instance(instance_settings, per_account=True)
         self.assertEqual(status_dir, instance._status_dir)
         self.assertTrue(instance._per_account)
+
+    @mock.patch('s3_sync.sync_container.pystatsd.statsd.Client')
+    def test_statsd_settings(self, mock_statsd):
+        settings = {
+            'status_dir': '/foo/bar',
+            'statsd_host': 'localhost',
+            'statsd_port': 1337,
+            'statsd_prefix': '1space-test'
+        }
+        instance_settings = {'aws_bucket': 'bucket',
+                             'aws_identity': 'identity',
+                             'aws_secret': 'credential',
+                             'account': u'acc\u00f4unt',
+                             'container': u'c\u00f5ntainer',
+                             'custom_prefix': u'myobj\u00efcts',
+                             'aws_endpoint': 'http://127.0.0.1:5000/auth/v1.0'}
+        factory = SyncContainerFactory(settings)
+        instance = factory.instance(instance_settings)
+        mock_statsd.assert_called_once_with(
+            settings['statsd_host'],
+            settings['statsd_port'],
+            settings['statsd_prefix'])
+        self.assertEqual(
+            'http%3A%2F%2F127%2E0%2E0%2E1%3A5000%2Fauth%2Fv1%2E0'
+            '.bucket%2Fmyobj%C3%AFcts.acc%C3%B4unt.c%C3%B5ntainer',
+            instance.statsd_prefix)

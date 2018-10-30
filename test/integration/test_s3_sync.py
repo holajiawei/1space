@@ -17,16 +17,46 @@ limitations under the License.
 import hashlib
 from itertools import repeat
 import json
+import swiftclient
 import time
+import urllib
 
 from s3_sync.provider_factory import create_provider
 
 from . import TestCloudSyncBase, clear_swift_container, wait_for_condition, \
     swift_content_location, s3_key_name, clear_s3_bucket, WaitTimedOut
-import swiftclient
 
 
 class TestCloudSync(TestCloudSyncBase):
+    def tearDown(self):
+        self.statsd_server.clear()
+
+    def _assert_stats(self, mapping, count, action):
+        parts = ['stats', mapping['aws_endpoint'], mapping['aws_bucket'],
+                 mapping['account'], mapping['container'], action]
+        key = '.'.join([urllib.quote(part.encode('utf-8'), safe='').
+                        replace('.', '%2E')
+                        for part in parts])
+        # NOTE: There may be multiple messages and we need to accumulate all of
+        # the increments from them.
+        observed_count = [0]
+
+        def _assert_stats_helper():
+            # stats format: [key, (timestamp, count)]
+            for messages in self.statsd_server.get_messages():
+                for msg in messages:
+                    if msg[0] != key:
+                        continue
+                    observed_count[0] += msg[1][1]
+
+            try:
+                self.assertEqual(count, observed_count[0])
+                return True
+            except AssertionError:
+                return False
+
+        wait_for_condition(1, _assert_stats_helper)
+
     def _test_archive(
             self, key, content, mapping, get_etag, expected_location):
         etag = self.local_swift(
@@ -185,6 +215,8 @@ class TestCloudSync(TestCloudSyncBase):
             head_resp = wait_for_condition(5, _check_sync)
             self.assertEqual('"%s"' % etag, head_resp['ETag'])
 
+        self._assert_stats(s3_mapping, len(test_args), 'copied_objects')
+
     def test_s3_archive(self):
         s3_mapping = self.s3_archive_mapping()
 
@@ -205,6 +237,8 @@ class TestCloudSync(TestCloudSyncBase):
 
             self._test_archive(key, content, s3_mapping, etag_func,
                                expected_location)
+
+        self._assert_stats(s3_mapping, len(test_args), 'copied_objects')
 
     def test_s3_archive_by_metadata(self):
         s3_mapping = self._find_mapping(
@@ -255,6 +289,9 @@ class TestCloudSync(TestCloudSyncBase):
                     entry['content_location'])
             else:
                 self.assertEqual(None, entry.get('expected_location'))
+
+        self._assert_stats(
+            s3_mapping, len(test_data) - count_not_archived, 'copied_objects')
 
     def test_swift_archive_by_metadata(self):
         mapping = self._find_mapping(
@@ -307,6 +344,9 @@ class TestCloudSync(TestCloudSyncBase):
             else:
                 self.assertEqual(None, entry.get('expected_location'))
 
+        self._assert_stats(
+            mapping, len(test_data) - count_not_archived, 'copied_objects')
+
     def test_swift_sync(self):
         mapping = self.swift_sync_mapping()
 
@@ -329,6 +369,7 @@ class TestCloudSync(TestCloudSyncBase):
 
             head_resp = wait_for_condition(5, _check_sync)
             self.assertEqual(etag, head_resp['etag'])
+        self._assert_stats(mapping, len(test_args), 'copied_objects')
 
     def test_keystone_sync_v3(self):
         mapping = self._find_mapping(
@@ -353,6 +394,7 @@ class TestCloudSync(TestCloudSyncBase):
             return True
 
         wait_for_condition(5, _check_synced)
+        self._assert_stats(mapping, 1, 'copied_objects')
 
     def test_keystone_sync_v2(self):
         mapping = self._find_mapping(
@@ -377,6 +419,7 @@ class TestCloudSync(TestCloudSyncBase):
             return True
 
         wait_for_condition(5, _check_synced)
+        self._assert_stats(mapping, 1, 'copied_objects')
 
     def test_keystone_cross_account_v2(self):
         mapping = self._find_mapping(
@@ -407,6 +450,7 @@ class TestCloudSync(TestCloudSyncBase):
                                 mapping['aws_identity'],
                                 mapping['aws_bucket'])),
                       list_item['content_location'])
+        self._assert_stats(mapping, 1, 'copied_objects')
 
     def test_swift_archive(self):
         mapping = self.swift_archive_mapping()
@@ -423,6 +467,7 @@ class TestCloudSync(TestCloudSyncBase):
         for key, content in test_args:
             self._test_archive(key, content, mapping, get_etag,
                                expected_location)
+        self._assert_stats(mapping, len(test_args), 'copied_objects')
 
     def test_swift_archive_x_delete_after(self):
         mapping = self._find_mapping(
@@ -441,6 +486,8 @@ class TestCloudSync(TestCloudSyncBase):
         self.assertIn('x-delete-at', hdrs.keys())
         target_time = int(time.time() + mapping['remote_delete_after'])
         self.assertTrue(int(hdrs['x-delete-at']) <= target_time)
+
+        self._assert_stats(mapping, 1, 'copied_objects')
 
     def test_provider_s3_put_object_defaults(self):
         mapping = self.s3_sync_mapping()
@@ -764,6 +811,8 @@ class TestCloudSync(TestCloudSyncBase):
         self.assertIn('x-delete-at', hdrs.keys())
         self.assertTrue(int(hdrs['x-delete-at']) <= seg_target_time)
         self.assertTrue(int(hdrs['x-delete-at']) >= early_seg_target_time)
+        # NOTE: we only record the SLO as being uploaded, not the segments
+        self._assert_stats(mapping, 1, 'copied_objects')
 
     def test_swift_archive_slo_restore(self):
         content = 'A' * 2048
@@ -846,6 +895,8 @@ class TestCloudSync(TestCloudSyncBase):
                 hashlib.md5(content[:1024]).hexdigest(),
                 hashlib.md5(content[1024:]).hexdigest())).hexdigest(),
             headers['etag'])
+        # NOTE: we only record the SLO as being uploaded, not the segments
+        self._assert_stats(mapping, 1, 'copied_objects')
 
     def test_swift_slo_sync_new_meta(self):
         content = 'A' * 2048
@@ -883,6 +934,9 @@ class TestCloudSync(TestCloudSyncBase):
                 'head_object', cont, obj,
                 query_string='multipart-manifest=get')
 
+        # NOTE: segments are currently excluded from the total count
+        self._assert_stats(mapping, 1, 'copied_objects')
+
         self.local_swift(
             'post_object',
             mapping['container'], key,
@@ -909,6 +963,9 @@ class TestCloudSync(TestCloudSyncBase):
                 self.assertEqual(
                     old_headers[(cont, obj)]['x-timestamp'],
                     hdrs['x-timestamp'])
+        # NOTE: currently, we do not distinguish between uploading an object
+        # and updating its metadata.
+        self._assert_stats(mapping, 1, 'copied_objects')
 
     def test_swift_sync_same_segments_slo(self):
         '''Uploading the same SLO manifest should not duplicate segments'''
