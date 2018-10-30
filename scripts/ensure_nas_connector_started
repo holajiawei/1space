@@ -23,7 +23,7 @@ docker run -d -v `pwd`:/nas_connector \
     -v /tmp/nasconnector:/srv/nasconnector \
     --network swift-s3-sync-net --network-alias nas-connector \
     --restart on-failure --name nas-connector \
-    -p "${HOST_NAS_CONNECTOR_PORT:-8082}:8080" \
+    -p "${HOST_NAS_CONNECTOR_PORT:-8083}:8083" \
     -e AWS_ACCESS_KEY_ID=s3-sync-test -e AWS_SECRET_ACCESS_KEY=s3-sync-test \
     -e NAS_CONNECT_SECRET=mysecret \
     nas-connector
