@@ -768,6 +768,9 @@ class TestMigrator(TestCloudSyncBase):
     def test_propagate_container_meta_changes(self):
         migration = self._find_migration(
             lambda cont: cont['aws_bucket'] == '/*')
+        status = migrator_utils.TempMigratorStatus(migration)
+        migrator = migrator_utils.MigratorFactory().get_migrator(
+            migration, status)
 
         acl = 'AUTH_' + self.SWIFT_CREDS['dst']['user'].split(':')[0]
 
@@ -813,32 +816,20 @@ class TestMigrator(TestCloudSyncBase):
         etag = remote_swift.put_object('metadata_test', 'test', 'test')
         self.assertEqual(hashlib.md5('test').hexdigest(), etag)
 
-        def key_val_copied(k, v):
-            test_hdrs = conn_noshunt.head_container('metadata_test')
-            if k not in test_hdrs:
-                return False
-            if test_hdrs[k] == v:
-                return True
-            return False
-
-        key1_copied = partial(key_val_copied, key1, val1)
-        val3_copied = partial(key_val_copied, key3, val3)
-
-        def key_gone(key):
-            test_hdrs = conn_noshunt.head_container('metadata_test')
-            if key not in test_hdrs:
-                return True
-            return False
-
         # sanity check
-        self.assertTrue(key_val_copied(key2, val2))
-        self.assertTrue(key_gone(key1))
+        hdrs = conn_noshunt.head_container('metadata_test')
+        self.assertEqual(val2, hdrs[key2])
+        self.assertFalse(key1 in hdrs)
 
-        with self.migrator_running():
-            # verify really copied
-            wait_for_condition(5, key1_copied)
-            self.assertTrue(key_gone(key2))
-            self.assertTrue(val3_copied)
+        migrator.next_pass()
+
+        # verify really copied
+        hdrs = conn_noshunt.head_container('metadata_test')
+        self.assertIn(key1, hdrs)
+        self.assertEqual(val1, hdrs[key1])
+        self.assertIn(key3, hdrs)
+        self.assertEqual(val3, hdrs[key3])
+        self.assertFalse(key2 in hdrs)
 
         # validate the acl was copied
         remote_swift = swiftclient.client.Connection(
@@ -1341,6 +1332,9 @@ class TestMigrator(TestCloudSyncBase):
         # we can handle SLOs that fill the object_queue.
         migration = self._find_migration(
             lambda cont: cont['aws_bucket'] == '/*')
+        status = migrator_utils.TempMigratorStatus(migration)
+        migrator = migrator_utils.MigratorFactory().get_migrator(
+            migration, status)
         conn_source = self.conn_for_acct(migration['aws_account'])
         conn_destination = self.conn_for_acct(migration['account'])
 
@@ -1368,21 +1362,14 @@ class TestMigrator(TestCloudSyncBase):
                 json.dumps(_make_manifest(i)),
                 query_string='multipart-manifest=put')
 
-        def _check_migrated_objects(container, expected_count):
-            _, listing = conn_destination.get_container(container)
-            local = [entry for entry in listing
-                     if 'swift' in entry.get('content_location', [])]
-            if len(local) != expected_count:
-                return False
-            return local
-
-        with self.migrator_running():
-            wait_for_condition(
-                10,
-                partial(_check_migrated_objects, container, slos))
-
+        migrator.next_pass()
         expected_body = ''.join([
             chr(ord('A') + i) * 4 for i in range(segments)])
+        _, listing = conn_destination.get_container(container)
+        local = [entry for entry in listing
+                 if 'swift' in entry.get('content_location', [])]
+        self.assertEqual(slos, len(local))
+
         for i in range(slos):
             hdrs, body = conn_destination.get_object(
                 container, 'slo-%d' % i)

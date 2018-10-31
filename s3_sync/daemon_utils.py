@@ -32,8 +32,16 @@ MIN_SWIFT_VERSION = LooseVersion('2.13')
 
 def initialize_loggers(config):
     setup_logger(LOGGER_NAME, config)
-    setup_logger("boto3", config)
-    setup_logger("botocore", config)
+    setup_logger('boto3', config)
+    setup_logger('botocore', config)
+
+    if config.get('log_level') == 'debug':
+        config_copy = dict(config)
+        config_copy['log_level'] = 'info'
+        setup_logger('botocore.hooks', config_copy)
+        setup_logger('botocore.session', config_copy)
+        setup_logger('botocore.loaders', config_copy)
+        setup_logger('botocore.client', config_copy)
 
 
 def setup_logger(logger_name, config):

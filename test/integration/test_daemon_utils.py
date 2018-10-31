@@ -8,10 +8,21 @@ class TestDaemonUtils(TestCloudSyncBase):
         initialize_loggers({'log_file': '/tmp/test_file',
                             'log_level': 'debug',
                             'syslog': {'host': 'swift-s3-sync'}})
-        time.sleep(1)
-        self.assertTrue("s3-sync [DEBUG]: Using syslog" in
-                        open("/var/log/syslog").read())
-        self.assertTrue("boto3 [DEBUG]: Using syslog" in
-                        open("/var/log/syslog").read())
-        self.assertTrue("botocore [DEBUG]: Using syslog" in
-                        open("/var/log/syslog").read())
+        retries = 15
+        asserts = set(
+            ['s3-sync [DEBUG]: Using syslog',
+             'boto3 [DEBUG]: Using syslog',
+             'botocore [DEBUG]: Using syslog'])
+        while retries and asserts:
+            asserted = set()
+            try:
+                syslog = open('/var/log/syslog').read()
+                for line in asserts:
+                    self.assertIn(line, syslog)
+                    asserted.add(line)
+            except AssertionError:
+                retries -= 1
+                if not retries:
+                    raise
+                time.sleep(0.1)
+            asserts -= asserted
