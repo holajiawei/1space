@@ -14,6 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 """
 
+import base64
 import boto3
 import botocore.exceptions
 from botocore.handlers import (
@@ -186,6 +187,8 @@ class SyncS3(BaseSync):
                 Body=wrapper_stream,
                 Metadata=wrapper_stream.get_s3_headers(),
                 ContentLength=len(wrapper_stream),
+                ContentMD5=base64.b64encode(
+                    wrapper_stream.get_headers()['etag'].decode('hex')),
                 ContentType=metadata['content-type']
             )
             if self._is_amazon() and self.encryption:
@@ -691,6 +694,8 @@ class SyncS3(BaseSync):
                             Key=s3_key,
                             Body=wrapper,
                             ContentLength=len(wrapper),
+                            ContentMD5=base64.b64encode(
+                                wrapper.get_headers()['etag'].decode('hex')),
                             UploadId=upload_id,
                             PartNumber=part_number)
                     finally:

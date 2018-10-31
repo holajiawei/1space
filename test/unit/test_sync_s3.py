@@ -16,6 +16,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 """
 
+import base64
 import boto3
 from botocore.exceptions import ClientError
 from botocore.response import StreamingBody
@@ -276,6 +277,7 @@ class TestSyncS3(unittest.TestCase):
         wrapper = mock.Mock()
         wrapper.__len__ = lambda s: 0
         wrapper.get_s3_headers.return_value = {}
+        wrapper.get_headers.return_value = {'etag': 'fabcabbeef'}
         mock_file_wrapper.return_value = wrapper
         self.mock_boto3_client.head_object.side_effect = ClientError(
             {'Error': {'Code': 'NotFound'},
@@ -303,6 +305,7 @@ class TestSyncS3(unittest.TestCase):
             Body=wrapper,
             Metadata={},
             ContentLength=0,
+            ContentMD5=base64.b64encode('fabcabbeef'.decode('hex')),
             ServerSideEncryption='AES256',
             ContentType='test/blob')
 
@@ -317,6 +320,7 @@ class TestSyncS3(unittest.TestCase):
         wrapper = mock.Mock()
         wrapper.__len__ = lambda s: 0
         wrapper.get_s3_headers.return_value = {}
+        wrapper.get_headers.return_value = {'etag': 'fabcabbeef'}
         mock_file_wrapper.return_value = wrapper
         self.mock_boto3_client.head_object.side_effect = ClientError(
             {'Error': {'Code': 'NotFound'},
@@ -344,6 +348,7 @@ class TestSyncS3(unittest.TestCase):
             Body=wrapper,
             Metadata={},
             ContentLength=0,
+            ContentMD5=base64.b64encode('fabcabbeef'.decode('hex')),
             ContentType='test/blob')
 
     @mock.patch('s3_sync.sync_s3.FileWrapper')
@@ -357,6 +362,7 @@ class TestSyncS3(unittest.TestCase):
         wrapper = mock.Mock()
         wrapper.__len__ = lambda s: 0
         wrapper.get_s3_headers.return_value = {}
+        wrapper.get_headers.return_value = {'etag': 'fabcabbeef'}
         mock_file_wrapper.return_value = wrapper
         self.mock_boto3_client.head_object.side_effect = ClientError(
             {'Error': {'Code': 'NotFound'},
@@ -384,6 +390,7 @@ class TestSyncS3(unittest.TestCase):
             Body=wrapper,
             Metadata={},
             ContentLength=0,
+            ContentMD5=base64.b64encode('fabcabbeef'.decode('hex')),
             ContentType='test/blob')
 
     @mock.patch('s3_sync.sync_s3.boto3.session.Session')
@@ -405,6 +412,7 @@ class TestSyncS3(unittest.TestCase):
         wrapper = mock.Mock()
         wrapper.__len__ = lambda s: 0
         wrapper.get_s3_headers.return_value = {}
+        wrapper.get_headers.return_value = {'etag': 'fabcabbeef'}
         mock_file_wrapper.return_value = wrapper
         self.mock_boto3_client.head_object.side_effect = ClientError(
             {'Error': {'Code': 'NotFound'},
@@ -432,6 +440,7 @@ class TestSyncS3(unittest.TestCase):
             Body=wrapper,
             Metadata={},
             ContentLength=0,
+            ContentMD5=base64.b64encode('fabcabbeef'.decode('hex')),
             ContentType='test/blob',
             ServerSideEncryption='AES256')
 
@@ -560,6 +569,7 @@ class TestSyncS3(unittest.TestCase):
         wrapper = mock.Mock()
         wrapper.__len__ = lambda s: 0
         wrapper.get_s3_headers.return_value = {'new': 'new', 'old': 'updated'}
+        wrapper.get_headers.return_value = {'etag': 'fabcabbeef'}
         mock_file_wrapper.return_value = wrapper
 
         self.sync_s3.upload_object(
@@ -578,6 +588,7 @@ class TestSyncS3(unittest.TestCase):
             Metadata={'new': 'new', 'old': 'updated'},
             Body=wrapper,
             ContentLength=0,
+            ContentMD5=base64.b64encode('fabcabbeef'.decode('hex')),
             ServerSideEncryption='AES256',
             ContentType='test/blob')
 
@@ -587,7 +598,7 @@ class TestSyncS3(unittest.TestCase):
         storage_policy = 42
         swift_object_meta = {'x-object-meta-new': 'new',
                              'x-object-meta-old': 'updated',
-                             'etag': 2,
+                             'etag': 'baddbeef',
                              'content-type': 'test/blob',
                              'x-timestamp': str(1e9)}
         mock_ic = mock.Mock()
@@ -601,6 +612,7 @@ class TestSyncS3(unittest.TestCase):
         wrapper = mock.Mock()
         wrapper.get_s3_headers.return_value = utils.convert_to_s3_headers(
             swift_object_meta)
+        wrapper.get_headers.return_value = swift_object_meta
         wrapper.__len__ = lambda s: 42
         mock_file_wrapper.return_value = wrapper
 
@@ -615,6 +627,8 @@ class TestSyncS3(unittest.TestCase):
             Metadata={'new': 'new', 'old': 'updated'},
             Body=wrapper,
             ContentLength=42,
+            ContentMD5=base64.b64encode(
+                swift_object_meta['etag'].decode('hex')),
             ServerSideEncryption='AES256',
             ContentType='test/blob')
 
@@ -1071,7 +1085,14 @@ class TestSyncS3(unittest.TestCase):
         def _get_object(*args, **kwargs):
             self.assertEqual(
                 self.max_conns - 1, self.sync_s3.client_pool.free_count())
-            return 200, {'Content-Length': chunk_len}, fake_app_iter
+            path = '/'.join(args[1:3])
+            for entry in manifest:
+                if entry['name'][1:] == path:
+                    break
+            else:
+                raise RuntimeError('unknown segment!')
+            return 200, {'Content-Length': chunk_len,
+                         'etag': entry['hash']}, fake_app_iter
 
         self.mock_boto3_client.upload_part.side_effect = upload_part
 
@@ -1087,20 +1108,24 @@ class TestSyncS3(unittest.TestCase):
             Metadata={'foo': 'bar'},
             ServerSideEncryption='AES256',
             ContentType='test/blob')
-        self.mock_boto3_client.upload_part.assert_has_calls([
+        self.assertEqual([
             mock.call(Bucket=self.aws_bucket,
                       Key=self.sync_s3.get_s3_name(slo_key),
                       PartNumber=1,
                       ContentLength=chunk_len,
+                      ContentMD5=base64.b64encode(
+                          manifest[0]['hash'].decode('hex')),
                       Body=mock.ANY,
                       UploadId='mpu-key-for-slo'),
             mock.call(Bucket=self.aws_bucket,
                       Key=self.sync_s3.get_s3_name(slo_key),
                       PartNumber=2,
                       ContentLength=chunk_len,
+                      ContentMD5=base64.b64encode(
+                          manifest[1]['hash'].decode('hex')),
                       Body=mock.ANY,
                       UploadId='mpu-key-for-slo')
-        ])
+        ], self.mock_boto3_client.upload_part.mock_calls)
         self.mock_boto3_client.complete_multipart_upload\
             .assert_called_once_with(
                 Bucket=self.aws_bucket,
@@ -1132,8 +1157,10 @@ class TestSyncS3(unittest.TestCase):
 
         chunk_len = 5 * SyncS3.MB
         fake_app_iter = [
-            (200, {'Content-Length': chunk_len}, FakeStream(chunk_len)),
-            (200, {'Content-Length': chunk_len}, FakeStream(chunk_len))]
+            (200, {'Content-Length': chunk_len,
+                   'etag': manifest[0]['hash']}, FakeStream(chunk_len)),
+            (200, {'Content-Length': chunk_len,
+                   'etag': manifest[1]['hash']}, FakeStream(chunk_len))]
         mock_ic = mock.Mock()
         mock_ic.get_object.side_effect = fake_app_iter
         tb_mock.format_exc.return_value = 'traceback'
@@ -1148,20 +1175,24 @@ class TestSyncS3(unittest.TestCase):
             Metadata={'foo': 'bar'},
             ServerSideEncryption='AES256',
             ContentType='test/blob')
-        self.mock_boto3_client.upload_part.assert_has_calls([
+        self.assertEqual([
             mock.call(Bucket=self.aws_bucket,
                       Key=self.sync_s3.get_s3_name(slo_key),
                       PartNumber=1,
                       ContentLength=chunk_len,
+                      ContentMD5=base64.b64encode(
+                          manifest[0]['hash'].decode('hex')),
                       Body=mock.ANY,
                       UploadId='mpu-key-for-slo'),
             mock.call(Bucket=self.aws_bucket,
                       Key=self.sync_s3.get_s3_name(slo_key),
                       PartNumber=2,
                       ContentLength=chunk_len,
+                      ContentMD5=base64.b64encode(
+                          manifest[1]['hash'].decode('hex')),
                       Body=mock.ANY,
                       UploadId='mpu-key-for-slo')
-        ])
+        ], self.mock_boto3_client.upload_part.mock_calls)
         self.mock_boto3_client.complete_multipart_upload\
             .assert_not_called()
         for _, _, body in fake_app_iter:
@@ -1197,7 +1228,8 @@ class TestSyncS3(unittest.TestCase):
         fake_app_iter = FakeStream(5 * SyncS3.MB)
         mock_ic = mock.Mock()
         mock_ic.get_object.return_value = (
-            200, {'Content-Length': str(5 * SyncS3.MB)}, fake_app_iter)
+            200, {'Content-Length': str(5 * SyncS3.MB),
+                  'etag': manifest[0]['hash']}, fake_app_iter)
 
         self.sync_s3.encryption = True
         self.sync_s3._upload_slo(manifest, slo_meta, s3_key, mock_ic)
@@ -1208,6 +1240,14 @@ class TestSyncS3(unittest.TestCase):
             Metadata={'foo': 'bar'},
             ServerSideEncryption='AES256',
             ContentType='test/blob')
+        self.mock_boto3_client.upload_part.assert_called_once_with(
+            Bucket=self.aws_bucket,
+            Key=self.sync_s3.get_s3_name(slo_key),
+            PartNumber=1,
+            ContentLength=5 * SyncS3.MB,
+            ContentMD5=base64.b64encode(manifest[0]['hash'].decode('hex')),
+            Body=mock.ANY,
+            UploadId='mpu-key-for-slo')
 
     @mock.patch('s3_sync.sync_s3.get_slo_etag')
     def test_slo_meta_changed(self, mock_get_slo_etag):
@@ -1853,7 +1893,8 @@ class TestSyncS3(unittest.TestCase):
                 'content-type': 'application/test',
                 'x-timestamp': str(1e9)}),
             get_object=mock.Mock(return_value=(
-                200, {'Content-Length': len(object_body)},
+                200, {'Content-Length': len(object_body),
+                      'etag': 'feedbadd'},
                 object_body)))
 
         with self.assertRaises(RuntimeError):
