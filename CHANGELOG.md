@@ -1,3 +1,22 @@
+## 0.1.48.1
+
+Improvements:
+
+- Added support for handling MIME-encoded UTF-8 characters in metadata keys. Now
+  non-ASCII characters will be encoded when uploading to S3. This is not
+  documented by AWS S3, but is observed behavior
+  (http://tracker.ceph.com/issues/1287).
+- Updated boto3 and botocore to versions 1.9.23 and 1.12.23.1, respectively.
+- Now uploads to S3 will supply the Content-MD5 header to prevent transmission
+  errors when reading objects from Swift.
+
+Bug fixes:
+
+- Removed the use of the X-Newest header. This will considerably reduce the
+  number of HEAD requests when interrogating containers with EC storage policies
+  and reduce the number of GET requests in replicated storage policies to 1 per
+  object.
+
 ## 0.1.48 (2018-10-15)
 
 Features:
