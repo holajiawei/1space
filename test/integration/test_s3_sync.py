@@ -215,6 +215,8 @@ class TestCloudSync(TestCloudSyncBase):
                                expected_location)
 
         self._assert_stats(s3_mapping, len(test_args), 'copied_objects')
+        clear_s3_bucket(self.s3_client, s3_mapping['aws_bucket'])
+        clear_swift_container(self.swift_src, s3_mapping['container'])
 
     def test_s3_archive_by_metadata(self):
         s3_mapping = self._find_mapping(
@@ -264,6 +266,8 @@ class TestCloudSync(TestCloudSyncBase):
 
         self._assert_stats(
             s3_mapping, len(test_data) - count_not_archived, 'copied_objects')
+        clear_s3_bucket(self.s3_client, s3_mapping['aws_bucket'])
+        clear_swift_container(self.swift_src, s3_mapping['container'])
 
     def test_swift_archive_by_metadata(self):
         mapping = self._find_mapping(
@@ -314,6 +318,8 @@ class TestCloudSync(TestCloudSyncBase):
 
         self._assert_stats(
             mapping, len(test_data) - count_not_archived, 'copied_objects')
+        clear_swift_container(self.swift_dst, mapping['aws_bucket'])
+        clear_swift_container(self.swift_src, mapping['container'])
 
     def test_swift_sync(self):
         mapping = self.swift_sync_mapping()
@@ -574,6 +580,46 @@ class TestCloudSync(TestCloudSyncBase):
         hdrs = self.local_swift(
             'head_object', s3_mapping['container'], key)
         self.assertTrue('server' in hdrs)
+        clear_s3_bucket(self.s3_client, s3_mapping['aws_bucket'])
+        clear_swift_container(self.swift_src, s3_mapping['container'])
+
+    def test_s3_slo_sync(self):
+        s3_mapping = self.s3_sync_mapping()
+        crawler = utils.get_container_crawler(s3_mapping)
+        segments_container = 's3_slo_segments'
+        # TODO: use a unicode key here, but S3Proxy has a bug with unicode
+        # characters.
+        key = u'slo-object'
+        s3_key = s3_key_name(s3_mapping, key)
+
+        segments = [
+            'A' * (5 * 2**20),
+            'B' * (5 * 2**20),
+            'C' * 1024
+        ]
+        manifest = [{'size_bytes': len(segments[i]),
+                     'path': u'/%s/p\u00e1rt%d' % (segments_container, i)}
+                    for i in range(len(segments))]
+
+        self.local_swift('put_container', segments_container)
+        for i in range(len(segments)):
+            self.local_swift('put_object', segments_container,
+                             u'p\u00e1rt%d' % i, segments[i])
+        self.local_swift('put_object', s3_mapping['container'], key,
+                         json.dumps(manifest),
+                         query_string='multipart-manifest=put')
+        crawler.run_once()
+
+        head_resp = self.s3(
+            'head_object', Bucket=s3_mapping['aws_bucket'], Key=s3_key)
+        self.assertEqual(sum(map(len, segments)), head_resp['ContentLength'])
+        # FIXME: S3Proxy currently returns the ETag that is the content MD5,
+        # rather than an S3-style ETag.
+        expected_etag = hashlib.md5(
+            reduce(lambda x, y: x + y, segments)).hexdigest()
+        self.assertEqual('"%s"' % expected_etag, head_resp['ETag'])
+
+        self._assert_stats(s3_mapping, 1, 'copied_objects')
         clear_s3_bucket(self.s3_client, s3_mapping['aws_bucket'])
         clear_swift_container(self.swift_src, s3_mapping['container'])
 
