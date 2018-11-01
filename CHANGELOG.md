@@ -1,3 +1,13 @@
+## 0.1.48.2
+
+Improvements:
+
+- Opt into using the unsigned-payload option with AWS S3 uploads, as opposed to
+  using the chunked transfer encoding. This achieves slightly better
+  performance, as we do not have to sign each chunk or the entire payload. Boto
+  restricts the option to HTTPS and we rely on Boto to use HTTPS by default with
+  any AWS bucket/endpoint. Do not configure the HTTP endpoint for AWS manually!
+
 ## 0.1.48.1
 
 Improvements:
