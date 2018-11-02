@@ -760,6 +760,16 @@ class TestSyncS3(unittest.TestCase):
             conf_mock.assert_called_once_with(signature_version='s3',
                                               s3={'addressing_style': 'path'})
 
+        with mock.patch(config_class) as conf_mock:
+            SyncS3({'aws_bucket': self.aws_bucket,
+                    'aws_identity': 'identity',
+                    'aws_secret': 'credential',
+                    'account': 'account',
+                    'container': 'container',
+                    'aws_endpoint': 'http://s3.amazonaws.com'})
+            conf_mock.assert_called_once_with(signature_version='s3v4',
+                                              s3={'aws_chunked': True})
+
     @mock.patch('s3_sync.sync_s3.boto3.session.Session')
     def test_session_token_plumbing(self, session_mock):
         SyncS3({'aws_bucket': 'a_bucket',
@@ -864,9 +874,9 @@ class TestSyncS3(unittest.TestCase):
         endpoint_user_agent = {
             SyncS3.GOOGLE_API: 'CloudSync/5.0 (GPN:SwiftStack) %s' % (
                 boto3_ua),
-            's3.amazonaws.com': None,
+            'https://s3.amazonaws.com': None,
             None: None,
-            'other.s3-clone.com': None
+            'http://other.s3-clone.com': None
         }
 
         session_class = 's3_sync.sync_s3.boto3.session.Session'
