@@ -416,7 +416,7 @@ class TestCloudSyncBase(unittest.TestCase):
         conn = klass.conn_for_acct(u"AUTH_\u062aacct2")
         conn.post_account({ACCOUNT_ACL_KEY: acl})
 
-        klass.statsd_server = utils.StatsdServer()
+        klass.statsd_server = utils.StatsdServer(port=21337)
         klass.statsd_server.serve()
 
     @classmethod
