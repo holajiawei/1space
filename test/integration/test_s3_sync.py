@@ -17,14 +17,14 @@ limitations under the License.
 import hashlib
 from itertools import repeat
 import json
-import swiftclient
 import time
 import urllib
 
 from s3_sync.provider_factory import create_provider
 
 from . import TestCloudSyncBase, clear_swift_container, wait_for_condition, \
-    swift_content_location, s3_key_name, clear_s3_bucket, WaitTimedOut
+    swift_content_location, s3_key_name, clear_s3_bucket
+import utils
 
 
 class TestCloudSync(TestCloudSyncBase):
@@ -55,28 +55,23 @@ class TestCloudSync(TestCloudSyncBase):
             except AssertionError:
                 return False
 
-        wait_for_condition(1, _assert_stats_helper)
+        try:
+            wait_for_condition(2, _assert_stats_helper)
+        except:
+            self.assertEqual(count, observed_count[0])
 
     def _test_archive(
             self, key, content, mapping, get_etag, expected_location):
+        crawler = utils.get_container_crawler(mapping)
         etag = self.local_swift(
             'put_object', mapping['container'], key,
             content.encode('utf-8'))
         self.assertEqual(
             hashlib.md5(content.encode('utf-8')).hexdigest(), etag)
 
-        def _check_expired():
-            # wait for the shunt to return the results for the object
-            hdrs, listing = self.local_swift(
-                'get_container', mapping['container'])
-            if int(hdrs['x-container-object-count']) != 0:
-                return False
-            if any(map(lambda entry: 'content_location' not in entry,
-                       listing)):
-                return False
-            return (hdrs, listing)
-
-        swift_hdrs, listing = wait_for_condition(5, _check_expired)
+        crawler.run_once()
+        swift_hdrs, listing = self.local_swift(
+            'get_container', mapping['container'])
         for entry in listing:
             if entry['name'] == key:
                 break
@@ -91,6 +86,7 @@ class TestCloudSync(TestCloudSyncBase):
     def test_swift_sync_slash_star(self):
         mapping = self._find_mapping(
             lambda m: m['aws_bucket'] == 'crazy-target:')
+        crawler = utils.get_container_crawler(mapping)
         target_conn = self.conn_for_acct_noshunt(mapping['aws_account'])
 
         conn = self.conn_for_acct(mapping['account'])
@@ -103,15 +99,10 @@ class TestCloudSync(TestCloudSyncBase):
             got_etag = conn.put_object(cont, obj, body)
             self.assertEqual(hashlib.md5(body).hexdigest(), got_etag)
 
-        def _check_objs():
-            # The tree should have 2 containers and 3 objs
-            return len(self.get_swift_tree(target_conn)) == 5
+        crawler.run_once()
 
-        try:
-            wait_for_condition(5, _check_objs)
-        except WaitTimedOut:
-            pass
-
+        # The tree should have 2 containers and 3 objs
+        self.assertEqual(5, len(self.get_swift_tree(target_conn)))
         self.assertEqual(['crazy-target:slashc1', 'crazy-target:slashc2',
                           'crazy-target:slashc1/c1.o1',
                           'crazy-target:slashc1/c1.o2',
@@ -130,6 +121,7 @@ class TestCloudSync(TestCloudSyncBase):
     def test_swift_sync_account_slo(self):
         mapping = self._find_mapping(
             lambda m: m['aws_bucket'] == 'crazy-target:')
+        crawler = utils.get_container_crawler(mapping)
         target_conn = self.conn_for_acct_noshunt(mapping['aws_account'])
 
         container = 'test-slo'
@@ -147,19 +139,7 @@ class TestCloudSync(TestCloudSyncBase):
                         json.dumps(manifest),
                         query_string='multipart-manifest=put')
 
-        def _check_synced():
-            try:
-                return self.remote_swift(
-                    'head_object',
-                    mapping['aws_bucket'] + container,
-                    key)
-            except Exception:
-                return False
-
-        try:
-            wait_for_condition(5, _check_synced)
-        except WaitTimedOut:
-            pass
+        crawler.run_once()
 
         hdrs = target_conn.head_object(
             mapping['aws_bucket'] + 'segments', 'part1')
@@ -193,6 +173,7 @@ class TestCloudSync(TestCloudSyncBase):
 
     def test_s3_sync(self):
         s3_mapping = self.s3_sync_mapping()
+        crawler = utils.get_container_crawler(s3_mapping)
 
         test_args = [
             (u'test_sync', u'testing archive put'),
@@ -205,14 +186,9 @@ class TestCloudSync(TestCloudSyncBase):
                              etag)
             s3_key = s3_key_name(s3_mapping, key)
 
-            def _check_sync():
-                try:
-                    return self.s3('head_object',
-                                   Bucket=s3_mapping['aws_bucket'], Key=s3_key)
-                except Exception:
-                    return False
-
-            head_resp = wait_for_condition(5, _check_sync)
+            crawler.run_once()
+            head_resp = self.s3('head_object',
+                                Bucket=s3_mapping['aws_bucket'], Key=s3_key)
             self.assertEqual('"%s"' % etag, head_resp['ETag'])
 
         self._assert_stats(s3_mapping, len(test_args), 'copied_objects')
@@ -245,6 +221,7 @@ class TestCloudSync(TestCloudSyncBase):
             lambda cont:
                 cont.get('selection_criteria') is not None and
                 cont.get('protocol') == 's3')
+        crawler = utils.get_container_crawler(s3_mapping)
         test_data = [
             (u'test_archive', u'testing archive put',
              {'x-object-meta-msd': 'foo'}, False),
@@ -266,14 +243,9 @@ class TestCloudSync(TestCloudSyncBase):
             if not sb_archived:
                 count_not_archived += 1
 
-        def _check_expired():
-            hdrs, listing = self.local_swift(
-                'get_container', s3_mapping['container'])
-            if int(hdrs['x-container-object-count']) != count_not_archived:
-                return False
-            return (hdrs, listing)
-
-        swift_hdrs, listing = wait_for_condition(5, _check_expired)
+        crawler.run_once()
+        swift_hdrs, listing = self.local_swift(
+            'get_container', s3_mapping['container'])
         for key, content, headers, sb_archived in test_data:
             for entry in listing:
                 if entry['name'] == key:
@@ -298,6 +270,7 @@ class TestCloudSync(TestCloudSyncBase):
             lambda cont:
                 cont.get('selection_criteria') is not None and
                 cont.get('protocol') == 'swift')
+        crawler = utils.get_container_crawler(mapping)
         test_data = [
             (u'test_archive', u'testing archive put',
              {'x-object-meta-msd': 'foo'}, False),
@@ -321,14 +294,9 @@ class TestCloudSync(TestCloudSyncBase):
             if not sb_archived:
                 count_not_archived += 1
 
-        def _check_expired():
-            hdrs, listing = self.local_swift(
-                'get_container', mapping['container'])
-            if int(hdrs['x-container-object-count']) != count_not_archived:
-                return False
-            return (hdrs, listing)
-
-        swift_hdrs, listing = wait_for_condition(5, _check_expired)
+        crawler.run_once()
+        swift_hdrs, listing = self.local_swift(
+            'get_container', mapping['container'])
         for key, content, headers, sb_archived in test_data:
             for entry in listing:
                 if entry['name'] == key:
@@ -349,9 +317,10 @@ class TestCloudSync(TestCloudSyncBase):
 
     def test_swift_sync(self):
         mapping = self.swift_sync_mapping()
+        crawler = utils.get_container_crawler(mapping)
 
         test_args = [
-            (u'test_archive', u'testing archive put'),
+            (u'test_swift_sync', u'testing sync put'),
             (u'unicod\u00e9', u'unicod\u00e9 blob')]
         for key, content in test_args:
             etag = self.local_swift(
@@ -360,20 +329,18 @@ class TestCloudSync(TestCloudSyncBase):
             self.assertEqual(hashlib.md5(content.encode('utf-8')).hexdigest(),
                              etag)
 
-            def _check_sync():
-                try:
-                    return self.remote_swift(
-                        'head_object', mapping['aws_bucket'], key)
-                except Exception:
-                    return False
-
-            head_resp = wait_for_condition(5, _check_sync)
+            crawler.run_once()
+            head_resp = self.remote_swift(
+                'head_object', mapping['aws_bucket'], key)
             self.assertEqual(etag, head_resp['etag'])
         self._assert_stats(mapping, len(test_args), 'copied_objects')
+        clear_swift_container(self.swift_src, mapping['container'])
+        clear_swift_container(self.swift_dst, mapping['aws_bucket'])
 
     def test_keystone_sync_v3(self):
         mapping = self._find_mapping(
             lambda m: m['aws_endpoint'].endswith('v3'))
+        crawler = utils.get_container_crawler(mapping)
         local_conn = self.conn_for_acct(mapping['account'])
         obj_name = 'sync-test-keystone-v3'
         body = 'party-hardy' * 512
@@ -384,21 +351,18 @@ class TestCloudSync(TestCloudSyncBase):
         remote_conn = self.conn_for_acct_noshunt(mapping['aws_account'])
         self.assertIn('KEY_', remote_conn.url)
 
-        def _check_synced():
-            hdrs, listing = local_conn.get_container(mapping['container'])
-            if 'swift' not in listing[0].get('content_location', []):
-                return False
-            got_headers, got_body = remote_conn.get_object(
-                mapping['container'], obj_name)
-            self.assertEqual(body, got_body)
-            return True
-
-        wait_for_condition(5, _check_synced)
+        crawler.run_once()
+        _, listing = local_conn.get_container(mapping['container'])
+        self.assertIn('swift', listing[0].get('content_location', []))
+        got_headers, got_body = remote_conn.get_object(
+            mapping['container'], obj_name)
+        self.assertEqual(body, got_body)
         self._assert_stats(mapping, 1, 'copied_objects')
 
     def test_keystone_sync_v2(self):
         mapping = self._find_mapping(
             lambda m: m['aws_bucket'] == 'keystone2')
+        crawler = utils.get_container_crawler(mapping)
         local_conn = self.conn_for_acct(mapping['account'])
         obj_name = 'sync-test-keystone-v2'
         body = 'party-animl' * 512
@@ -409,21 +373,18 @@ class TestCloudSync(TestCloudSyncBase):
         remote_conn = self.conn_for_acct_noshunt(mapping['aws_account'])
         self.assertIn('KEY_', remote_conn.url)
 
-        def _check_synced():
-            hdrs, listing = local_conn.get_container(mapping['container'])
-            if 'swift' not in listing[0].get('content_location', []):
-                return False
-            got_headers, got_body = remote_conn.get_object(
-                mapping['container'], obj_name)
-            self.assertEqual(body, got_body)
-            return True
-
-        wait_for_condition(5, _check_synced)
+        crawler.run_once()
+        _, listing = local_conn.get_container(mapping['container'])
+        self.assertIn('swift', listing[0].get('content_location', []))
+        _, got_body = remote_conn.get_object(
+            mapping['container'], obj_name)
+        self.assertEqual(body, got_body)
         self._assert_stats(mapping, 1, 'copied_objects')
 
     def test_keystone_cross_account_v2(self):
         mapping = self._find_mapping(
             lambda m: m['aws_bucket'] == 'keystone2a')
+        crawler = utils.get_container_crawler(mapping)
         local_conn = self.conn_for_acct(mapping['account'])
         obj_name = 'sync-test-keystone-v2-cross-acct'
         body = 'party-animl' * 512
@@ -431,17 +392,10 @@ class TestCloudSync(TestCloudSyncBase):
         self.assertEqual(hashlib.md5(body).hexdigest(), etag)
 
         remote_conn = self.conn_for_acct_noshunt(mapping['remote_account'])
+        crawler.run_once()
 
-        def _check_synced():
-            try:
-                got_headers, got_body = remote_conn.get_object(
-                    mapping['container'], obj_name)
-                self.assertEqual(body, got_body)
-                return True
-            except Exception:
-                return False
-
-        wait_for_condition(5, _check_synced)
+        _, got_body = remote_conn.get_object(mapping['container'], obj_name)
+        self.assertEqual(body, got_body)
 
         # Make sure it actually got lifecycled
         hdrs, listing = local_conn.get_container(mapping['container'])
@@ -472,17 +426,13 @@ class TestCloudSync(TestCloudSyncBase):
     def test_swift_archive_x_delete_after(self):
         mapping = self._find_mapping(
             lambda m: m['aws_bucket'] == 'bit-bucket')
+        crawler = utils.get_container_crawler(mapping)
         conn = self.conn_for_acct(mapping['account'])
         conn.put_object(mapping['container'], 'del_after_test', 'B' * 1024)
 
-        def _check_synced():
-            try:
-                return self.remote_swift('head_object', mapping['aws_bucket'],
-                                         'del_after_test')
-            except Exception:
-                return False
-
-        hdrs = wait_for_condition(5, _check_synced)
+        crawler.run_once()
+        hdrs = self.remote_swift(
+            'head_object', mapping['aws_bucket'], 'del_after_test')
         self.assertIn('x-delete-at', hdrs.keys())
         target_time = int(time.time() + mapping['remote_delete_after'])
         self.assertTrue(int(hdrs['x-delete-at']) <= target_time)
@@ -542,7 +492,7 @@ class TestCloudSync(TestCloudSyncBase):
                          resp['Metadata']['lots-of-unprintable'])
 
     def test_provider_s3_put_object_no_prefix(self):
-        mapping = self.s3_sync_mapping()
+        mapping = dict(self.s3_sync_mapping())
         mapping['custom_prefix'] = ''
         provider = create_provider(mapping, 1)
 
@@ -775,6 +725,7 @@ class TestCloudSync(TestCloudSyncBase):
         key = 'test_swift_slo_del_after'
         mapping = self._find_mapping(
             lambda m: m['aws_bucket'] == 'bit-bucket')
+        crawler = utils.get_container_crawler(mapping)
         manifest = [
             {'size_bytes': 1024, 'path': '/segments/part1'},
             {'size_bytes': 1024, 'path': '/segments/part2'}]
@@ -788,15 +739,12 @@ class TestCloudSync(TestCloudSyncBase):
         conn.put_object(mapping['container'], key,
                         json.dumps(manifest),
                         query_string='multipart-manifest=put')
+        self.remote_swift(
+            'put_container', '%s_segments' % mapping['aws_bucket'])
 
-        def _check_synced():
-            try:
-                return self.remote_swift('head_object', mapping['aws_bucket'],
-                                         key)
-            except Exception:
-                return False
+        crawler.run_once()
 
-        hdrs = wait_for_condition(5, _check_synced)
+        hdrs = self.remote_swift('head_object', mapping['aws_bucket'], key)
         self.assertIn('x-delete-at', hdrs.keys())
         target_time = int(time.time() + mapping['remote_delete_after'])
         seg_target_time = target_time + mapping['remote_delete_after_addition']
@@ -867,6 +815,7 @@ class TestCloudSync(TestCloudSyncBase):
         content = 'A' * 2048
         key = 'test_slo'
         mapping = self.swift_sync_mapping()
+        crawler = utils.get_container_crawler(mapping)
         manifest = [
             {'size_bytes': 1024, 'path': '/segments/part1'},
             {'size_bytes': 1024, 'path': '/segments/part2'}]
@@ -876,17 +825,10 @@ class TestCloudSync(TestCloudSyncBase):
         self.local_swift('put_object', mapping['container'], key,
                          json.dumps(manifest),
                          query_string='multipart-manifest=put')
+        self.remote_swift('put_container',
+                          '%s_segments' % mapping['aws_bucket'])
 
-        def _check_slo():
-            try:
-                return self.remote_swift(
-                    'head_object', mapping['aws_bucket'], key)
-            except swiftclient.exceptions.ClientException as e:
-                if e.http_status == 404:
-                    return False
-                raise
-
-        wait_for_condition(10, _check_slo)
+        crawler.run_once()
         headers, body = self.remote_swift(
             'get_object', mapping['aws_bucket'], key)
         self.assertEqual(body, content)
@@ -897,11 +839,14 @@ class TestCloudSync(TestCloudSyncBase):
             headers['etag'])
         # NOTE: we only record the SLO as being uploaded, not the segments
         self._assert_stats(mapping, 1, 'copied_objects')
+        clear_swift_container(self.swift_src, mapping['container'])
+        clear_swift_container(self.swift_dst, mapping['aws_bucket'])
 
     def test_swift_slo_sync_new_meta(self):
         content = 'A' * 2048
         key = 'test_slo'
         mapping = self.swift_sync_mapping()
+        crawler = utils.get_container_crawler(mapping)
         manifest = [
             {'size_bytes': 1024, 'path': '/segments/part1'},
             {'size_bytes': 1024, 'path': '/segments/part2'}]
@@ -911,17 +856,10 @@ class TestCloudSync(TestCloudSyncBase):
         self.local_swift('put_object', mapping['container'], key,
                          json.dumps(manifest),
                          query_string='multipart-manifest=put')
+        self.remote_swift('put_container',
+                          '%s_segments' % mapping['aws_bucket'])
 
-        def _check_slo():
-            try:
-                return self.remote_swift(
-                    'head_object', mapping['aws_bucket'], key)
-            except swiftclient.exceptions.ClientException as e:
-                if e.http_status == 404:
-                    return False
-                raise
-        wait_for_condition(10, _check_slo)
-
+        crawler.run_once()
         # record the last-modified date, so we can check that segments are not
         # re-uploaded
         remote_objects = [
@@ -941,12 +879,7 @@ class TestCloudSync(TestCloudSyncBase):
             'post_object',
             mapping['container'], key,
             headers={'x-object-meta-test-hdr': 'new header'})
-
-        def _check_slo_header():
-            return 'x-object-meta-test-hdr' in self.remote_swift(
-                'head_object', mapping['aws_bucket'], key)
-
-        wait_for_condition(10, _check_slo_header)
+        crawler.run_once()
 
         headers = self.remote_swift(
             'head_object', mapping['aws_bucket'], key)
@@ -966,12 +899,15 @@ class TestCloudSync(TestCloudSyncBase):
         # NOTE: currently, we do not distinguish between uploading an object
         # and updating its metadata.
         self._assert_stats(mapping, 1, 'copied_objects')
+        clear_swift_container(self.swift_src, mapping['container'])
+        clear_swift_container(self.swift_dst, mapping['aws_bucket'])
 
     def test_swift_sync_same_segments_slo(self):
         '''Uploading the same SLO manifest should not duplicate segments'''
         content = 'A' * 2048
         key = 'test_slo'
         mapping = self.swift_sync_mapping()
+        crawler = utils.get_container_crawler(mapping)
         manifest = [
             {'size_bytes': 1024, 'path': '/segments/part1'},
             {'size_bytes': 1024, 'path': '/segments/part2'}]
@@ -981,18 +917,9 @@ class TestCloudSync(TestCloudSyncBase):
         self.local_swift('put_object', mapping['container'], key,
                          json.dumps(manifest),
                          query_string='multipart-manifest=put')
+        self.remote_swift('put_container', 'segments')
 
-        def _check_slo(test_key):
-            try:
-                return self.remote_swift(
-                    'head_object', mapping['aws_bucket'], test_key)
-            except swiftclient.exceptions.ClientException as e:
-                if e.http_status == 404:
-                    return False
-                raise
-
-        wait_for_condition(10, lambda: _check_slo(key))
-
+        crawler.run_once()
         # record the last-modified date, so we can check that segments are not
         # re-uploaded
         remote_objects = [
@@ -1008,11 +935,13 @@ class TestCloudSync(TestCloudSyncBase):
             'put_object', mapping['container'], new_slo, json.dumps(manifest),
             query_string='multipart-manifest=put')
 
-        wait_for_condition(5, lambda: _check_slo(new_slo))
+        crawler.run_once()
         for cont, obj in remote_objects:
             hdrs = self.remote_swift('head_object', cont, obj)
             self.assertEqual(
                 old_headers[(cont, obj)]['x-timestamp'], hdrs['x-timestamp'])
+        clear_swift_container(self.swift_src, mapping['container'])
+        clear_swift_container(self.swift_dst, mapping['aws_bucket'])
 
     def test_swift_shunt_post(self):
         content = 'shunt post'

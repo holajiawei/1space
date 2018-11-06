@@ -36,11 +36,6 @@ cd /swift-s3-sync; pip install -e .
 
 /usr/bin/sudo -u swift /swift/bin/startmain
 
-python -m s3_sync --log-level debug \
-    --config /swift-s3-sync/containers/swift-s3-sync/swift-s3-sync.conf &
-# NOTE: integration tests will run the migrator as needed so they can better
-# control the timing of actions.
-
 /usr/bin/java -DLOG_LEVEL=debug -jar /s3proxy/s3proxy \
     --properties /swift-s3-sync/containers/swift-s3-sync/s3proxy.properties \
     2>&1 > /var/log/s3proxy.log &

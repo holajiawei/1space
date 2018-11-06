@@ -187,10 +187,11 @@ class SyncContainer(container_crawler.base_sync.BaseSync):
 
 
 class SyncContainerFactory(object):
-    def __init__(self, config):
+    def __init__(self, config, handler_class=SyncContainer):
         if 'status_dir' not in config:
             raise RuntimeError('Configuration option "status_dir" is missing')
         self.config = config
+        self._handler_class = handler_class
 
     def __str__(self):
         return 'SyncContainer'
@@ -204,7 +205,7 @@ class SyncContainerFactory(object):
         else:
             statsd_client = None
 
-        return SyncContainer(
+        return self._handler_class(
             self.config['status_dir'],
             settings,
             per_account=per_account,
