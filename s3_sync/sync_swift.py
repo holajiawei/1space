@@ -377,7 +377,8 @@ class SyncSwift(BaseSync):
 
         if not segment:
             _, _, internal_timestamp = decode_timestamps(row['created_at'])
-            if float(metadata['x-timestamp']) < internal_timestamp.timestamp:
+            if float(metadata['x-timestamp']) <\
+                    float(internal_timestamp.internal):
                 raise RetryError('Stale object %s' % key)
 
         if not segment and not match_item(metadata, self.selection_criteria):
