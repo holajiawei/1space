@@ -152,7 +152,7 @@ class SyncContainer(container_crawler.base_sync.BaseSync):
     def statsd_increment(self, metric, value):
         if not self.statsd_client:
             return
-        self.statsd_client.increment(
+        self.statsd_client.update_stats(
             '.'.join([self.statsd_prefix, metric]), value)
 
     def handle(self, row, swift_client):
