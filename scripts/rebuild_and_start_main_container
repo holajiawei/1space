@@ -26,6 +26,7 @@ docker container stop swift-s3-sync 2>/dev/null ||:
 docker container rm swift-s3-sync 2>/dev/null ||:
 
 docker run -d -v `pwd`:/swift-s3-sync \
+    -v /tmp/nasconnector:/srv/nasconnector \
     --hostname swift-s3-sync --name swift-s3-sync \
     --network swift-s3-sync-net --network-alias swift-s3-sync \
     -p "${HOST_S3_PORT:-10080}:10080" \

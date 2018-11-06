@@ -580,3 +580,10 @@ class TestCloudSyncBase(unittest.TestCase):
     @classmethod
     def swift_migration(klass):
         return klass._find_migration(lambda cont: cont['protocol'] == 'swift')
+
+    @classmethod
+    def nas_connector_migration(klass):
+        return klass._find_migration(
+            lambda cont:
+                cont['protocol'] == 's3' and
+                cont['container'] == 'nas-migration-s3')

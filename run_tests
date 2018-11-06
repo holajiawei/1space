@@ -15,6 +15,9 @@ unit_test_status=$?
 # Keystone takes a long time to start -- we can kick it off early
 ./scripts/ensure_keystone_started
 
+# start nas connector
+./scripts/ensure_nas_connector_started
+
 echo Waiting for container services to start...
 docker exec swift-s3-sync timeout 120 \
     bash -c "until s3cmd -c /swift-s3-sync/s3cfg ls s3://\$CONF_BUCKET/s3-passwd.json; do sleep 1; done"

@@ -1,0 +1,6 @@
+[default]
+access_key=nasuser
+secret_key=mysecret
+host_base=nas-connector:8083
+host_bucket=nas-connector:8083
+use_https = False
