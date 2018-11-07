@@ -869,7 +869,7 @@ def decode_s3_header(value):
     header, charset = decode_header(value)[0]
     if charset not in ('utf-8', 'UTF-8', 'utf8'):
         return value
-    return header
+    return header.decode(charset)
 
 
 def convert_to_swift_headers(s3_headers):

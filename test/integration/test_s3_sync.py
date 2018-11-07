@@ -61,11 +61,12 @@ class TestCloudSync(TestCloudSyncBase):
             self.assertEqual(count, observed_count[0])
 
     def _test_archive(
-            self, key, content, mapping, get_etag, expected_location):
+            self, key, content, mapping, get_etag, expected_location,
+            headers={}):
         crawler = utils.get_container_crawler(mapping)
         etag = self.local_swift(
             'put_object', mapping['container'], key,
-            content.encode('utf-8'))
+            content.encode('utf-8'), headers=headers)
         self.assertEqual(
             hashlib.md5(content.encode('utf-8')).hexdigest(), etag)
 
@@ -82,6 +83,12 @@ class TestCloudSync(TestCloudSyncBase):
             [expected_location],
             entry['content_location'])
         self.assertEqual(etag, get_etag(key))
+
+        hdrs = self.local_swift(
+            'head_object', mapping['container'], key)
+        for hdr in headers:
+            self.assertIn(hdr, hdrs)
+            self.assertEqual(headers[hdr], hdrs[hdr])
 
     def test_swift_sync_slash_star(self):
         mapping = self._find_mapping(
@@ -197,9 +204,10 @@ class TestCloudSync(TestCloudSyncBase):
         s3_mapping = self.s3_archive_mapping()
 
         test_args = [
-            (u'test_archive', u'testing archive put'),
-            (u'unicod\u00e9', u'unicod\u00e9 blob')]
-        for key, content in test_args:
+            (u'test_archive', u'testing archive put', {}),
+            (u'unicod\u00e9', u'unicod\u00e9 blob', {}),
+            ('funky-meta', 'blob', {'x-object-meta-key': u'un\xedcod\xeb'})]
+        for key, content, headers in test_args:
             s3_key = s3_key_name(s3_mapping, key)
             expected_location = '%s;%s;%s/' % (
                 s3_mapping['aws_endpoint'],
@@ -212,7 +220,7 @@ class TestCloudSync(TestCloudSyncBase):
                 return hdrs['ETag'][1:-1]
 
             self._test_archive(key, content, s3_mapping, etag_func,
-                               expected_location)
+                               expected_location, headers=headers)
 
         self._assert_stats(s3_mapping, len(test_args), 'copied_objects')
         clear_s3_bucket(self.s3_client, s3_mapping['aws_bucket'])
