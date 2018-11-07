@@ -601,7 +601,7 @@ class Migrator(object):
                         headers['x-timestamp'] = Timestamp(xts, 1)
                 try:
                     ic.delete_object(self.config['account'], container, key,
-                                     headers)
+                                     headers=headers)
                     self.logger.info(
                         'Detected removed object %s. Removing from %s/%s' % (
                             key, self.config['account'], container))
