@@ -2007,7 +2007,8 @@ class TestMigrator(unittest.TestCase):
                 hdrs = {'x-timestamp': want}
             self.assertEqual(
                 self.swift_client.delete_object.call_args,
-                mock.call(self.migrator.config['account'], 'foo', 'bar', hdrs))
+                mock.call(self.migrator.config['account'], 'foo', 'bar',
+                          headers=hdrs))
 
 
 class TestStatus(unittest.TestCase):

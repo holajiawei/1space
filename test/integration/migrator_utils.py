@@ -30,9 +30,10 @@ class MigratorFactory(object):
         with open(conf_path) as conf_fh:
             self.config = json.load(conf_fh)
         self.migrator_config = self.config['migrator_settings']
-        s3_sync.daemon_utils.setup_logger(
-            s3_sync.migrator.LOGGER_NAME, self.migrator_config)
         self.logger = logging.getLogger(s3_sync.migrator.LOGGER_NAME)
+        if not self.logger.handlers:
+            s3_sync.daemon_utils.setup_logger(
+                s3_sync.migrator.LOGGER_NAME, self.migrator_config)
 
     def get_migrator(self, migration, status):
         ic_pool = s3_sync.migrator.create_ic_pool(
