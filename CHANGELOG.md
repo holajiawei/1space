@@ -1,3 +1,11 @@
+## 0.1.49.1
+
+Bug fixes:
+
+- Fixed a bug with MIME-decoding S3 headers, which led to 500 errors on object
+  GET/HEAD requests through the shunt if they were uploaded with MIME-encoded
+  metadata.
+
 ## 0.1.49
 
 Features:
