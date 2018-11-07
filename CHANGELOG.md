@@ -1,3 +1,23 @@
+## 0.1.49
+
+Features:
+
+- Support migrating multipart objects from S3 into Swift.
+
+Improvements:
+
+- Fall back to using chunked transfers if not using HTTPS endpoints with Amazon
+  (which means we cannot use the Unsigned-Payload option). Only affects
+  0.1.48.2 release.
+
+Bug fixes:
+
+- Fixed the time comparison on objects that prevented certain objects from being
+  migrated. Only affects 0.1.48.1 release.
+- Under certain conditions, the migrator previously would have raised an error
+  when removing removing objects to keep containers/buckets in-sync, even though
+  the operation was successful.
+
 ## 0.1.48.2
 
 Improvements:
