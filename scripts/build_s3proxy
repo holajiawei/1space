@@ -1,0 +1,11 @@
+#!/bin/bash
+
+set -e
+
+# The following method is cross-platform (OS X and Linux)
+MYDIR=$(dirname $(python -c 'import os,sys;print os.path.realpath(sys.argv[1])' $0))
+cd "$MYDIR"/..
+
+# Build our image
+docker build -t s3proxy-builder --cache-from s3proxy-builder:latest --target builder -f containers/s3proxy/Dockerfile .
+docker build --cache-from swiftstack/s3proxy:latest --cache-from s3proxy-builder:latest -t swiftstack/s3proxy -f containers/s3proxy/Dockerfile .

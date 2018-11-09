@@ -621,11 +621,10 @@ class TestCloudSync(TestCloudSyncBase):
         head_resp = self.s3(
             'head_object', Bucket=s3_mapping['aws_bucket'], Key=s3_key)
         self.assertEqual(sum(map(len, segments)), head_resp['ContentLength'])
-        # FIXME: S3Proxy currently returns the ETag that is the content MD5,
-        # rather than an S3-style ETag.
-        expected_etag = hashlib.md5(
-            reduce(lambda x, y: x + y, segments)).hexdigest()
-        self.assertEqual('"%s"' % expected_etag, head_resp['ETag'])
+        expected_etag = '"%s-%d"' % (
+            hashlib.md5(reduce(lambda x, y: x + hashlib.md5(y).digest(),
+                               segments, '')).hexdigest(), len(segments))
+        self.assertEqual(expected_etag, head_resp['ETag'])
 
         self._assert_stats(s3_mapping, 1, 'copied_objects')
         clear_s3_bucket(self.s3_client, s3_mapping['aws_bucket'])
@@ -692,9 +691,10 @@ class TestCloudSync(TestCloudSyncBase):
 
         hdrs, body = self.local_swift(
             'get_object', mapping['container'], key)
-        # NOTE: this is different from real S3 as all of the parts are merged
-        # and this is the content ETag
-        self.assertEqual(hashlib.md5(content).hexdigest(), hdrs['etag'])
+        expected_etag = '%s-2' % (hashlib.md5(
+            hashlib.md5(content[:(5 * 1024 * 1024)]).digest() +
+            hashlib.md5(content[(5 * 1024 * 1024):]).digest()).hexdigest())
+        self.assertEqual(expected_etag, hdrs['etag'])
         swift_content = ''.join(body)
         self.assertEqual(content, swift_content)
         self.assertEqual('True', hdrs['x-static-large-object'])

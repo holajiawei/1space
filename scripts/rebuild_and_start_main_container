@@ -28,6 +28,5 @@ docker container rm swift-s3-sync 2>/dev/null ||:
 docker run -d -v `pwd`:/swift-s3-sync \
     --hostname swift-s3-sync --name swift-s3-sync \
     --network swift-s3-sync-net --network-alias swift-s3-sync \
-    -p "${HOST_S3_PORT:-10080}:10080" \
     -p "${HOST_SWIFT_PORT:-8080}:8080" \
     swift-s3-sync

@@ -271,7 +271,7 @@ class TestCloudSyncBase(unittest.TestCase):
         s3 = [container for container in klass.test_conf['containers']
               if container.get('protocol', 's3') == 's3'][0]
         klass.S3_CREDS.update({
-            'endpoint': 'http://localhost:%d' % klass.PORTS['s3'],
+            'endpoint': 'http://1space-s3proxy:%d' % klass.PORTS['s3'],
             'user': s3['aws_identity'],
             'key': s3['aws_secret'],
         })
@@ -281,7 +281,7 @@ class TestCloudSyncBase(unittest.TestCase):
         conf = boto3.session.Config(s3={'addressing_style': 'path'})
         klass.s3_client = session.client(
             's3', config=conf,
-            endpoint_url='http://localhost:%d' % klass.PORTS['s3'])
+            endpoint_url='http://1space-s3proxy:%d' % klass.PORTS['s3'])
 
         url_user_key_to_acct = {}  # temporary for deduping account lookups
         for mapping in \

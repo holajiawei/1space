@@ -28,5 +28,5 @@ docker run -d -v `pwd`:/swift-s3-sync \
     --restart on-failure --name cloud-connector \
     -p "${HOST_CLOUD_CONNECTOR_PORT:-8081}:8081" \
     -e AWS_ACCESS_KEY_ID=s3-sync-test -e AWS_SECRET_ACCESS_KEY=s3-sync-test \
-    -e CONF_ENDPOINT=http://swift-s3-sync:10080 \
+    -e CONF_ENDPOINT=http://1space-s3proxy:10080 \
     cloud-connector

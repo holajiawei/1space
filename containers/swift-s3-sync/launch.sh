@@ -36,12 +36,6 @@ cd /swift-s3-sync; pip install -e .
 
 /usr/bin/sudo -u swift /swift/bin/startmain
 
-/usr/bin/java -DLOG_LEVEL=debug -jar /s3proxy/s3proxy \
-    --properties /swift-s3-sync/containers/swift-s3-sync/s3proxy.properties \
-    2>&1 > /var/log/s3proxy.log &
-
-sleep 6  # let S3Proxy start up
-
 # Set up stuff for cloud-connector
 # NOTE: s3cmd is installed via requirements-test.txt in the Dockerfile
 set +e

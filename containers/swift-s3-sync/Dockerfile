@@ -5,7 +5,7 @@ FROM bouncestorage/swift-aio:latest
 
 RUN apt-get update && \
     apt-get install --no-install-recommends -y \
-        wget curl patch git locales openjdk-8-jre-headless net-tools gcc \
+        wget curl patch git locales net-tools gcc \
         python-dev && \
     apt-get clean
 
@@ -13,11 +13,7 @@ COPY requirements.txt requirements-test.txt /tmp/
 RUN pip install -U -r /tmp/requirements.txt -r /tmp/requirements-test.txt && \
     pip uninstall -y hacking && pip install keystonemiddleware
 
-RUN mkdir -p /s3proxy/data && \
-    cd /s3proxy && wget https://github.com/andrewgaul/s3proxy/releases/download/s3proxy-1.5.3/s3proxy
-
 RUN mkdir /swift-s3-sync && mkdir /var/lib/swift-s3-sync
-EXPOSE 10080
 RUN locale-gen en_US.UTF-8
 ENV LANG='en_US.UTF-8' LANGUAGE='en_US:en' LC_ALL='en_US.UTF-8'
 

@@ -7,6 +7,7 @@ MYDIR=$(dirname $(python -c 'import os,sys;print os.path.realpath(sys.argv[1])' 
 cd "$MYDIR"
 
 # For full test run, always rebuild & start/stop containers (clean slate)
+./scripts/ensure_s3proxy_started
 ./scripts/rebuild_and_start_main_container
 
 ./run_unit_tests
@@ -15,10 +16,10 @@ unit_test_status=$?
 # Keystone takes a long time to start -- we can kick it off early
 ./scripts/ensure_keystone_started
 
-echo Waiting for container services to start...
+echo Waiting for the 1space services to start...
 docker exec swift-s3-sync timeout 120 \
     bash -c "until s3cmd -c /swift-s3-sync/s3cfg ls s3://\$CONF_BUCKET/s3-passwd.json; do sleep 1; done"
-echo "swift-s3-sync started"
+echo "1space services started"
 
 # cloud-connector will quit if configuration object is not found, so start the
 # container only after we created it.
