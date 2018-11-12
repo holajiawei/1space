@@ -19,7 +19,7 @@ import boto3
 import botocore.exceptions
 from botocore.handlers import (
     conditionally_calculate_md5, set_list_objects_encoding_type_url)
-from container_crawler import RetryError
+from container_crawler.exceptions import RetryError
 import eventlet
 import hashlib
 import json

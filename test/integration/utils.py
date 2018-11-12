@@ -1,4 +1,4 @@
-import container_crawler
+from container_crawler.crawler import Crawler
 import errno
 import logging
 import pystatsd
@@ -160,4 +160,4 @@ def get_container_crawler(profile, **kwargs):
     logger.debug('Starting S3Sync')
 
     factory = TempSyncContainerFactory(conf)
-    return container_crawler.ContainerCrawler(conf, factory, logger)
+    return Crawler(conf, factory, logger)

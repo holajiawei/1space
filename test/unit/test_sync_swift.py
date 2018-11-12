@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 """
 
-from container_crawler import RetryError
+from container_crawler.exceptions import RetryError
 import hashlib
 import json
 import mock

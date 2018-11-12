@@ -55,7 +55,7 @@ the remote store in the common case).
 
 Until we can merge the boto patches, you will also have to install botocore from
 our fork (do this before installing swift-s3-sync):
-`pip install -e git://github.com/swiftstack/botocore.git@1.4.32.5#egg=botocore`
+`pip install -e git://github.com/swiftstack/botocore.git@1.12.23.1#egg=botocore`
 
 Build the package to be installed on the nodes with:
 ```
@@ -69,7 +69,7 @@ pip install swift-s3-sync-<version>.tar.gz
 
 You also will need to install the `container-crawler` library from Git:
 ```
-pip install -e git://github.com/swiftstack/container-crawler.git@0.0.12#egg=container-crawler
+pip install -e git://github.com/swiftstack/container-crawler.git@0.1.0#egg=container-crawler
 ```
 
 After that, you should have the `swift-s3-sync` executable available in

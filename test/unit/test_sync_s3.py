@@ -21,7 +21,7 @@ import boto3
 from botocore.exceptions import ClientError
 from botocore.response import StreamingBody
 from botocore.vendored.requests.exceptions import RequestException
-from container_crawler import RetryError
+from container_crawler.exceptions import RetryError
 from cStringIO import StringIO
 import datetime
 import hashlib

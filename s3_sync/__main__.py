@@ -18,7 +18,7 @@ import logging
 import os
 import traceback
 
-from container_crawler import ContainerCrawler
+from container_crawler.crawler import Crawler
 from .daemon_utils import load_swift, setup_context, initialize_loggers
 
 from .base_sync import LOGGER_NAME
@@ -52,7 +52,7 @@ def main():
     factory = SyncContainerFactory(conf)
 
     try:
-        crawler = ContainerCrawler(conf, factory, logger)
+        crawler = Crawler(conf, factory, logger)
         if args.once:
             crawler.run_once()
         else:

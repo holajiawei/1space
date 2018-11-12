@@ -19,7 +19,7 @@ import mock
 import time
 import unittest
 
-from container_crawler import RetryError
+from container_crawler.exceptions import RetryError
 from s3_sync.sync_container import SyncContainer, SyncContainerFactory
 from s3_sync.sync_s3 import SyncS3
 from s3_sync.sync_swift import SyncSwift

@@ -31,7 +31,7 @@ class TestMain(unittest.TestCase):
 
     @mock.patch('s3_sync.daemon_utils.os.path.exists')
     @mock.patch('s3_sync.daemon_utils.logging')
-    @mock.patch('s3_sync.__main__.ContainerCrawler')
+    @mock.patch('s3_sync.__main__.Crawler')
     def test_log_lvl(self, crawler_mock, logging_mock, exists_mock):
         exists_mock.return_value = True
         mock_logger = mock.Mock()
@@ -69,7 +69,7 @@ class TestMain(unittest.TestCase):
     @mock.patch('s3_sync.__main__.os')
     @mock.patch('s3_sync.__main__.initialize_loggers')
     @mock.patch('s3_sync.__main__.setup_context')
-    @mock.patch('s3_sync.__main__.ContainerCrawler')
+    @mock.patch('s3_sync.__main__.Crawler')
     def test_proxy_settings(self, crawler_mock, context_mock, logger_mock,
                             os_mock):
         test_params = [
@@ -95,7 +95,7 @@ class TestMain(unittest.TestCase):
 
     @mock.patch('s3_sync.__main__.initialize_loggers')
     @mock.patch('s3_sync.__main__.setup_context')
-    @mock.patch('s3_sync.__main__.ContainerCrawler')
+    @mock.patch('s3_sync.__main__.Crawler')
     def test_verification_slack(self, crawler_mock, context_mock, logger_mock):
         test_params = [
             {'verification_slack': 24 * 60},
@@ -117,7 +117,7 @@ class TestMain(unittest.TestCase):
 
     @mock.patch('s3_sync.__main__.initialize_loggers')
     @mock.patch('s3_sync.__main__.setup_context')
-    @mock.patch('s3_sync.__main__.ContainerCrawler')
+    @mock.patch('s3_sync.__main__.Crawler')
     def test_run_once(self, crawler_mock, context_mock, logger_mock):
         tests = [mock.Mock(console=False, log_level='debug', once=False),
                  mock.Mock(console=False, log_level='debug', once=True)]

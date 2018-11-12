@@ -29,7 +29,7 @@ import urllib
 
 import container_crawler.base_sync
 from .provider_factory import create_provider
-from container_crawler import RetryError
+from container_crawler.exceptions import RetryError
 
 from .base_sync import LOGGER_NAME
 
