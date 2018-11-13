@@ -1,6 +1,7 @@
 from functools import wraps
+import unittest
 import s3_sync.verify
-from . import TestCloudSyncBase
+from . import TestCloudSyncBase, clear_swift_container, clear_s3_bucket
 
 
 def swift_is_unchanged(func):
@@ -31,6 +32,10 @@ class TestVerify(TestCloudSyncBase):
                 self.s3_bucket = container['aws_bucket']
             if self.swift_container and self.s3_bucket:
                 break
+
+    def tearDown(self):
+        clear_s3_bucket(self.s3_client, self.s3_bucket)
+        clear_swift_container(self.swift_dst, self.swift_container)
 
     @swift_is_unchanged
     def test_swift_no_container(self):
@@ -149,4 +154,97 @@ class TestVerify(TestCloudSyncBase):
             '--username=' + self.S3_CREDS['user'],
             '--password=' + self.S3_CREDS['key'],
             '--bucket=does-not-exist',
+        ]))
+
+    def test_s3_read_only(self):
+        self.s3_client.put_object(
+            Bucket=self.s3_bucket, Key='verify-key', Body='A' * 10)
+        self.assertEqual(0, s3_sync.verify.main([
+            '--protocol=s3',
+            '--endpoint=' + self.S3_CREDS['endpoint'],
+            '--username=' + self.S3_CREDS['user'],
+            '--password=' + self.S3_CREDS['key'],
+            '--bucket=' + self.s3_bucket,
+            '--prefix=',
+            '--read-only']))
+
+    @unittest.skip('list_buckets() is not implemented for S3')
+    def test_s3_read_only_all_containers(self):
+        self.s3_client.create_bucket(Bucket='a-verify-test')
+        self.s3_client.put_object(
+            Bucket='a-verify-test', Key='verify-key', Body='A' * 10)
+        self.assertEqual(0, s3_sync.verify.main([
+            '--protocol=s3',
+            '--endpoint=' + self.S3_CREDS['endpoint'],
+            '--username=' + self.S3_CREDS['user'],
+            '--password=' + self.S3_CREDS['key'],
+            '--bucket=/*',
+            '--prefix=',
+            '--read-only']))
+
+    def test_swift_read_only(self):
+        self.swift_dst.put_object(self.swift_container, 'verify-key', 'A' * 10)
+        self.assertEqual(0, s3_sync.verify.main([
+            '--protocol=swift',
+            '--endpoint=' + self.SWIFT_CREDS['authurl'],
+            '--username=' + self.SWIFT_CREDS['dst']['user'],
+            '--password=' + self.SWIFT_CREDS['dst']['key'],
+            '--bucket=' + self.swift_container,
+            '--read-only'
+        ]))
+
+    def test_swift_read_only_all_containers(self):
+        self.swift_dst.put_container('a-verify-test')
+        self.swift_dst.put_object('a-verify-test', 'verify-key', 'A' * 10)
+        self.assertEqual(0, s3_sync.verify.main([
+            '--protocol=swift',
+            '--endpoint=' + self.SWIFT_CREDS['authurl'],
+            '--username=' + self.SWIFT_CREDS['dst']['user'],
+            '--password=' + self.SWIFT_CREDS['dst']['key'],
+            '--bucket=/*',
+            '--read-only'
+        ]))
+
+    def test_s3_read_only_bad_bucket(self):
+        msg = 'Unexpected status code when listing objects: 404 Not Found'
+        self.assertEqual(msg, s3_sync.verify.main([
+            '--protocol=s3',
+            '--endpoint=' + self.S3_CREDS['endpoint'],
+            '--username=' + self.S3_CREDS['user'],
+            '--password=' + self.S3_CREDS['key'],
+            '--bucket=does-not-exist',
+            '--read-only'
+        ]))
+
+    def test_s3_read_only_bad_creds(self):
+        msg = ('Unexpected status code when listing objects: 403 Forbidden')
+        self.assertEqual(msg, s3_sync.verify.main([
+            '--protocol=s3',
+            '--endpoint=' + self.S3_CREDS['endpoint'],
+            '--username=' + self.S3_CREDS['user'],
+            '--password=not-the-password',
+            '--bucket=' + self.s3_bucket,
+            '--read-only'
+        ]))
+
+    def test_swift_read_only_bad_creds(self):
+        msg = ('Unexpected status code when listing objects: 401 Unauthorized')
+        self.assertEqual(msg, s3_sync.verify.main([
+            '--protocol=swift',
+            '--endpoint=' + self.SWIFT_CREDS['authurl'],
+            '--username=' + self.SWIFT_CREDS['dst']['user'],
+            '--password=not-the-password',
+            '--bucket=' + self.swift_container,
+            '--read-only'
+        ]))
+
+    def test_swift_read_only_bad_container(self):
+        msg = ('Unexpected status code when listing objects: 404 Not Found')
+        self.assertEqual(msg, s3_sync.verify.main([
+            '--protocol=swift',
+            '--endpoint=' + self.SWIFT_CREDS['authurl'],
+            '--username=' + self.SWIFT_CREDS['dst']['user'],
+            '--password=' + self.SWIFT_CREDS['dst']['key'],
+            '--bucket=does-not-exist',
+            '--read-only'
         ]))

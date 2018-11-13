@@ -16,9 +16,11 @@ limitations under the License.
 
 from io import BytesIO
 import mock
+import StringIO
 import sys
 import unittest
 
+from s3_sync.base_sync import ProviderResponse
 from s3_sync.verify import main
 
 
@@ -704,3 +706,258 @@ class TestMainTrackClientCalls(unittest.TestCase):
             mock.call.delete_object('some-bucket', 'cloud_sync_test_object',
                                     headers={}),
         ])
+
+
+class TestVerify(unittest.TestCase):
+    class TrackingStringIO(StringIO.StringIO, object):
+        def close(self):
+            self.last_pos = self.tell()
+            super(TestVerify.TrackingStringIO, self).close()
+
+    @mock.patch('s3_sync.verify.create_provider')
+    def test_read_only_with_bucket_s3(self, mock_provider_factory):
+        mock_provider = mock_provider_factory.return_value
+        args = ['--protocol', 's3',
+                '--username', 'id',
+                '--password', 'key',
+                '--read-only',
+                '--endpoint', 'https://s3.amazonaws.com',
+                '--bucket', 'some-bucket']
+
+        body = self.TrackingStringIO('response')
+        mock_provider.list_objects.return_value = ProviderResponse(
+            True, 200, {}, [{'name': 'foo'}])
+        mock_provider.get_object.return_value = ProviderResponse(
+            True, 200, {}, body)
+        mock_provider.head_object.return_value = ProviderResponse(
+            True, 204, {}, '')
+        exit_arg = main(args)
+
+        self.assertEqual(0, exit_arg)
+        mock_provider.list_objects.assert_called_once_with(
+            None, 1, None, bucket=None)
+        mock_provider.head_object.assert_called_once_with(
+            'foo', bucket=None)
+        mock_provider.get_object.assert_called_once_with(
+            'foo', bucket=None)
+        self.assertEqual(0, body.last_pos)
+        self.assertTrue(body.closed)
+
+    @mock.patch('s3_sync.verify.create_provider')
+    def test_read_only_with_bucket_swift(self, mock_provider_factory):
+        mock_provider = mock.Mock()
+
+        def _fake_create(conf, max_conns=1024):
+            mock_provider.settings = conf
+            return mock_provider
+
+        mock_provider_factory.side_effect = _fake_create
+
+        args = ['--protocol', 'swift',
+                '--username', 'id',
+                '--password', 'key',
+                '--read-only',
+                '--endpoint', 'https://some.swift.com/auth/v1.0',
+                '--bucket', 'some-bucket']
+
+        body = self.TrackingStringIO('response')
+        mock_provider.list_objects.return_value = ProviderResponse(
+            True, 200, {}, [{'name': 'foo'}])
+        mock_provider.get_object.return_value = ProviderResponse(
+            True, 200, {}, body)
+        mock_provider.head_object.return_value = ProviderResponse(
+            True, 204, {}, '')
+        exit_arg = main(args)
+
+        self.assertEqual(0, exit_arg)
+        mock_provider.list_objects.assert_called_once_with(
+            None, 1, None, bucket=None)
+        mock_provider.head_object.assert_called_once_with(
+            'foo', bucket=None)
+        mock_provider.get_object.assert_called_once_with(
+            'foo', bucket=None, resp_chunk_size=1)
+        self.assertEqual(0, body.last_pos)
+        self.assertTrue(body.closed)
+
+    @mock.patch('s3_sync.verify.create_provider')
+    def test_read_only_all_buckets(self, mock_provider_factory):
+        args = [
+            '--protocol', 'swift',
+            '--username', 'id',
+            '--password', 'key',
+            '--read-only',
+            '--endpoint', 'https://saio:8080/auth/v1.0',
+            '--bucket', '/*']
+        body = self.TrackingStringIO('response')
+        mock_provider = mock_provider_factory.return_value
+        mock_provider.list_buckets.return_value = ProviderResponse(
+            True, 200, {}, [{'name': 'container'}])
+        mock_provider.list_objects.return_value = ProviderResponse(
+            True, 200, {}, [{'name': 'foo'}])
+        mock_provider.get_object.return_value = ProviderResponse(
+            True, 200, {}, body)
+        mock_provider.head_object.return_value = ProviderResponse(
+            True, 204, {}, '')
+        exit_arg = main(args)
+
+        self.assertEqual(0, exit_arg)
+        mock_provider.list_buckets.assert_called_once_with(
+            None, 1, None)
+        mock_provider.list_objects.assert_called_once_with(
+            None, 1, None, bucket='container')
+        mock_provider.head_object.assert_called_once_with(
+            'foo', bucket='container')
+        mock_provider.get_object.assert_called_once_with(
+            'foo', bucket='container')
+        self.assertEqual(0, body.last_pos)
+        self.assertTrue(body.closed)
+
+    @mock.patch('s3_sync.verify.create_provider')
+    def test_read_only_bucket_prefix(self, mock_provider_factory):
+        args = ['--protocol', 's3',
+                '--username', 'id',
+                '--password', 'key',
+                '--read-only',
+                '--endpoint', 'https://s3.amazonaws.com',
+                '--bucket', 'some-bucket',
+                '--prefix', 'some/nested/path']
+        mock_provider = mock_provider_factory.return_value
+        body = self.TrackingStringIO('response')
+
+        mock_provider.list_objects.return_value = ProviderResponse(
+            True, 200, {}, [{'name': 'some/nested/path/foo'}])
+        mock_provider.get_object.return_value = ProviderResponse(
+            True, 200, {}, body)
+        mock_provider.head_object.return_value = ProviderResponse(
+            True, 204, {}, '')
+        exit_arg = main(args)
+
+        self.assertEqual(0, exit_arg)
+        mock_provider.list_objects.assert_called_once_with(
+            None, 1, 'some/nested/path', bucket=None)
+        mock_provider.head_object.assert_called_once_with(
+            'some/nested/path/foo', bucket=None)
+        mock_provider.get_object.assert_called_once_with(
+            'some/nested/path/foo', bucket=None)
+        self.assertEqual(0, body.last_pos)
+        self.assertTrue(body.closed)
+
+    @mock.patch('s3_sync.verify.create_provider')
+    def test_read_only_no_objects(self, mock_provider_factory):
+        mock_provider = mock_provider_factory.return_value
+        args = ['--protocol', 's3',
+                '--username', 'id',
+                '--password', 'key',
+                '--read-only',
+                '--endpoint', 'https://s3.amazonaws.com',
+                '--bucket', 'some-bucket']
+        mock_provider = mock_provider_factory.return_value
+        mock_provider.list_objects.return_value = ProviderResponse(
+            True, 200, {}, [])
+        self.assertEqual(
+            'There are no objects in the bucket to validate GET/HEAD access',
+            main(args))
+        mock_provider.list_objects.assert_called_once_with(
+            None, 1, None, bucket=None)
+
+    @mock.patch('s3_sync.verify.create_provider')
+    def test_read_only_no_buckets(self, mock_provider_factory):
+        mock_provider = mock_provider_factory.return_value
+        args = ['--protocol', 's3',
+                '--username', 'id',
+                '--password', 'key',
+                '--read-only',
+                '--endpoint', 'https://s3.amazonaws.com',
+                '--bucket', '/*']
+        mock_provider = mock_provider_factory.return_value
+        mock_provider.list_buckets.return_value = ProviderResponse(
+            True, 200, {}, [])
+        self.assertEqual('No buckets/containers found', main(args))
+        mock_provider.list_buckets.assert_called_once_with(None, 1, None)
+
+    @mock.patch('s3_sync.verify.create_provider')
+    def test_list_buckets_error(self, mock_provider_factory):
+        mock_provider = mock_provider_factory.return_value
+        args = ['--protocol', 's3',
+                '--username', 'id',
+                '--password', 'key',
+                '--read-only',
+                '--endpoint', 'https://s3.amazonaws.com',
+                '--bucket', '/*']
+        mock_provider = mock_provider_factory.return_value
+        mock_provider.list_buckets.return_value = ProviderResponse(
+            False, 401, {}, [])
+        self.assertTrue(main(args).endswith(
+            mock_provider.list_buckets.return_value.wsgi_status))
+        mock_provider.list_buckets.assert_called_once_with(None, 1, None)
+
+    @mock.patch('s3_sync.verify.create_provider')
+    def test_list_objects_error(self, mock_provider_factory):
+        mock_provider = mock_provider_factory.return_value
+        args = ['--protocol', 's3',
+                '--username', 'id',
+                '--password', 'key',
+                '--read-only',
+                '--endpoint', 'https://s3.amazonaws.com',
+                '--bucket', 'bucket']
+        mock_provider = mock_provider_factory.return_value
+        mock_provider.list_objects.return_value = ProviderResponse(
+            False, 401, {}, [])
+        self.assertTrue(main(args).endswith(
+            mock_provider.list_objects.return_value.wsgi_status))
+        mock_provider.list_objects.assert_called_once_with(
+            None, 1, None, bucket=None)
+
+    @mock.patch('s3_sync.verify.create_provider')
+    def test_head_object_error(self, mock_provider_factory):
+        mock_provider = mock_provider_factory.return_value
+        args = ['--protocol', 's3',
+                '--username', 'id',
+                '--password', 'key',
+                '--read-only',
+                '--endpoint', 'https://s3.amazonaws.com',
+                '--bucket', 'some-bucket']
+
+        mock_provider.list_objects.return_value = ProviderResponse(
+            True, 200, {}, [{'name': 'foo'}])
+        mock_provider.head_object.return_value = ProviderResponse(
+            False, 500, {}, '')
+        exit_arg = main(args)
+
+        self.assertTrue(exit_arg.endswith(
+            mock_provider.head_object.return_value.wsgi_status))
+        mock_provider.list_objects.assert_called_once_with(
+            None, 1, None, bucket=None)
+        mock_provider.head_object.assert_called_once_with(
+            'foo', bucket=None)
+        mock_provider.get_object.assert_not_called()
+
+    @mock.patch('s3_sync.verify.create_provider')
+    def test_get_object_error(self, mock_provider_factory):
+        mock_provider = mock_provider_factory.return_value
+        args = ['--protocol', 's3',
+                '--username', 'id',
+                '--password', 'key',
+                '--read-only',
+                '--endpoint', 'https://s3.amazonaws.com',
+                '--bucket', 'some-bucket']
+
+        body = self.TrackingStringIO('response')
+        mock_provider.list_objects.return_value = ProviderResponse(
+            True, 200, {}, [{'name': 'foo'}])
+        mock_provider.get_object.return_value = ProviderResponse(
+            False, 500, {}, body)
+        mock_provider.head_object.return_value = ProviderResponse(
+            True, 200, {}, '')
+        exit_arg = main(args)
+
+        self.assertTrue(exit_arg.endswith(
+            mock_provider.get_object.return_value.wsgi_status))
+        mock_provider.list_objects.assert_called_once_with(
+            None, 1, None, bucket=None)
+        mock_provider.head_object.assert_called_once_with(
+            'foo', bucket=None)
+        mock_provider.get_object.assert_called_once_with(
+            'foo', bucket=None)
+        self.assertEqual(0, body.last_pos)
+        self.assertTrue(body.closed)

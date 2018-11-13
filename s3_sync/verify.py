@@ -62,6 +62,51 @@ def validate_bucket(provider, swift_key, create_bucket):
             return result
 
 
+def validate_read_only_bucket(provider, find_bucket, prefix):
+    '''Used to verify read-only access to a bucket. Primarily, used by
+    migrations.
+
+    :param provider: BaseSync provider
+    :param find_bucket: Whether to find a bucket to be used for the test. The
+        found bucket will override any buckets configured in the provider
+    '''
+
+    if find_bucket:
+        # TODO: implement for S3
+        resp = provider.list_buckets(None, 1, None)
+        if not resp.success:
+            return 'Unexpected response when listing buckets/containers: %s'\
+                % resp.wsgi_status
+        if not resp.body:
+            return 'No buckets/containers found'
+        bucket = resp.body[0]['name']
+    else:
+        bucket = None
+
+    result = provider.list_objects(None, 1, prefix, bucket=bucket)
+    if not result.success:
+        return 'Unexpected status code when listing objects: %s' %\
+               result.wsgi_status
+    if not result.body:
+        return 'There are no objects in the bucket to validate GET/HEAD access'
+    object_name = result.body[0]['name']
+    result = provider.head_object(object_name, bucket=bucket)
+    if not result.success:
+        return 'Unexpected status when issuing HEAD on %s: %s' % (
+            object_name, result.wsgi_status)
+    get_kwargs = {'bucket': bucket}
+    if provider.settings['protocol'] == 'swift':
+        # We don't actually intend to read the response
+        get_kwargs['resp_chunk_size'] = 1
+    result = provider.get_object(object_name, **get_kwargs)
+    if hasattr(result.body, 'close'):
+        # On error, we may not have a "proper" body to clsoe
+        result.body.close()
+    if not result.success:
+        return 'Unexpected status when issuing GET on %s: %s' % (
+            object_name, result.wsgi_status)
+
+
 def main(args=None):
     keystone_v3_args = ['--project-name', '--project-domain-name',
                         '--user-domain-name']
@@ -75,6 +120,7 @@ def main(args=None):
     parser.add_argument('--bucket')
     parser.add_argument('--prefix')
     parser.add_argument('--auth-type', choices=('keystone_v2', 'keystone_v3'))
+    parser.add_argument('--read-only', action='store_true', default=False)
     # Required arg, if --auth-type=keystone_v2 provided:
     parser.add_argument('--tenant-name')
     # Required args if --auth-type=keystone_v3 provided:
@@ -146,9 +192,13 @@ def main(args=None):
                 swift_key = 'fabcab/cloud_sync_test'
         else:
             swift_key = 'cloud_sync_test_object'
-        result = validate_bucket(
-            provider, swift_key,
-            args.protocol == 'swift' and args.bucket == '/*')
+        if args.read_only:
+            result = validate_read_only_bucket(
+                provider, args.bucket == '/*', args.prefix)
+        else:
+            result = validate_bucket(
+                provider, swift_key,
+                args.protocol == 'swift' and args.bucket == '/*')
         if result is not None:
             return result
     return 0
