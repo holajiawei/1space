@@ -331,7 +331,7 @@ class SyncS3(BaseSync):
             params['ServerSideEncryption'] = 'AES256'
         return self._call_boto('put_object', **params)
 
-    def list_buckets(self, marker, limit, prefix, parse_time=True):
+    def list_buckets(self, marker='', **kwargs):
         '''As S3 does not support prefix/delimiter/marker for LIST buckets,
            these options are NOOPs. Boto alreaded parses the time to datetime,
            so that parameter is ignored, as well.

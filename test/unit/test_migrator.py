@@ -822,8 +822,9 @@ class TestMigrator(unittest.TestCase):
         self.assertTrue(self.migrator.config['all_buckets'])
         self.migrator._next_pass.assert_has_calls([mock.call()])
         provider_mock.list_buckets.assert_has_calls(
-            [mock.call(None, 10000, None),
-             mock.call(buckets[0]['name'], 10000, None)])
+            [mock.call(marker=None, limit=10000, prefix=None, delimiter=None),
+             mock.call(marker=buckets[0]['name'], limit=10000, prefix=None,
+                       delimiter=None)])
 
     @mock.patch('s3_sync.migrator.create_provider')
     def test_list_buckets_error(self, create_provider_mock):

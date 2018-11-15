@@ -15,7 +15,6 @@ limitations under the License.
 """
 
 from container_crawler.exceptions import RetryError
-import datetime
 import eventlet
 import hashlib
 import json
@@ -28,7 +27,7 @@ import urllib
 
 from .base_sync import BaseSync, ProviderResponse, match_item
 from .utils import (FileWrapper, ClosingResourceIterable, check_slo,
-                    SWIFT_USER_META_PREFIX, SWIFT_TIME_FMT)
+                    SWIFT_USER_META_PREFIX)
 
 # We have to import keystone upfront to avoid green threads issue with the lazy
 # importer
@@ -266,23 +265,16 @@ class SyncSwift(BaseSync):
         return self._call_swiftclient(
             'head_container', bucket, None, **options)
 
-    def list_buckets(self, marker, limit, prefix, parse_modified=True):
-        resp = self._call_swiftclient(
-            'get_account', None, None,
-            marker=marker, prefix=prefix, limit=limit)
-
+    def list_buckets(self, marker='', limit=None, prefix='', **kwargs):
+        # NOTE: swiftclient does not currently support delimiter, so we ignore
+        # it
+        resp = self._call_swiftclient('get_account', None, None, marker=marker,
+                                      prefix=prefix, limit=limit)
         if resp.status != 200:
             return resp
-
         for entry in resp.body:
             entry['content_location'] = self._make_content_location(
                 entry['name'])
-
-        if parse_modified:
-            for container in resp.body:
-                if 'last_modified' in container:
-                    container['last_modified'] = datetime.datetime.strptime(
-                        container['last_modified'], SWIFT_TIME_FMT)
         return resp
 
     def _call_swiftclient(self, op, container, key, **args):

@@ -72,8 +72,7 @@ def validate_read_only_bucket(provider, find_bucket, prefix):
     '''
 
     if find_bucket:
-        # TODO: implement for S3
-        resp = provider.list_buckets(None, 1, None)
+        resp = provider.list_buckets(limit=1)
         if not resp.success:
             return 'Unexpected response when listing buckets/containers: %s'\
                 % resp.wsgi_status

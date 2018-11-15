@@ -802,7 +802,7 @@ class TestVerify(unittest.TestCase):
 
         self.assertEqual(0, exit_arg)
         mock_provider.list_buckets.assert_called_once_with(
-            None, 1, None)
+            marker=None, limit=1, prefix=None, delimiter=None)
         mock_provider.list_objects.assert_called_once_with(
             None, 1, None, bucket='container')
         mock_provider.head_object.assert_called_once_with(
@@ -873,7 +873,8 @@ class TestVerify(unittest.TestCase):
         mock_provider.list_buckets.return_value = ProviderResponse(
             True, 200, {}, [])
         self.assertEqual('No buckets/containers found', main(args))
-        mock_provider.list_buckets.assert_called_once_with(None, 1, None)
+        mock_provider.list_buckets.assert_called_once_with(
+            marker=None, limit=1, prefix=None, delimiter=None)
 
     @mock.patch('s3_sync.verify.create_provider')
     def test_list_buckets_error(self, mock_provider_factory):
@@ -889,7 +890,8 @@ class TestVerify(unittest.TestCase):
             False, 401, {}, [])
         self.assertTrue(main(args).endswith(
             mock_provider.list_buckets.return_value.wsgi_status))
-        mock_provider.list_buckets.assert_called_once_with(None, 1, None)
+        mock_provider.list_buckets.assert_called_once_with(
+            marker=None, limit=1, prefix=None, delimiter=None)
 
     @mock.patch('s3_sync.verify.create_provider')
     def test_list_objects_error(self, mock_provider_factory):

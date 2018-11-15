@@ -676,8 +676,9 @@ class TestShunt(unittest.TestCase):
         status, headers, body_iter = req.call_application(self.app)
         self.assertEqual(self.mock_shunt_swift.mock_calls, [])
         self.mock_list_s3.assert_has_calls([
-            mock.call('', 10000, '', ''),
-            mock.call('unicod\xc3\xa9', 10000, '', '')])
+            mock.call(marker='', limit=10000, prefix='', delimiter=''),
+            mock.call(marker='unicod\xc3\xa9', limit=10000, prefix='',
+                      delimiter='')])
         names = body_iter.split('\n')
         self.assertEqual(['abc', u'unicod\xe9'.encode('utf-8')], names)
 
@@ -705,8 +706,9 @@ class TestShunt(unittest.TestCase):
         status, headers, body_iter = req.call_application(self.app)
         self.assertEqual(self.mock_shunt_swift.mock_calls, [])
         self.mock_list_s3.assert_has_calls([
-            mock.call('', 10000, '', ''),
-            mock.call(u'unicod\xc3\xa9'.encode('utf-8'), 10000, '', '')])
+            mock.call(marker='', limit=10000, prefix='', delimiter=''),
+            mock.call(marker=u'unicod\xc3\xa9'.encode('utf-8'), limit=10000,
+                      prefix='', delimiter='')])
         root = lxml.etree.fromstring(body_iter)
         context = lxml.etree.iterwalk(root, events=("start", "end"))
         element_index = 0
@@ -756,8 +758,9 @@ class TestShunt(unittest.TestCase):
         status, headers, body_iter = req.call_application(self.app)
         self.assertEqual(self.mock_shunt_swift.mock_calls, [])
         self.mock_list_s3.assert_has_calls([
-            mock.call('', 10000, '', ''),
-            mock.call(u'unicod\xc3\xa9'.encode('utf-8'), 10000, '', '')])
+            mock.call(marker='', limit=10000, prefix='', delimiter=''),
+            mock.call(marker=u'unicod\xc3\xa9'.encode('utf-8'), limit=10000,
+                      prefix='', delimiter='')])
         root = lxml.etree.fromstring(body_iter)
         context = lxml.etree.iterwalk(root, events=("start", "end"))
         element_index = 0
@@ -806,8 +809,9 @@ class TestShunt(unittest.TestCase):
         status, headers, body_iter = req.call_application(self.app)
         self.assertEqual(self.mock_shunt_swift.mock_calls, [])
         self.mock_list_s3.assert_has_calls([
-            mock.call('', 10000, '', ''),
-            mock.call(u'unicod\xc3\xa9'.encode('utf-8'), 10000, '', '')])
+            mock.call(marker='', limit=10000, prefix='', delimiter=''),
+            mock.call(marker=u'unicod\xc3\xa9'.encode('utf-8'), limit=10000,
+                      prefix='', delimiter='')])
         results = json.loads(body_iter)
         for i, entry in enumerate(results):
             for k in entry.keys():
@@ -842,8 +846,9 @@ class TestShunt(unittest.TestCase):
         status, headers, body_iter = req.call_application(self.app)
         self.assertEqual(self.mock_shunt_swift.mock_calls, [])
         self.mock_list_s3.assert_has_calls([
-            mock.call('', 10000, '', ''),
-            mock.call(u'unicod\xc3\xa9'.encode('utf-8'), 10000, '', '')])
+            mock.call(marker='', limit=10000, prefix='', delimiter=''),
+            mock.call(marker=u'unicod\xc3\xa9'.encode('utf-8'), limit=10000,
+                      prefix='', delimiter='')])
         results = json.loads(body_iter)
         for i, entry in enumerate(results):
             for k in elements[i].keys():
@@ -915,8 +920,9 @@ class TestShunt(unittest.TestCase):
         status, headers, body_iter = req.call_application(self.app)
         self.assertEqual(self.mock_shunt_swift.mock_calls, [])
         self.mock_list_swift.assert_has_calls([
-            mock.call('', 10000, '', ''),
-            mock.call(u'unicod\xe9'.encode('utf-8'), 10000, '', '')])
+            mock.call(marker='', limit=10000, prefix='', delimiter=''),
+            mock.call(marker=u'unicod\xe9'.encode('utf-8'), limit=10000,
+                      prefix='', delimiter='')])
         names = body_iter.split('\n')
         self.assertEqual(['abc', u'unicod\xe9'.encode('utf-8')], names)
 
@@ -961,7 +967,8 @@ class TestShunt(unittest.TestCase):
                      'swift.trans_id': 'id'})
         status, headers, body_iter = req.call_application(self.app)
         self.assertEqual(self.mock_shunt_swift.mock_calls, [])
-        self.mock_list_swift.assert_called_once_with('', 4, '', '/')
+        self.mock_list_swift.assert_called_once_with(
+            marker='', limit=4, prefix='', delimiter='/')
         names = body_iter.split('\n')
         self.assertEqual(names, [
             'a', 'a/', u'unicod\xe9'.encode('utf-8'), 'z/',

@@ -945,7 +945,7 @@ def response_is_complete(status_code, headers):
     return end + 1 == length
 
 
-def iter_listing(list_func, logger, marker, limit, prefix, *args):
+def iter_listing(list_func, logger, marker, limit, prefix, delimiter):
     def _results_iterator(_resp):
         while True:
             if _resp.status != 200:
@@ -967,10 +967,12 @@ def iter_listing(list_func, logger, marker, limit, prefix, *args):
             # strings. We should do the same when submitting
             # subsequent requests.
             marker = marker.encode('utf-8')
-            _resp = list_func(marker, limit, prefix, *args)
+            _resp = list_func(
+                marker=marker, limit=limit, prefix=prefix, delimiter=delimiter)
         yield None, None  # just to simplify some book-keeping
 
-    resp = list_func(marker, limit, prefix, *args)
+    resp = list_func(marker=marker, limit=limit, prefix=prefix,
+                     delimiter=delimiter)
     return resp, _results_iterator(resp)
 
 

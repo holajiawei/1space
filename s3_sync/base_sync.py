@@ -278,7 +278,7 @@ class BaseSync(object):
     def list_objects(self, marker, limit, prefix, delimiter=None, bucket=None):
         raise NotImplementedError()
 
-    def list_buckets(self, marker, limit, prefix, parse_time=True):
+    def list_buckets(self, marker='', **kwargs):
         raise NotImplementedError()
 
     def close(self):

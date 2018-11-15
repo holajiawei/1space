@@ -370,12 +370,16 @@ class TestCloudConnectorApp(TestCloudConnectorBase):
         }], json.loads(got.body))
         self.assertEqual([
             # marker, limit, prefix, delimiter
-            mock.call.list_objects('a b', 10, 'abc', 'def'),
+            mock.call.list_objects(
+                marker='a b', limit=10, prefix='abc', delimiter='def'),
         ], self.mock_ltm_provider.mock_calls)
         self.assertEqual([
-            mock.call.list_objects('a b', 10, 'abc', 'def'),
-            mock.call.list_objects('d\xd8\xaae', 10, 'abc', 'def'),
-            mock.call.list_objects('h\xd8\xaai', 10, 'abc', 'def')
+            mock.call.list_objects(
+                marker='a b', limit=10, prefix='abc', delimiter='def'),
+            mock.call.list_objects(
+                marker='d\xd8\xaae', limit=10, prefix='abc', delimiter='def'),
+            mock.call.list_objects(
+                marker='h\xd8\xaai', limit=10, prefix='abc', delimiter='def')
         ], self.mock_rtm_provider.mock_calls)
 
     def test_container_get_local_has_non_404_error(self):
@@ -391,7 +395,8 @@ class TestCloudConnectorApp(TestCloudConnectorBase):
         self.assertEqual(400, got.status_int)
         self.assertEqual([
             # marker, limit, prefix, delimiter
-            mock.call.list_objects('a b', 10, 'abc', 'def'),
+            mock.call.list_objects(
+                marker='a b', limit=10, prefix='abc', delimiter='def'),
         ], self.mock_ltm_provider.mock_calls)
         self.assertEqual([], self.mock_rtm_provider.mock_calls)
 
@@ -411,10 +416,12 @@ class TestCloudConnectorApp(TestCloudConnectorBase):
         self.assertEqual(400, got.status_int)
         self.assertEqual([
             # marker, limit, prefix, delimiter
-            mock.call.list_objects('a b', 10, 'abc', 'def'),
+            mock.call.list_objects(
+                marker='a b', limit=10, prefix='abc', delimiter='def'),
         ], self.mock_ltm_provider.mock_calls)
         self.assertEqual([
-            mock.call.list_objects('a b', 10, 'abc', 'def'),
+            mock.call.list_objects(
+                marker='a b', limit=10, prefix='abc', delimiter='def'),
         ], self.mock_rtm_provider.mock_calls)
 
     def test_container_get_local_and_remote_buckets_404_bucket_ok(self):
@@ -433,10 +440,12 @@ class TestCloudConnectorApp(TestCloudConnectorBase):
         self.assertEqual(404, got.status_int)
         self.assertEqual([
             # marker, limit, prefix, delimiter
-            mock.call.list_objects('a b', 10, 'abc', 'def'),
+            mock.call.list_objects(
+                marker='a b', limit=10, prefix='abc', delimiter='def'),
         ], self.mock_ltm_provider.mock_calls)
         self.assertEqual([
-            mock.call.list_objects('a b', 10, 'abc', 'def'),
+            mock.call.list_objects(
+                marker='a b', limit=10, prefix='abc', delimiter='def'),
         ], self.mock_rtm_provider.mock_calls)
 
     def test_container_get_only_local_bucket_exists(self):
@@ -497,12 +506,16 @@ class TestCloudConnectorApp(TestCloudConnectorBase):
         }], json.loads(got.body))
         self.assertEqual([
             # marker, limit, prefix, delimiter
-            mock.call.list_objects('a b', 10, 'abc', 'def'),
-            mock.call.list_objects('c\xd8\xaad', 10, 'abc', 'def'),
-            mock.call.list_objects('g\xd8\xaah', 10, 'abc', 'def'),
+            mock.call.list_objects(
+                marker='a b', limit=10, prefix='abc', delimiter='def'),
+            mock.call.list_objects(
+                marker='c\xd8\xaad', limit=10, prefix='abc', delimiter='def'),
+            mock.call.list_objects(
+                marker='g\xd8\xaah', limit=10, prefix='abc', delimiter='def'),
         ], self.mock_ltm_provider.mock_calls)
         self.assertEqual([
-            mock.call.list_objects('a b', 10, 'abc', 'def'),
+            mock.call.list_objects(
+                marker='a b', limit=10, prefix='abc', delimiter='def'),
         ], self.mock_rtm_provider.mock_calls)
 
     def test_container_get_remote_non_404_errors(self):
@@ -564,13 +577,16 @@ class TestCloudConnectorApp(TestCloudConnectorBase):
             'content_type': 'application/octet-stream',
         }], json.loads(got.body))
         self.assertEqual([
-            # marker, limit, prefix, delimiter
-            mock.call.list_objects('a b', 10, 'abc', 'def'),
-            mock.call.list_objects('c\xd8\xaad', 10, 'abc', 'def'),
-            mock.call.list_objects('g\xd8\xaah', 10, 'abc', 'def'),
+            mock.call.list_objects(
+                marker='a b', limit=10, prefix='abc', delimiter='def'),
+            mock.call.list_objects(
+                marker='c\xd8\xaad', limit=10, prefix='abc', delimiter='def'),
+            mock.call.list_objects(
+                marker='g\xd8\xaah', limit=10, prefix='abc', delimiter='def'),
         ], self.mock_ltm_provider.mock_calls)
         self.assertEqual([
-            mock.call.list_objects('a b', 10, 'abc', 'def'),
+            mock.call.list_objects(
+                marker='a b', limit=10, prefix='abc', delimiter='def'),
         ], self.mock_rtm_provider.mock_calls)
 
     def test_container_get_limited_only_local(self):
@@ -624,11 +640,14 @@ class TestCloudConnectorApp(TestCloudConnectorBase):
         }], json.loads(got.body))
         self.assertEqual([
             # marker, limit, prefix, delimiter
-            mock.call.list_objects('a b', 3, 'abc', 'def'),
-            mock.call.list_objects('c\xd8\xaad', 3, 'abc', 'def'),
+            mock.call.list_objects(
+                marker='a b', limit=3, prefix='abc', delimiter='def'),
+            mock.call.list_objects(
+                marker='c\xd8\xaad', limit=3, prefix='abc', delimiter='def'),
         ], self.mock_ltm_provider.mock_calls)
         self.assertEqual([
-            mock.call.list_objects('a b', 3, 'abc', 'def'),
+            mock.call.list_objects(
+                marker='a b', limit=3, prefix='abc', delimiter='def'),
         ], self.mock_rtm_provider.mock_calls)
 
     def test_container_get_limited(self):
@@ -717,12 +736,16 @@ class TestCloudConnectorApp(TestCloudConnectorBase):
         }], json.loads(got.body))
         self.assertEqual([
             # marker, limit, prefix, delimiter
-            mock.call.list_objects('a b', 6, 'abc', 'def'),
-            mock.call.list_objects('c\xd8\xaad', 6, 'abc', 'def'),
+            mock.call.list_objects(
+                marker='a b', limit=6, prefix='abc', delimiter='def'),
+            mock.call.list_objects(
+                marker='c\xd8\xaad', limit=6, prefix='abc', delimiter='def'),
         ], self.mock_ltm_provider.mock_calls)
         self.assertEqual([
-            mock.call.list_objects('a b', 6, 'abc', 'def'),
-            mock.call.list_objects('d\xd8\xaae', 6, 'abc', 'def'),
+            mock.call.list_objects(
+                marker='a b', limit=6, prefix='abc', delimiter='def'),
+            mock.call.list_objects(
+                marker='d\xd8\xaae', limit=6, prefix='abc', delimiter='def'),
         ], self.mock_rtm_provider.mock_calls)
 
     def test_container_get(self):
@@ -824,15 +847,20 @@ class TestCloudConnectorApp(TestCloudConnectorBase):
             'content_type': 'application/octet-stream',
         }], json.loads(got.body))
         self.assertEqual([
-            # marker, limit, prefix, delimiter
-            mock.call.list_objects('a b', 10, 'abc', 'def'),
-            mock.call.list_objects('c\xd8\xaad', 10, 'abc', 'def'),
-            mock.call.list_objects('g\xd8\xaah', 10, 'abc', 'def'),
+            mock.call.list_objects(
+                marker='a b', limit=10, prefix='abc', delimiter='def'),
+            mock.call.list_objects(
+                marker='c\xd8\xaad', limit=10, prefix='abc', delimiter='def'),
+            mock.call.list_objects(
+                marker='g\xd8\xaah', limit=10, prefix='abc', delimiter='def'),
         ], self.mock_ltm_provider.mock_calls)
         self.assertEqual([
-            mock.call.list_objects('a b', 10, 'abc', 'def'),
-            mock.call.list_objects('d\xd8\xaae', 10, 'abc', 'def'),
-            mock.call.list_objects('h\xd8\xaai', 10, 'abc', 'def')
+            mock.call.list_objects(
+                marker='a b', limit=10, prefix='abc', delimiter='def'),
+            mock.call.list_objects(
+                marker='d\xd8\xaae', limit=10, prefix='abc', delimiter='def'),
+            mock.call.list_objects(
+                marker='h\xd8\xaai', limit=10, prefix='abc', delimiter='def')
         ], self.mock_rtm_provider.mock_calls)
 
     def test_get_and_head_hits_local_first_succeeds(self):

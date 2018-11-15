@@ -377,7 +377,7 @@ class Migrator(object):
     def _reconcile_containers(self):
         resp, iterator = iter_listing(
             self.provider.list_buckets,
-            self.logger, None, 10000, None)
+            self.logger, None, 10000, None, None)
 
         if not resp.success:
             self.logger.error(
