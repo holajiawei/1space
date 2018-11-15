@@ -14,6 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 """
 
+import datetime
 from io import BytesIO
 import mock
 import StringIO
@@ -356,6 +357,14 @@ class TestMainTrackClientCalls(unittest.TestCase):
                     expected, calls[:i], mock_obj.mock_calls))
 
     def test_aws_no_bucket(self, mock_get_client):
+        mock_client = \
+            mock_get_client.return_value.__enter__.return_value
+        mock_client.list_buckets.return_value = {
+            'Buckets': [{'CreationDate': datetime.datetime.now(),
+                         'Name': 'test-bucket'}],
+            'ResponseMetadata': {
+                'HTTPStatusCode': 200,
+                'HTTPHeaders': {}}}
         exit_arg = main([
             '--protocol', 's3',
             '--endpoint', 'https://s3.amazonaws.com',
@@ -363,8 +372,6 @@ class TestMainTrackClientCalls(unittest.TestCase):
             '--password', 'secret key',
         ])
         self.assertEqual(exit_arg, 0)
-        mock_client = \
-            mock_get_client.return_value.__enter__.return_value
         self.assertEqual(mock_client.mock_calls, [
             mock.call.list_buckets(),
         ])
@@ -516,6 +523,14 @@ class TestMainTrackClientCalls(unittest.TestCase):
         ])
 
     def test_google_no_bucket(self, mock_get_client):
+        mock_client = \
+            mock_get_client.return_value.__enter__.return_value
+        mock_client.list_buckets.return_value = {
+            'Buckets': [{'CreationDate': datetime.datetime.now(),
+                         'Name': 'google-bucket'}],
+            'ResponseMetadata': {
+                'HTTPStatusCode': 200,
+                'HTTPHeaders': {}}}
         exit_arg = main([
             '--protocol', 's3',
             '--endpoint', 'https://storage.googleapis.com',
@@ -523,8 +538,6 @@ class TestMainTrackClientCalls(unittest.TestCase):
             '--password', 'secret key',
         ])
         self.assertEqual(exit_arg, 0)
-        mock_client = \
-            mock_get_client.return_value.__enter__.return_value
         self.assertEqual(mock_client.mock_calls, [
             mock.call.list_buckets(),
         ])
@@ -603,6 +616,10 @@ class TestMainTrackClientCalls(unittest.TestCase):
         ])
 
     def test_swift_no_bucket(self, mock_get_client):
+        mock_client = \
+            mock_get_client.return_value.__enter__.return_value
+        mock_client.get_account.return_value = (
+            {}, [{'name': 'swift-container'}])
         exit_arg = main([
             '--protocol', 'swift',
             '--endpoint', 'https://saio:8080/auth/v1.0',
@@ -610,10 +627,9 @@ class TestMainTrackClientCalls(unittest.TestCase):
             '--password', 'secret key',
         ])
         self.assertEqual(exit_arg, 0)
-        mock_client = \
-            mock_get_client.return_value.__enter__.return_value
         self.assertEqual(mock_client.mock_calls, [
-            mock.call.get_account(),
+            mock.call.get_account(
+                headers={}, prefix='', limit=1, marker='')
         ])
 
     def test_swift_with_bucket(self, mock_get_client):
@@ -801,8 +817,7 @@ class TestVerify(unittest.TestCase):
         exit_arg = main(args)
 
         self.assertEqual(0, exit_arg)
-        mock_provider.list_buckets.assert_called_once_with(
-            marker=None, limit=1, prefix=None, delimiter=None)
+        mock_provider.list_buckets.assert_called_once_with(limit=1)
         mock_provider.list_objects.assert_called_once_with(
             None, 1, None, bucket='container')
         mock_provider.head_object.assert_called_once_with(
@@ -873,8 +888,7 @@ class TestVerify(unittest.TestCase):
         mock_provider.list_buckets.return_value = ProviderResponse(
             True, 200, {}, [])
         self.assertEqual('No buckets/containers found', main(args))
-        mock_provider.list_buckets.assert_called_once_with(
-            marker=None, limit=1, prefix=None, delimiter=None)
+        mock_provider.list_buckets.assert_called_once_with(limit=1)
 
     @mock.patch('s3_sync.verify.create_provider')
     def test_list_buckets_error(self, mock_provider_factory):
@@ -890,8 +904,7 @@ class TestVerify(unittest.TestCase):
             False, 401, {}, [])
         self.assertTrue(main(args).endswith(
             mock_provider.list_buckets.return_value.wsgi_status))
-        mock_provider.list_buckets.assert_called_once_with(
-            marker=None, limit=1, prefix=None, delimiter=None)
+        mock_provider.list_buckets.assert_called_once_with(limit=1)
 
     @mock.patch('s3_sync.verify.create_provider')
     def test_list_objects_error(self, mock_provider_factory):
@@ -963,3 +976,18 @@ class TestVerify(unittest.TestCase):
             'foo', bucket=None)
         self.assertEqual(0, body.last_pos)
         self.assertTrue(body.closed)
+
+    @mock.patch('s3_sync.verify.create_provider')
+    def test_no_bucket_bad_creds(self, mock_provider_factory):
+        mock_provider = mock_provider_factory.return_value
+        args = ['--protocol', 's3',
+                '--username', 'id',
+                '--password', 'key',
+                '--endpoint', 'https://s3.amazonaws.com']
+
+        mock_provider.list_buckets.return_value = ProviderResponse(
+            False, 500, {}, 'error')
+        exit_arg = main(args)
+
+        self.assertTrue(exit_arg.endswith(
+            mock_provider.list_buckets.return_value.wsgi_status))

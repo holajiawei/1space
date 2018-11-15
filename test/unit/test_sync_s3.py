@@ -1785,9 +1785,60 @@ class TestSyncS3(unittest.TestCase):
                              self.sync_s3.client_pool.free_count())
             if not isinstance(test['exception'], ClientError):
                 self.logger.exception.assert_called_once_with(
-                    mock.ANY, test['method'].lower() + '_object', 's3:/',
-                    self.aws_bucket, 'identity', '')
+                    "S3 API '%s' to %s/%s (key_id: %s): " % (
+                        test['method'].lower() + '_object', 's3:/',
+                        self.aws_bucket, 'identity'))
                 self.logger.exception.reset_mock()
+
+    def test_list_buckets(self):
+        now_date = datetime.datetime.now()
+        self.mock_boto3_client.list_buckets.return_value = {
+            'Owner': [
+                dict(DisplayName='test:tester',
+                     ID='test:tester')
+            ],
+            'Buckets': [
+                dict(CreationDate=now_date,
+                     Name='bucket'),
+                dict(CreationDate=now_date,
+                     Name='test-bucket')
+            ],
+            'ResponseMetadata': {
+                'HTTPStatusCode': 200,
+                'HTTPHeaders': {}
+            }
+        }
+        resp = self.sync_s3.list_buckets()
+        self.assertEqual(200, resp.status)
+        self.assertEqual(
+            dict(last_modified=now_date.strftime(utils.SWIFT_TIME_FMT),
+                 count=0,
+                 bytes=0,
+                 name='bucket',
+                 content_location='AWS S3'),
+            resp.body[0])
+        self.assertEqual(
+            dict(last_modified=now_date.strftime(utils.SWIFT_TIME_FMT),
+                 count=0,
+                 bytes=0,
+                 name='test-bucket',
+                 content_location='AWS S3'),
+            resp.body[1])
+
+        resp = self.sync_s3.list_buckets(marker='test-bucket')
+        self.assertEqual(200, resp.status)
+        self.assertEqual([], resp.body)
+
+    def test_list_buckets_error(self):
+        self.mock_boto3_client.list_buckets.side_effect = RuntimeError(
+            'Failed to list')
+        resp = self.sync_s3.list_buckets()
+        self.assertFalse(resp.success)
+        self.assertEqual(502, resp.status)
+        self.assertEqual('Bad Gateway', ''.join(resp.body))
+        self.logger.exception.assert_called_once_with(
+            "S3 API 'list_buckets' to s3:/ (key_id: identity): Failed to list")
+        self.logger.exception.reset_mock()
 
     def test_list_objects(self):
         prefix = '%s/%s/%s' % (self.sync_s3.get_prefix(), self.sync_s3.account,

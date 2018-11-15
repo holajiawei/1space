@@ -51,6 +51,17 @@ class SyncS3(BaseSync):
     GOOGLE_UA_STRING = 'CloudSync/%s (GPN:SwiftStack)' % CLOUD_SYNC_VERSION
     SLO_MANIFEST_SUFFIX = '.swift_slo_manifest'
 
+    def __init__(self, settings, max_conns=10, per_account=False, logger=None,
+                 extra_headers=None):
+        super(SyncS3, self).__init__(
+            settings, max_conns, per_account, logger, extra_headers)
+        if self._google():
+            self.location_prefix = 'Google Cloud Storage'
+        elif not self.endpoint:
+            self.location_prefix = 'AWS S3'
+        else:
+            self.location_prefix = self.endpoint
+
     def _add_extra_headers(self, model, params, **kwargs):
         """
         Boto3 event handler for before-call.s3 to add extra HTTP headers, if
@@ -332,18 +343,35 @@ class SyncS3(BaseSync):
         return self._call_boto('put_object', **params)
 
     def list_buckets(self, marker='', **kwargs):
-        '''As S3 does not support prefix/delimiter/marker for LIST buckets,
-           these options are NOOPs. Boto alreaded parses the time to datetime,
-           so that parameter is ignored, as well.
+        '''Lists all of the buckets for this account.
+
+        :returns: ProviderResponse, where the body is a list of dictionaries,
+            whose entries are:
+                last_modified -- bucket creation date
+                count -- 0 (in Swift, this is the number of objects)
+                bytes -- 0 (in Swift, this is the number of bytes)
+                name -- bucket name
+                content_location -- the location of the bucket
         '''
-        # TODO: S3 list_buckets is not implemented yet
-        return ProviderResponse(False, 501, {}, iter(['Not Implemented']))
+
+        resp = self._call_boto('list_buckets')
+        if not resp.success:
+            return resp
+
+        resp.body = [
+            {'last_modified': bucket['CreationDate'].strftime(SWIFT_TIME_FMT),
+             'count': 0,
+             'bytes': 0,
+             'name': bucket['Name'],
+             'content_location': self.location_prefix}
+            for bucket in resp.body if bucket['Name'] > marker]
+        return resp
 
     def _call_boto(self, op, **args):
         def _perform_op(s3_client):
             try:
                 resp = getattr(s3_client, op)(**args)
-                body = resp.get('Body', iter(['']))
+                body = resp.get('Body') or resp.get('Buckets') or iter([''])
 
                 # S3 API responses are inconsistent, so there will be various
                 # special-cases here.  This one about CopyObjectResult is for
@@ -362,12 +390,7 @@ class SyncS3(BaseSync):
                         resp['ResponseMetadata'].get('HTTPHeaders', {})),
                     body)
             except botocore.exceptions.ClientError as e:
-                self.logger.debug(
-                    'S3 API %r to %s/%s (key_id: %s) got %r',
-                    op, self.settings.get('aws_endpoint', 's3:/'),
-                    self.settings['aws_bucket'].encode('utf8'),
-                    self.settings['aws_identity'].encode('utf8'),
-                    e.response)
+                self.logger.debug(self._get_error_message(e, op, args))
                 status = 502
                 headers = {}
                 message = 'Bad Gateway'
@@ -379,12 +402,7 @@ class SyncS3(BaseSync):
                 return ProviderResponse(False, status, headers, iter(message),
                                         exc_info=sys.exc_info())
             except Exception as e:
-                self.logger.exception(
-                    'Error with S3 API %r to %s/%s (key_id: %s): %r',
-                    op, self.settings.get('aws_endpoint', 's3:/'),
-                    self.settings['aws_bucket'].encode('utf8'),
-                    self.settings['aws_identity'].encode('utf8'),
-                    e.message)
+                self.logger.exception(self._get_error_message(e, op, args))
                 return ProviderResponse(False, 502, {}, iter(['Bad Gateway']),
                                         exc_info=sys.exc_info())
 
@@ -416,14 +434,7 @@ class SyncS3(BaseSync):
             prefix = ''
         try:
             with self.client_pool.get_client() as s3_client:
-                key_prefix = self.get_prefix()
-                if self.use_custom_prefix:
-                    key_prefix = self.get_prefix()
-                    if len(key_prefix):
-                        key_prefix = '%s/' % (key_prefix,)
-                else:
-                    key_prefix = '%s/%s/%s/' % (
-                        self.get_prefix(), self.account, self.container)
+                key_prefix = self.get_s3_name('')
                 prefix = '%s%s' % (key_prefix, prefix.decode('utf-8'))
                 if prefix:
                     args['Prefix'] = prefix
@@ -439,15 +450,7 @@ class SyncS3(BaseSync):
                 # s3proxy does not include the ETag information when used with
                 # the filesystem provider
                 key_offset = len(key_prefix)
-                location_prefix = self.endpoint
-                if self._google():
-                    location_prefix = 'Google Cloud Storage'
-                elif not location_prefix:
-                    location_prefix = 'AWS S3'
-                location_parts = [location_prefix, self.aws_bucket]
-                if key_prefix:
-                    location_parts.append(key_prefix)
-                content_location = ';'.join(location_parts)
+                content_location = self._make_content_location(self.aws_bucket)
                 # If list contents come from `swift3` running in a Swift
                 # cluster, the ETag header appears to include the double-quotes
                 # URL-quoted.  We appear to try to remove the double-quotes,
@@ -735,7 +738,9 @@ class SyncS3(BaseSync):
         if self.use_custom_prefix:
             if not isinstance(key, unicode):
                 key = key.decode('utf-8')
-            return '/'.join(filter(None, (prefix, key)))
+            if not prefix:
+                return key
+            return '/'.join((prefix, key))
         return u'%s/%s' % (prefix, self._full_name(key))
 
     def get_manifest_name(self, s3_name):
@@ -824,6 +829,29 @@ class SyncS3(BaseSync):
             resp = self.post_object(swift_key, meta)
             if not resp.success:
                 resp.reraise()
+
+    def _make_content_location(self, bucket):
+        key_prefix = self.get_s3_name('')
+        location_parts = [self.location_prefix, bucket]
+        if key_prefix:
+            location_parts.append(key_prefix)
+        return ';'.join(location_parts)
+
+    def _get_error_message(self, error, op, args):
+        parts = ['S3 API %r to' % op]
+        if 'Bucket' in args:
+            parts.append('%s/%s' % (
+                self.endpoint or 's3:/',
+                args['Bucket'].encode('utf8')))
+        else:
+            parts.append(self.endpoint or 's3:/')
+        parts.append('(key_id: %s):' %
+                     self.settings['aws_identity'].encode('utf-8'))
+        if isinstance(error, botocore.exceptions.ClientError):
+            parts.append(repr(error.response))
+        else:
+            parts.append(error.message)
+        return ' '.join(parts)
 
     @staticmethod
     def check_etag(swift_etag, s3_etag):

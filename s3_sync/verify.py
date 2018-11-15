@@ -178,11 +178,9 @@ def main(args=None):
 
     provider = create_provider(conf, max_conns=1)
     if not args.bucket:
-        with provider.client_pool.get_client() as client:
-            if args.protocol == 's3':
-                client.list_buckets()
-            else:
-                client.get_account()
+        resp = provider.list_buckets(limit=1)
+        if not resp.success:
+            return 'Failed to list containers/buckets: %s' % resp.wsgi_status
     else:
         if args.protocol == 's3':
             if args.prefix:

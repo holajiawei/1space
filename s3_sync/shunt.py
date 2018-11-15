@@ -231,8 +231,8 @@ class S3SyncShunt(object):
             self, sync_profile, marker, limit, prefix, delimiter):
         '''Iterate through the remote listing of containers.'''
         provider = create_provider(sync_profile, max_conns=1)
-        return iter_listing(
-            provider.list_buckets, self.logger, marker, limit, prefix, False)
+        return iter_listing(provider.list_buckets, self.logger, marker, limit,
+                            prefix, delimiter)
 
     def handle_account(self, req, start_response, sync_profile, account):
         limit, marker, prefix, delimiter, _ = get_list_params(
