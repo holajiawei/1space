@@ -1041,17 +1041,17 @@ def format_xml_listing(
     root = etree.Element(root_node, name=root_name)
     for entry in list_results:
         obj = etree.Element(entry_node)
-        for f in fields:
-            if f not in entry:
+        for field in fields:
+            if field not in entry:
                 continue
-            el = etree.Element(f)
-            text = entry[f]
+            elem = etree.Element(field)
+            text = entry[field]
             if type(text) == str:
                 text = text.decode('utf-8')
             elif type(text) == int:
                 text = str(text)
-            el.text = text
-            obj.append(el)
+            elem.text = text
+            obj.append(elem)
         root.append(obj)
     resp = etree.tostring(root, encoding='UTF-8', xml_declaration=True)
     return resp.replace("<?xml version='1.0' encoding='UTF-8'?>",
