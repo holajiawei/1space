@@ -14,6 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 """
 
+import hashlib
 import json
 import logging
 import lxml
@@ -29,40 +30,7 @@ from s3_sync import shunt
 from s3_sync import sync_s3
 from s3_sync import sync_swift
 from s3_sync import utils
-
-
-class FakeSwift(object):
-    def __init__(self):
-        self.calls = []
-
-    def __call__(self, env, start_response):
-        self.calls.append(env)
-        # Let the tests set up the responses they want
-        if env.get('__test__.response_dict'):
-            resp_dict = env['__test__.response_dict']
-            method = env['REQUEST_METHOD']
-            if method in resp_dict:
-                if (isinstance(resp_dict[method], dict) and
-                        env['PATH_INFO'] in resp_dict[method]):
-                    responses = resp_dict[method][env['PATH_INFO']]
-                else:
-                    responses = resp_dict[method]
-
-                if isinstance(responses, list):
-                    entry = responses.pop(0)
-                else:
-                    entry = responses
-                status = entry.get('status', '200 OK')
-                headers = entry.get('headers', [])
-                start_response(status, headers)
-            return resp_dict[method].get('body', '')
-
-        status = env.get('__test__.status', '200 OK')
-        headers = env.get('__test__.headers', [])
-        body = env.get('__test__.body', ['pass'])
-
-        start_response(status, headers)
-        return body
+from .utils import FakeSwift
 
 
 class TestShunt(unittest.TestCase):
@@ -165,8 +133,12 @@ class TestShunt(unittest.TestCase):
                 'container': 'destination',
                 'aws_bucket': 'source',
                 'aws_identity': 'migration',
-                'aws_secret': 'migration_key'
-            }]
+                'aws_secret': 'migration_key',
+                'protocol': 's3'
+            }],
+            'migrator_settings': {
+                'segment_size': 3000
+            }
         }
 
         with tempfile.NamedTemporaryFile() as fp:
@@ -255,6 +227,7 @@ class TestShunt(unittest.TestCase):
                 'aws_identity': 'migration',
                 'aws_secret': 'migration_key',
                 'custom_prefix': '',
+                'protocol': 's3'
             },
             ('AUTH_tee', 'tee'): {
                 'account': 'AUTH_tee',
@@ -603,6 +576,121 @@ class TestShunt(unittest.TestCase):
             self.assertEqual(payload, resp_body)
             mock_call.reset_mock()
             self.swift.calls = []
+
+    @mock.patch.object(sync_s3.SyncS3, 'head_object')
+    @mock.patch.object(sync_s3.SyncS3, 'shunt_object')
+    def test_tee_migration_mpu(self, mock_shunt_object, mock_head_object):
+        payload = 'content' * 1024
+        parts = [3000, 3000, len(payload) - 6000]
+        parts_etags = []
+        offset = 0
+        for part_size in parts:
+            parts_etags.append(hashlib.md5(
+                payload[offset:offset + part_size]).digest())
+            offset += part_size
+        etag = '%s-%d' % (hashlib.md5(''.join(parts_etags)).hexdigest(),
+                          len(parts))
+
+        mock_shunt_object.return_value = (
+            '200 OK',
+            [('Content-Length', len(payload)), ('etag', etag),
+             ('x-static-large-object', True),
+             ('last-modified', 'Thu, 16 Jan 2014 21:12:31 GMT')],
+            StringIO.StringIO(payload))
+
+        def _head_object(*args, **kwargs):
+            return ProviderResponse(
+                True, 200,
+                {'Content-Length': parts[kwargs['PartNumber'] - 1]}, '')
+
+        def _part_segment(swift_path, number):
+            return '/v1/%s_segments/foo/%0.1f/%d/%d/%d' % (
+                swift_path, 1389906751.0, len(payload), 3000, number)
+
+        path = 'AUTH_migrate/destination'
+        account = path.split('/', 1)[0]
+
+        mock_head_object.side_effect = _head_object
+        env = {
+            '__test__.response_dict': {
+                'GET': {
+                    'status': '404 Not Found'
+                },
+            }
+        }
+        self.swift.responses = {'PUT': [
+            lambda headers, body: ('200 OK', {}, '')] +
+            [lambda headers, body: (
+                '200 OK', {'ETag': hashlib.md5(body).hexdigest()}, '')] * 3 +
+            [lambda headers, body: ('200 OK', {}, '')]}
+        req = swob.Request.blank(u'/v1/%s/foo' % path, environ=env)
+        status, headers, body_iter = req.call_application(self.app)
+        resp_body = b''.join(body_iter)
+        self.assertEqual([
+            ('HEAD', '/v1/%s' % account),
+            ('GET', '/v1/%s/foo' % path),
+            ('PUT', '/v1/%s_segments' % path),
+            ('PUT', _part_segment(path, 0)),
+            ('PUT', _part_segment(path, 1)),
+            ('PUT', _part_segment(path, 2)),
+            ('PUT', '/v1/%s/foo' % path)
+        ],
+            [(e['REQUEST_METHOD'], e['PATH_INFO'])
+             for e in self.swift.calls])
+        self.assertEqual('multipart-manifest=put',
+                         self.swift.calls[-1]['QUERY_STRING'])
+        self.assertEqual(payload, resp_body)
+
+    @mock.patch('s3_sync.shunt.constraints')
+    @mock.patch.object(sync_s3.SyncS3, 'shunt_object')
+    def test_tee_migration_big(self, mock_shunt_object, mock_constraints):
+        self.conf['migrator_settings'] = {'segment_size': 3000}
+        mock_constraints.EFFECTIVE_CONSTRAINTS = {'max_file_size': 3000}
+        payload = 'content' * 1024
+        etag = hashlib.md5(payload).hexdigest()
+
+        mock_shunt_object.return_value = (
+            '200 OK',
+            [('Content-Length', len(payload)), ('etag', etag),
+             ('last-modified', 'Thu, 16 Jan 2014 21:12:31 GMT')],
+            StringIO.StringIO(payload))
+
+        def _part_segment(swift_path, number):
+            return '/v1/%s_segments/foo/%0.1f/%d/%d/%d' % (
+                swift_path, 1389906751.0, len(payload), 3000, number)
+
+        path = 'AUTH_migrate/destination'
+        account = path.split('/', 1)[0]
+
+        env = {
+            '__test__.response_dict': {
+                'GET': {
+                    'status': '404 Not Found'
+                },
+            }
+        }
+        self.swift.responses = {'PUT': [
+            lambda headers, body: ('200 OK', {}, '')] +
+            [lambda headers, body: (
+                '200 OK', {'ETag': hashlib.md5(body).hexdigest()}, '')] * 3 +
+            [lambda headers, body: ('200 OK', {}, '')]}
+        req = swob.Request.blank(u'/v1/%s/foo' % path, environ=env)
+        status, headers, body_iter = req.call_application(self.app)
+        resp_body = b''.join(body_iter)
+        self.assertEqual([
+            ('HEAD', '/v1/%s' % account),
+            ('GET', '/v1/%s/foo' % path),
+            ('PUT', '/v1/%s_segments' % path),
+            ('PUT', _part_segment(path, 0)),
+            ('PUT', _part_segment(path, 1)),
+            ('PUT', _part_segment(path, 2)),
+            ('PUT', '/v1/%s/foo' % path)
+        ],
+            [(e['REQUEST_METHOD'], e['PATH_INFO'])
+             for e in self.swift.calls])
+        self.assertEqual('multipart-manifest=put',
+                         self.swift.calls[-1]['QUERY_STRING'])
+        self.assertEqual(payload, resp_body)
 
     @mock.patch.object(sync_s3.SyncS3, 'get_manifest')
     @mock.patch.object(sync_s3.SyncS3, 'shunt_object')

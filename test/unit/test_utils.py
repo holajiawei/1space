@@ -17,15 +17,18 @@ limitations under the License.
 """
 
 from itertools import repeat
+import hashlib
+import json
 import mock
 import os
 import StringIO
 import unittest
 
-from utils import FakeStream
+from .utils import FakeStream, FakeSwift
 
 from s3_sync import utils
 from s3_sync import base_sync
+from s3_sync.sync_s3 import SyncS3
 
 
 class TestUtilsFunctions(unittest.TestCase):
@@ -246,7 +249,7 @@ class TestUtilsFunctions(unittest.TestCase):
             utils.get_sys_migrator_header('object'))
 
 
-class FakeSwift(object):
+class FakeSwiftClient(object):
     def __init__(self, status=200, size=1024, content_length='UNSPECIFIED',
                  content=None):
         self.status = status
@@ -283,7 +286,7 @@ class JustLikeAFile(object):
 
 class TestSeekableFileLikeIter(unittest.TestCase):
     def setUp(self):
-        self.mock_swift = FakeSwift()
+        self.mock_swift = FakeSwiftClient()
         self.seeker = utils.SeekableFileLikeIter(['abc', 'def', 'ijk'])
 
     def test_body_not_iter_str_unicode_or_filelike(self):
@@ -436,10 +439,10 @@ class TestSeekableFileLikeIter(unittest.TestCase):
 
 class TestFileWrapper(unittest.TestCase):
     def setUp(self):
-        self.mock_swift = FakeSwift()
+        self.mock_swift = FakeSwiftClient()
 
     def test_failed_req(self):
-        self.mock_swift = FakeSwift(status=401)
+        self.mock_swift = FakeSwiftClient(status=401)
         with self.assertRaises(RuntimeError) as cm:
             utils.FileWrapper(self.mock_swift,
                               'account', 'container', 'key',
@@ -448,7 +451,7 @@ class TestFileWrapper(unittest.TestCase):
 
     def test_no_content_length(self):
         content = 'shimmyjimmy' * 3
-        self.mock_swift = FakeSwift(content_length=None, content=content)
+        self.mock_swift = FakeSwiftClient(content_length=None, content=content)
         wrapper = utils.FileWrapper(self.mock_swift,
                                     'account',
                                     'container',
@@ -582,7 +585,7 @@ class TestFileWrapper(unittest.TestCase):
 
     def test_reads_extra_byte(self):
         content = 'deadbeef' * 12
-        self.mock_swift = FakeSwift(
+        self.mock_swift = FakeSwiftClient(
             content_length=len(content),
             content=content)
         wrapper = utils.FileWrapper(
@@ -785,3 +788,329 @@ class TestClosingResourceIterable(unittest.TestCase):
         self.assertEqual(1, resource.semaphore.balance)
         closing_iter.close()
         self.assertEqual(1, resource.semaphore.balance)
+
+
+class TestPutWrapper(unittest.TestCase):
+    def test_stores_object_with_read(self):
+        swift = FakeSwift()
+        content = 'A' * 1024
+        body = StringIO.StringIO(content)
+        path = '/v1/AUTH_foo/bar/object'
+        wrapper = utils.SwiftPutWrapper(body, {}, path, swift, None)
+        result = []
+        chunk = wrapper.read()
+        while chunk:
+            result.append(chunk)
+            chunk = wrapper.read()
+        self.assertEqual(content, ''.join(result))
+        self.assertEqual('PUT', swift.calls[0]['REQUEST_METHOD'])
+        self.assertEqual(path, swift.calls[0]['PATH_INFO'])
+        self.assertEqual(content, swift.calls[0]['body'])
+
+    def test_stores_generator(self):
+        swift = FakeSwift()
+        content = 'A' * 1024
+        path = '/v1/AUTH_foo/bar/object'
+
+        def _content_generator():
+            for chunk in range(0, len(content), 128):
+                yield content[chunk:chunk + 128]
+
+        wrapper = utils.SwiftPutWrapper(
+            _content_generator(), {}, path, swift, None)
+        result = []
+        chunk = wrapper.read()
+        while chunk:
+            result.append(chunk)
+            chunk = wrapper.read()
+        self.assertEqual(content, ''.join(result))
+        self.assertEqual('PUT', swift.calls[0]['REQUEST_METHOD'])
+        self.assertEqual(path, swift.calls[0]['PATH_INFO'])
+        self.assertEqual(content, swift.calls[0]['body'])
+
+    def test_stores_slo_with_segments(self):
+        swift = FakeSwift()
+        manifest = [
+            {'name': '/segments/1',
+             'bytes': 1024,
+             'hash': 'deadbeef'},
+            {'name': '/segments/2',
+             'bytes': 1337,
+             'hash': 'fefefefe'}]
+        content = 'A' * 1024 + 'B' * 1337
+        path = '/v1/AUTH_foo/bar/object'
+        body = StringIO.StringIO(content)
+        wrapper = utils.SwiftSloPutWrapper(
+            body, {'Content-Length': len(content)}, path, swift, None,
+            manifest)
+        result = []
+        chunk = wrapper.read()
+        while chunk:
+            result.append(chunk)
+            chunk = wrapper.read()
+        self.assertEqual(content, ''.join(result))
+        self.assertEqual('PUT', swift.calls[0]['REQUEST_METHOD'])
+        self.assertEqual(
+            '/v1/AUTH_foo/segments', swift.calls[0]['PATH_INFO'])
+        self.assertEqual('PUT', swift.calls[1]['REQUEST_METHOD'])
+        self.assertEqual(
+            '/v1/AUTH_foo/segments/1', swift.calls[1]['PATH_INFO'])
+        self.assertEqual(content[:1024], swift.calls[1]['body'])
+        self.assertEqual('PUT', swift.calls[2]['REQUEST_METHOD'])
+        self.assertEqual(
+            '/v1/AUTH_foo/segments/2', swift.calls[2]['PATH_INFO'])
+        self.assertEqual(content[1024:], swift.calls[2]['body'])
+        self.assertEqual(path, swift.calls[3]['PATH_INFO'])
+        expected_manifest = [
+            {'path': manifest[idx]['name'],
+             'size_bytes': manifest[idx]['bytes'],
+             'etag': manifest[idx]['hash']} for idx in range(len(manifest))]
+        self.assertEqual(expected_manifest, json.loads(swift.calls[3]['body']))
+
+    def test_stores_mpu_with_segments(self):
+        provider = mock.Mock(
+            SyncS3({'aws_identity': 'key',
+                    'aws_secret': 'secret',
+                    'account': 'account',
+                    'container': 'container',
+                    'aws_bucket': 'bucket'}))
+        parts = {1: 10,
+                 2: 20,
+                 3: 50,
+                 4: 10}
+        ts = '1542760538.81'
+
+        def _head_object(*args, **kwargs):
+            return base_sync.ProviderResponse(
+                True, 204, {'Content-Length': parts[kwargs['PartNumber']]}, '')
+
+        provider.head_object.side_effect = _head_object
+
+        responses = {'PUT': [
+            # segments container PUT
+            (lambda headers, body: ('200 OK', [], ''))] +
+            [lambda headers, body: (
+                '200 OK', {'etag': hashlib.md5(body).hexdigest()}, '')
+             for _ in range(len(parts) + 1)]  # extra response for manifest PUT
+        }
+        swift = FakeSwift(responses)
+        content = ''.join([chr(ord('A') + k) * parts[k]
+                           for k in sorted(parts.keys())])
+        offset = 0
+        parts_etags = []
+        manifest = []
+        for k in sorted(parts.keys()):
+            parts_etags.append(hashlib.md5(
+                content[offset:parts[k] + offset]).digest())
+            manifest.append(
+                {'path': '/bar_segments/mpu/%s/%d/%d/%d' % (
+                    ts, len(content), parts[1], (k - 1)),
+                 'size_bytes': parts[k],
+                 'etag': hashlib.md5(
+                     content[offset:parts[k] + offset]).hexdigest()})
+
+            offset += parts[k]
+        mpu_etag = '%s-%d' % (
+            hashlib.md5(''.join(parts_etags)).hexdigest(), len(parts))
+
+        path = '/v1/AUTH_foo/bar/mpu'
+        body = StringIO.StringIO(content)
+        wrapper = utils.SwiftMPUPutWrapper(
+            body,
+            {'Content-Length': len(content),
+             'etag': mpu_etag,
+             'x-timestamp': ts},
+            path, swift, None, provider)
+        result = []
+        chunk = wrapper.read()
+        while chunk:
+            result.append(chunk)
+            chunk = wrapper.read()
+        self.assertEqual(content, ''.join(result))
+        self.assertEqual(1 + len(parts) + 1, len(swift.calls))
+        self.assertEqual('PUT', swift.calls[0]['REQUEST_METHOD'])
+        self.assertEqual(
+            '/v1/AUTH_foo/bar_segments', swift.calls[0]['PATH_INFO'])
+        offset = 0
+        for part in sorted(parts.keys()):
+            self.assertEqual(
+                'PUT', swift.calls[part]['REQUEST_METHOD'])
+            self.assertEqual(
+                '/v1/AUTH_foo/bar_segments/mpu/%s/%d/%d/%d' % (
+                    ts, len(content), parts[1], part - 1),
+                swift.calls[part]['PATH_INFO'])
+            self.assertEqual(content[offset:offset + parts[part]],
+                             swift.calls[part]['body'])
+            offset += parts[part]
+        self.assertEqual(manifest, json.loads(swift.calls[-1]['body']))
+        self.assertEqual(path, swift.calls[-1]['PATH_INFO'])
+
+    def test_mpu_error_does_not_upload_manifest(self):
+        provider = mock.Mock(
+            SyncS3({'aws_identity': 'key',
+                    'aws_secret': 'secret',
+                    'account': 'account',
+                    'container': 'container',
+                    'aws_bucket': 'bucket'}))
+        parts = {1: 10,
+                 2: 20,
+                 3: 50,
+                 4: 10}
+
+        def _head_object(*args, **kwargs):
+            return base_sync.ProviderResponse(
+                True, 204, {'Content-Length': parts[kwargs['PartNumber']]}, '')
+
+        provider.head_object.side_effect = _head_object
+
+        responses = {'PUT': [
+            # segments container PUT
+            (lambda headers, body: ('200 OK', [], ''))] +
+            [lambda headers, body: (
+                '200 OK', {'etag': 'deadbeef'}, '')
+             for _ in range(len(parts))]
+        }
+        swift = FakeSwift(responses)
+        content = ''.join([chr(ord('A') + k) * parts[k]
+                           for k in sorted(parts.keys())])
+        etag_md5 = hashlib.md5()
+        offset = 0
+        for k in sorted(parts.keys()):
+            etag_md5.update(
+                hashlib.md5(content[offset:offset + parts[k]]).digest())
+            offset += parts[k]
+        mpu_etag = '%s-%d' % (etag_md5.hexdigest(), len(parts))
+        ts = '1542760538.81'
+
+        path = '/v1/AUTH_foo/bar/mpu'
+        body = StringIO.StringIO(content)
+        wrapper = utils.SwiftMPUPutWrapper(
+            body,
+            {'Content-Length': len(content),
+             'x-timestamp': ts,
+             'etag': mpu_etag},
+            path, swift, None, provider)
+        result = []
+        chunk = wrapper.read()
+        while chunk:
+            result.append(chunk)
+            chunk = wrapper.read()
+        self.assertEqual(content, ''.join(result))
+        self.assertEqual(1 + len(parts), len(swift.calls))
+        self.assertEqual('PUT', swift.calls[0]['REQUEST_METHOD'])
+        self.assertEqual(
+            '/v1/AUTH_foo/bar_segments', swift.calls[0]['PATH_INFO'])
+        offset = 0
+        for part in sorted(parts.keys()):
+            self.assertEqual(
+                'PUT', swift.calls[part]['REQUEST_METHOD'])
+            self.assertEqual(
+                '/v1/AUTH_foo/bar_segments/mpu/%s/%d/%d/%d' % (
+                    ts, len(content), parts[1], part - 1),
+                swift.calls[part]['PATH_INFO'])
+            self.assertEqual(content[offset:offset + parts[part]],
+                             swift.calls[part]['body'])
+            offset += parts[part]
+
+    def test_stores_large_object(self):
+        content = 'A' * 1024 + 'B' * 1337
+        content_etag = hashlib.md5(content).hexdigest()
+
+        segment_size = 2048
+        parts = [segment_size, len(content) - segment_size]
+        responses = {'PUT': [
+            # segments container PUT
+            (lambda headers, body: ('200 OK', [], ''))] +
+            [lambda headers, body: (
+                '200 OK', {'etag': hashlib.md5(body).hexdigest()}, '')
+             for _ in range(len(parts))] +
+            [lambda headers, body: ('200 OK', [], '')]}
+        ts = '1542760538.81'
+        swift = FakeSwift(responses)
+        path = '/v1/AUTH_foo/bar/big-object'
+        manifest = []
+        offset = 0
+        for index, part_size in enumerate(parts):
+            manifest.append(
+                {'path': '/bar_segments/big-object/%s/%d/%d/%d' % (
+                    ts, len(content), segment_size, index),
+                 'size_bytes': part_size,
+                 'etag': hashlib.md5(
+                     content[offset:part_size + offset]).hexdigest()})
+            offset += part_size
+
+        wrapper = utils.SwiftLargeObjectPutWrapper(
+            StringIO.StringIO(content),
+            {'Content-Length': len(content),
+             'x-timestamp': ts,
+             'etag': content_etag},
+            path, swift, None, segment_size)
+        result = []
+        chunk = wrapper.read()
+        while chunk:
+            result.append(chunk)
+            chunk = wrapper.read()
+
+        self.assertEqual(content, ''.join(result))
+        # segments container, two segments, and the manifest
+        self.assertEqual(4, len(swift.calls))
+        self.assertEqual('PUT', swift.calls[0]['REQUEST_METHOD'])
+        self.assertEqual(
+            '/v1/AUTH_foo/bar_segments', swift.calls[0]['PATH_INFO'])
+        offset = 0
+        for index, part_size in enumerate(parts):
+            self.assertEqual(
+                'PUT', swift.calls[index + 1]['REQUEST_METHOD'])
+            self.assertEqual(
+                '/v1/AUTH_foo/bar_segments/big-object/%s/%d/%d/%d' % (
+                    ts, len(content), segment_size, index),
+                swift.calls[index + 1]['PATH_INFO'])
+            self.assertEqual(content[offset:offset + part_size],
+                             swift.calls[index + 1]['body'])
+            offset += part_size
+        self.assertEqual(manifest, json.loads(swift.calls[-1]['body']))
+
+    def test_big_object_error_does_not_upload_manifest(self):
+        content = 'A' * 1024 + 'B' * 1337
+        segment_size = 2048
+        parts = [segment_size, len(content) - segment_size]
+        responses = {'PUT': [
+            # segments container PUT
+            (lambda headers, body: ('200 OK', [], ''))] +
+            [lambda headers, body: (
+                '200 OK', {'etag': hashlib.md5(body).hexdigest()}, '')
+             for _ in range(len(parts))] +
+            [lambda headers, body: ('200 OK', [], '')]}
+        ts = '1542760538.81'
+        swift = FakeSwift(responses)
+        path = '/v1/AUTH_foo/bar/big-object'
+
+        wrapper = utils.SwiftLargeObjectPutWrapper(
+            StringIO.StringIO(content),
+            {'Content-Length': len(content),
+             'x-timestamp': ts,
+             'etag': 'deadbeef'},
+            path, swift, None, segment_size)
+        result = []
+        chunk = wrapper.read()
+        while chunk:
+            result.append(chunk)
+            chunk = wrapper.read()
+
+        self.assertEqual(content, ''.join(result))
+        # segments container, two segments, but no manifest
+        self.assertEqual(3, len(swift.calls))
+        self.assertEqual('PUT', swift.calls[0]['REQUEST_METHOD'])
+        self.assertEqual(
+            '/v1/AUTH_foo/bar_segments', swift.calls[0]['PATH_INFO'])
+        offset = 0
+        for index, part_size in enumerate(parts):
+            self.assertEqual(
+                'PUT', swift.calls[index + 1]['REQUEST_METHOD'])
+            self.assertEqual(
+                '/v1/AUTH_foo/bar_segments/big-object/%s/%d/%d/%d' % (
+                    ts, len(content), segment_size, index),
+                swift.calls[index + 1]['PATH_INFO'])
+            self.assertEqual(content[offset:offset + part_size],
+                             swift.calls[index + 1]['body'])
+            offset += part_size

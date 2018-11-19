@@ -14,6 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 """
 
+import datetime
 import eventlet
 import hashlib
 import json
@@ -59,7 +60,9 @@ S3_USER_META_PREFIX = 'x-amz-meta-'
 MANIFEST_HEADER = 'x-object-manifest'
 SLO_HEADER = 'x-static-large-object'
 SLO_ETAG_FIELD = 'swift-slo-etag'
+EPOCH = datetime.datetime.utcfromtimestamp(0)
 SWIFT_TIME_FMT = '%Y-%m-%dT%H:%M:%S.%f'
+LAST_MODIFIED_FMT = '%a, %d %b %Y %H:%M:%S %Z'
 # Blacklist of known hop-by-hop headers taken from
 # https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers
 HOP_BY_HOP_HEADERS = set([
@@ -80,6 +83,7 @@ SYSMETA_ACCOUNT_ACL_KEY = \
     get_sys_meta_prefix('account') + 'core-access-control'
 PFS_ETAG_PREFIX = 'pfs'
 DEFAULT_CHUNK_SIZE = 65536
+DEFAULT_SEGMENT_SIZE = 100 * 1024 * 1024
 REMOTE_ETAG = get_object_transient_sysmeta(
     'multi-cloud-internal-migrator-remote-etag')
 
@@ -517,51 +521,89 @@ class SwiftPutWrapper(object):
         return chunk
 
 
-class SwiftSloPutWrapper(SwiftPutWrapper):
-    def __init__(self, body, headers, path, app, manifest, logger):
-        self.manifest = manifest
-        self.segment_index = 0
-        self.remainder = self.manifest[0]['bytes']
-        self.failed = False
+class BaseSwiftSloPutWrapper(SwiftPutWrapper):
+    '''Abstract class for all of the wrappers that create a static large object
+    from single objects in the origin.
 
-        super(SwiftSloPutWrapper, self).__init__(
+    Inheriting classes must implement:
+        - _get_segment_size()
+        - _get_segment_name()
+        - _get_segment_etag()
+        - _get_manifest()
+        - _get_segments_container()
+
+    One method is optional:
+        - _update_manifest_headers() -- used for updating the headers before
+          uploading the manifest. By default, a NOOP.
+    '''
+    def __init__(self, body, headers, path, app, logger):
+        self._segment_index = 0
+        self._failed = False
+        self._remainder = self._get_segment_size()
+        self._segments_container_checked = False
+
+        super(BaseSwiftSloPutWrapper, self).__init__(
             body, headers, path, app, logger)
 
-    def _create_request_path(self, target):
+    def _get_segment_size(self):
+        raise NotImplementedError()
+
+    def _get_segment_name(self):
+        raise NotImplementedError()
+
+    def _get_segment_etag(self):
+        raise NotImplementedError()
+
+    def _get_manifest(self):
+        raise NotImplementedError()
+
+    def _get_segments_container(self):
+        raise NotImplementedError()
+
+    def _update_manifest_headers(self, manifest_headers):
+        pass
+
+    def _create_request_path(self, container, key=''):
         # The path is /<version>/<account>/<container>/<object>. We strip off
         # the container and object from the path.
         parts = self.path.split('/', 3)[:3]
         # [1:] strips off the leading "/" that manifest names include
-        parts.append(target)
+        parts.append(container)
+        if key:
+            parts.append(key)
         return '/'.join(parts)
 
     def _ensure_segments_container(self):
+        if self._segments_container_checked:
+            return
         env = {'REQUEST_METHOD': 'PUT'}
-        segment_path = self.manifest[self.segment_index]['name']
-        container_path = segment_path.split('/', 2)[1]
         req = Request.blank(
             # The manifest path is /<container>/<object>
-            self._create_request_path(container_path),
+            self._create_request_path(self._get_segments_container()),
             environ=env)
         resp = req.get_response(self.app)
         if not resp.is_success:
-            self.failed = True
+            self._failed = True
             if self.logger:
                 self.logger.warning(
                     'Failed to create the segment container %s: %s' % (
-                        container_path, resp.status))
+                        self._get_segments_container(), resp.status))
         close_if_possible(resp.app_iter)
+        self._segments_container_checked = True
 
     def _create_put_request(self):
         self._ensure_segments_container()
         env = {'REQUEST_METHOD': 'PUT',
                'wsgi.input': self.put_wrapper,
-               'CONTENT_LENGTH': self.manifest[self.segment_index]['bytes']}
+               'CONTENT_LENGTH': self._get_segment_size()}
+        headers = {}
+        if self._get_segment_etag():
+            headers['ETag'] = self._get_segment_etag()
         return Request.blank(
             self._create_request_path(
-                self.manifest[self.segment_index]['name'][1:]),
+                self._get_segments_container(), self._get_segment_name()),
             environ=env,
-            headers={'ETag': self.manifest[self.segment_index]['hash']})
+            headers=headers)
 
     def _upload_manifest(self):
         SLO_FIELD_MAP = {
@@ -577,10 +619,11 @@ class SwiftSloPutWrapper(SwiftPutWrapper):
         # different representation from what the client submits. Unfortunately,
         # when we extract the manifest with the InternalClient, we don't have
         # SLO in the pipeline and retrieve the internal represenation.
+        manifest = self._get_manifest()
         put_manifest = [
             dict([(SLO_FIELD_MAP[k], v) for k, v in entry.items()
                   if k in SLO_FIELD_MAP])
-            for entry in self.manifest]
+            for entry in self._get_manifest()]
 
         content = json.dumps(put_manifest)
         env['wsgi.input'] = StringIO.StringIO(content)
@@ -589,14 +632,16 @@ class SwiftSloPutWrapper(SwiftPutWrapper):
         # The SLO header must not be set on manifest PUT and we should remove
         # the content length of the whole SLO, as we will overwrite it with the
         # length of the manifest itself.
-        if SLO_HEADER in self.headers:
-            del self.headers[SLO_HEADER]
-        del self.headers['Content-Length']
+        manifest_headers = dict(self.headers)
+        if SLO_HEADER in manifest_headers:
+            del manifest_headers[SLO_HEADER]
+        del manifest_headers['Content-Length']
         etag = hashlib.md5()
-        for entry in self.manifest:
+        for entry in manifest:
             etag.update(entry['hash'])
-        self.headers['ETag'] = etag.hexdigest()
-        req = Request.blank(self.path, environ=env, headers=self.headers)
+        manifest_headers['ETag'] = etag.hexdigest()
+        self._update_manifest_headers(manifest_headers)
+        req = Request.blank(self.path, environ=env, headers=manifest_headers)
         resp = req.get_response(self.app)
         if self.logger:
             if resp.status_int == 202:
@@ -611,40 +656,181 @@ class SwiftSloPutWrapper(SwiftPutWrapper):
         chunk = self._read_chunk(size)
         # On failure, we pass through the data and abort the attempt to restore
         # into the object store.
-        if self.failed:
+        if self._failed:
             return chunk
 
-        if self.remainder - len(chunk) >= 0:
-            self.remainder -= len(chunk)
-            self.queue.put(chunk)
-        else:
-            if self.remainder > 0:
-                self.queue.put(chunk[:self.remainder])
-            self.queue.put('')
+        # We may have very small segments (at least in tests)
+        chunk_offset = 0
+        while chunk_offset < len(chunk):
+            if self._remainder - (len(chunk) - chunk_offset) >= 0:
+                self._remainder -= (len(chunk) - chunk_offset)
+                self.queue.put(chunk[chunk_offset:])
+                break
+
+            self.queue.put(chunk[chunk_offset:self._remainder + chunk_offset])
+            if self._remainder:
+                # Otherwise, the empty string has already been PUT
+                self.queue.put('')
             resp = self._wait_for_put()
             if not resp.is_success:
                 if self.logger:
                     self.logger.warning(
-                        'Failed to restore segment %s: %s' % (
-                            self.manifest[self.segment_index]['name'],
+                        'Failed to restore segment %s/%s: %s' % (
+                            self._get_segments_container(),
+                            self._get_segment_name(),
                             resp.status))
-                self.failed = True
-                return chunk
+                self._failed = True
+            if self._failed:
+                break
+            chunk_offset += self._remainder
 
-            self.segment_index += 1
+            self._segment_index += 1
+            self._remainder = self._get_segment_size()
+            if not self._remainder or self._failed:
+                # The _get_segment_size() call may have failed
+                break
+
             self.put_wrapper = BlobstorePutWrapper(
                 DEFAULT_CHUNK_SIZE, self.queue)
             self.put_thread = eventlet.greenthread.spawn(
                 self._create_put_request().get_response, self.app)
-            self.queue.put(chunk[self.remainder:])
-            segment_length = self.manifest[self.segment_index]['bytes']
-            self.remainder = segment_length - (len(chunk) - self.remainder)
 
         if not chunk:
+            self.queue.put(chunk)
             self._wait_for_put()
             # Upload the manifest
             self._upload_manifest()
         return chunk
+
+
+class SwiftLargeObjectPutWrapper(BaseSwiftSloPutWrapper):
+    def __init__(self, body, headers, path, app, logger, segment_size):
+        self._segment_size = segment_size
+        self._total_size = int(headers['Content-Length'])
+        container, key = path.split('/', 4)[3:]
+        ts = create_x_timestamp_from_hdrs(headers)
+        self._segments_container = container + '_segments'
+        self._segment_name_prefix = '/'.join((
+            key, str(ts), str(self._total_size), str(self._segment_size)))
+        self._key = key
+        self._manifest = []
+        self.digest = hashlib.md5()
+
+        super(SwiftLargeObjectPutWrapper, self).__init__(
+            body, headers, path, app, logger)
+
+    def _get_segment_size(self):
+        current_read_size = (self._segment_index + 1) * self._segment_size
+        if current_read_size <= self._total_size:
+            return self._segment_size
+        return self._total_size - current_read_size + self._segment_size
+
+    def _get_segment_name(self):
+        return '/'.join((self._segment_name_prefix, str(self._segment_index)))
+
+    def _get_segment_etag(self):
+        return None
+
+    def _get_manifest(self):
+        return self._manifest
+
+    def _get_segments_container(self):
+        return self._segments_container
+
+    def _update_manifest_headers(self, manifest_headers):
+        manifest_headers[REMOTE_ETAG] = self.headers['etag']
+
+    def _wait_for_put(self):
+        resp = super(SwiftLargeObjectPutWrapper, self)._wait_for_put()
+        self._manifest.append(
+            {'name': '/'.join(('', self._get_segments_container(),
+                               self._get_segment_name())),
+             'bytes': self._get_segment_size(),
+             'hash': resp.headers['ETag']})
+        return resp
+
+    def _read_chunk(self, size=-1):
+        chunk = super(SwiftLargeObjectPutWrapper, self)._read_chunk(size)
+        self.digest.update(chunk)
+        return chunk
+
+    def _upload_manifest(self):
+        source_etag = self.headers['etag'].replace('"', '')
+        if source_etag != self.digest.hexdigest():
+            if self.logger:
+                self.logger.warning(
+                    'ETag mismatch while restoring %s: %s vs %s' %
+                    (self.path, source_etag, self.digest.hexdigest()))
+            # TODO: clean up segments!
+            return
+        super(SwiftLargeObjectPutWrapper, self)._upload_manifest()
+
+
+class SwiftMPUPutWrapper(SwiftLargeObjectPutWrapper):
+    def __init__(self, body, headers, path, app, logger, provider):
+        # NOTE: We do a look-up on the first part, as the segment size is used
+        # in segments container name
+        _, self._key = path.split('/', 4)[3:]
+        self._segment_index = 0
+        self._segment_meta = {}
+        self._provider = provider
+        self._load_segment_meta()
+        self._parts_etags = []
+
+        super(SwiftMPUPutWrapper, self).__init__(
+            body, headers, path, app, logger, self._get_segment_size())
+
+    def _load_segment_meta(self):
+        resp = self._provider.head_object(
+            self._key, PartNumber=self._segment_index + 1)
+        if not resp.success:
+            self._failed = True
+            return
+        self._segment_meta = resp.headers
+
+    def _get_segment_size(self):
+        if not self._segment_meta:
+            # TODO: consider prefetching parts' metadata
+            self._load_segment_meta()
+        return int(self._segment_meta.get('Content-Length'))
+
+    def _wait_for_put(self):
+        resp = super(SwiftMPUPutWrapper, self)._wait_for_put()
+        self._segment_meta = {}
+        return resp
+
+    def _upload_manifest(self):
+        uploaded_etag = get_slo_etag(self._manifest)
+        if uploaded_etag != self.headers['etag']:
+            if self.logger:
+                self.logger.warning(
+                    'ETag mismatch while restoring %s: %s vs %s' % (
+                        self.path, self.headers['etag'], uploaded_etag))
+            # TODO: clean up segments!
+            return
+        super(SwiftLargeObjectPutWrapper, self)._upload_manifest()
+
+
+class SwiftSloPutWrapper(BaseSwiftSloPutWrapper):
+    def __init__(self, body, headers, path, app, logger, manifest):
+        self._manifest = manifest
+        super(SwiftSloPutWrapper, self).__init__(
+            body, headers, path, app, logger)
+
+    def _get_segment_size(self):
+        return self._manifest[self._segment_index]['bytes']
+
+    def _get_segment_name(self):
+        return self._manifest[self._segment_index]['name'].split('/', 2)[2]
+
+    def _get_segment_etag(self):
+        return self._manifest[self._segment_index]['hash']
+
+    def _get_manifest(self):
+        return self._manifest
+
+    def _get_segments_container(self):
+        return self._manifest[self._segment_index]['name'].split('/', 2)[1]
 
 
 class ClosingResourceIterable(object):
@@ -1097,3 +1283,13 @@ def get_sys_migrator_header(path_type):
     if path_type == 'object':
         return get_object_transient_sysmeta(MIGRATOR_HEADER)
     return '%s%s' % (get_sys_meta_prefix(path_type), MIGRATOR_HEADER)
+
+
+def create_x_timestamp_from_hdrs(hdrs, use_x_timestamp=True):
+    if use_x_timestamp and 'x-timestamp' in hdrs:
+        return float(hdrs['x-timestamp'])
+    if 'last-modified' in hdrs:
+        ts = datetime.datetime.strptime(hdrs['last-modified'],
+                                        LAST_MODIFIED_FMT)
+        return (ts - EPOCH).total_seconds()
+    return None

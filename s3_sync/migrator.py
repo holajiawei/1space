@@ -38,14 +38,14 @@ from .daemon_utils import (load_swift, setup_context, initialize_loggers,
 from .provider_factory import create_provider
 from .stats import MigratorPassStats
 from .utils import (convert_to_local_headers, convert_to_swift_headers,
-                    get_container_headers, iter_listing, RemoteHTTPError,
-                    SWIFT_TIME_FMT, diff_container_headers,
-                    get_sys_migrator_header, MigrationContainerStates,
-                    diff_account_headers, get_slo_etag, SeekableFileLikeIter,
-                    REMOTE_ETAG)
+                    create_x_timestamp_from_hdrs, diff_container_headers,
+                    diff_account_headers, get_container_headers,
+                    get_slo_etag, get_sys_migrator_header, iter_listing,
+                    MigrationContainerStates, RemoteHTTPError,
+                    SeekableFileLikeIter, SWIFT_TIME_FMT, REMOTE_ETAG)
 from swift.common.http import HTTP_NOT_FOUND, HTTP_CONFLICT
-from swift.common import swob
 from swift.common.internal_client import UnexpectedResponse
+from swift.common import swob
 from swift.common.ring import Ring
 from swift.common.ring.utils import is_local_device
 from swift.common.utils import FileLikeIter, Timestamp, quote, whataremyips
@@ -53,8 +53,6 @@ from swift.common.utils import FileLikeIter, Timestamp, quote, whataremyips
 EQUAL = 0
 ETAG_DIFF = 1
 TIME_DIFF = 2
-LAST_MODIFIED_FMT = '%a, %d %b %Y %H:%M:%S %Z'
-EPOCH = datetime.datetime.utcfromtimestamp(0)
 LOGGER_NAME = 'swift-s3-migrator'
 
 IGNORE_KEYS = set(('status', 'aws_secret', 'all_buckets', 'custom_prefix'))
@@ -202,16 +200,6 @@ def _update_status_counts(status, moved_count, scanned_count, bytes_count,
         status['bytes_count'] = status.get('bytes_count', 0) + bytes_count
     # this is the end of this current pass
     status['finished'] = now
-
-
-def _create_x_timestamp_from_hdrs(hdrs, use_x_timestamp=True):
-    if use_x_timestamp and 'x-timestamp' in hdrs:
-        return float(hdrs['x-timestamp'])
-    if 'last-modified' in hdrs:
-        ts = datetime.datetime.strptime(hdrs['last-modified'],
-                                        LAST_MODIFIED_FMT)
-        return (ts - EPOCH).total_seconds()
-    return None
 
 
 class Status(object):
@@ -670,7 +658,7 @@ class Migrator(object):
                     headers['x-timestamp'] = Timestamp(
                         ts.timestamp, ts.offset + 1).internal
                 else:
-                    xts = _create_x_timestamp_from_hdrs(hdrs)
+                    xts = create_x_timestamp_from_hdrs(hdrs)
                     if xts:
                         headers['x-timestamp'] = Timestamp(xts, 1)
                 try:
@@ -866,9 +854,9 @@ class Migrator(object):
                     else:
                         raise
                 if resp.headers and local_headers:
-                    local_ts = _create_x_timestamp_from_hdrs(
+                    local_ts = create_x_timestamp_from_hdrs(
                         local_headers, use_x_timestamp=False)
-                    remote_ts = _create_x_timestamp_from_hdrs(
+                    remote_ts = create_x_timestamp_from_hdrs(
                         resp.headers, use_x_timestamp=False)
                     header_changes = {}
 
@@ -1044,7 +1032,7 @@ class Migrator(object):
         nparts = nparts_from_headers(headers)
         del(headers['etag'])
         segments = []
-        ts = _create_x_timestamp_from_hdrs(headers)
+        ts = create_x_timestamp_from_hdrs(headers)
         segment_container = "%s_segments" % (container,)
         content_length = int(resp.headers['Content-Length'])
         segment_prefix = None
@@ -1099,7 +1087,7 @@ class Migrator(object):
         segments = []
         segment_start = 0
         segment_size = self.segment_size
-        ts = _create_x_timestamp_from_hdrs(headers)
+        ts = create_x_timestamp_from_hdrs(headers)
         segment_container = "%s_segments" % (container,)
         segment_prefix = "%s/%s/%s/%s/" % (
             key, ts, content_length, segment_size)
@@ -1202,7 +1190,7 @@ class Migrator(object):
         container, key, content, headers, aws_bucket = work
         if preserve_timestamp:
             headers['x-timestamp'] = Timestamp(
-                _create_x_timestamp_from_hdrs(headers)).internal
+                create_x_timestamp_from_hdrs(headers)).internal
             headers[get_sys_migrator_header('object')] = headers['x-timestamp']
         if 'last-modified' in headers:
             del headers['last-modified']

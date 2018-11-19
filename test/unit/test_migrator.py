@@ -36,7 +36,7 @@ import os
 
 def create_timestamp(epoch_ts):
     dt = datetime.datetime.utcfromtimestamp(epoch_ts)
-    return dt.strftime(s3_sync.migrator.LAST_MODIFIED_FMT) + ' UTC'
+    return dt.strftime(s3_sync.utils.LAST_MODIFIED_FMT) + ' UTC'
 
 
 def create_list_timestamp(epoch_ts):
@@ -847,7 +847,7 @@ class TestMigrator(unittest.TestCase):
         self.migrator.status.get_migration.return_value = {}
 
         utcnow = datetime.datetime.utcnow()
-        now = (utcnow - s3_sync.migrator.EPOCH).total_seconds()
+        now = (utcnow - s3_sync.utils.EPOCH).total_seconds()
 
         tests = [{
             'objects': {

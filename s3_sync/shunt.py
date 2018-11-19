@@ -23,14 +23,15 @@ from swift.proxy.controllers.base import get_account_info
 from time import time
 
 from .provider_factory import create_provider
-from .utils import (check_slo, SwiftPutWrapper, SwiftSloPutWrapper,
-                    RemoteHTTPError, convert_to_local_headers,
-                    response_is_complete, filter_hop_by_hop_headers,
-                    iter_listing, get_container_headers,
-                    MigrationContainerStates, get_sys_migrator_header,
-                    get_list_params, format_listing_response,
-                    format_container_listing_response, splice_listing,
-                    SHUNT_BYPASS_HEADER, get_listing_content_type)
+from .utils import (DEFAULT_SEGMENT_SIZE, check_slo, convert_to_local_headers,
+                    filter_hop_by_hop_headers,
+                    format_container_listing_response, format_listing_response,
+                    get_listing_content_type, get_container_headers,
+                    get_sys_migrator_header, get_list_params, iter_listing,
+                    MigrationContainerStates, splice_listing,
+                    SHUNT_BYPASS_HEADER, SwiftLargeObjectPutWrapper,
+                    SwiftMPUPutWrapper, SwiftPutWrapper, SwiftSloPutWrapper,
+                    RemoteHTTPError, response_is_complete)
 
 
 class S3SyncProxyFSSwitch(object):
@@ -116,6 +117,7 @@ class S3SyncShunt(object):
         self.app = app
         self.conf_file = conf_file
         self.sync_profiles = {}
+        self._migrator_settings = {}
         self.reload_time = 15
         self._rtime = 0
         self._mtime = 0
@@ -156,6 +158,7 @@ class S3SyncShunt(object):
             key = (profile['account'].encode('utf-8'),
                    profile['container'].encode('utf-8'))
             self.sync_profiles[key] = profile
+        self._migrator_settings = conf.get('migrator_settings')
 
     def __call__(self, env, start_response):
         if time() > self._rtime:
@@ -407,13 +410,19 @@ class S3SyncShunt(object):
 
         utils.close_if_possible(app_iter)
 
-        provider = create_provider(sync_profile, max_conns=1,
+        # NOTE: we may need to make auxiliary requests and hence need two
+        # connections.
+        provider = create_provider(sync_profile, max_conns=2,
                                    per_account=per_account)
         if req.method == 'GET' and sync_profile.get('restore_object', False) \
                 and 'range' not in req.headers:
             # We incur an extra request hit by checking for a possible SLO.
             obj = obj.decode('utf-8')
-            manifest = provider.get_manifest(obj)
+            if sync_profile.get('migration') and\
+                    sync_profile['protocol'] == 's3':
+                manifest = None
+            else:
+                manifest = provider.get_manifest(obj)
             self.logger.debug("Manifest: %s" % manifest)
             status, headers, app_iter = provider.shunt_object(req, obj)
 
@@ -423,12 +432,24 @@ class S3SyncShunt(object):
                     if manifest:
                         app_iter = SwiftSloPutWrapper(
                             app_iter, put_headers, req.environ['PATH_INFO'],
-                            self.app, manifest, self.logger)
+                            self.app, self.logger, manifest)
+                    elif sync_profile.get('migration'):
+                        app_iter = SwiftMPUPutWrapper(
+                            app_iter, put_headers, req.environ['PATH_INFO'],
+                            self.app, self.logger, provider)
                     else:
                         # if slo manifest is missing, log error, don't attempt
                         # to restore object, but continue shunt
                         self.logger.error('Failed to restore slo object due '
                                           'to missing manifest: %s' % obj)
+                elif sync_profile.get('migration') and\
+                        (int(put_headers['Content-Length']) >
+                         constraints.EFFECTIVE_CONSTRAINTS['max_file_size']):
+                    app_iter = SwiftLargeObjectPutWrapper(
+                        app_iter, put_headers, req.environ['PATH_INFO'],
+                        self.app, self.logger,
+                        self._migrator_settings.get(
+                            'segment_size', DEFAULT_SEGMENT_SIZE))
                 else:
                     app_iter = SwiftPutWrapper(
                         app_iter, put_headers, req.environ['PATH_INFO'],
