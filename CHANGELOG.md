@@ -1,3 +1,12 @@
+## 0.1.50
+
+Features:
+
+- Migration spread accross multiple nodes for redundancy and speed. This
+  includes a new parameter in the migrator settings: 'ring_name' which is the
+  name of the ring to use for resolution of which container to work on and
+  which objects should be done first. Default is 'container'.
+
 ## 0.1.49.1
 
 Bug fixes:

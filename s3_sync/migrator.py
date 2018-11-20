@@ -1349,7 +1349,8 @@ def main():
     internal_pool = create_ic_pool(conf, swift_dir, workers)
     segment_size = migrator_conf.get('segment_size', 100000000)
 
-    container_ring = Ring(swift_dir, ring_name='container')
+    ring_name = migrator_conf.get('ring_name', 'container')
+    container_ring = Ring(swift_dir, ring_name=ring_name)
     myips = whataremyips('0.0.0.0')
     selector = Selector(myips, container_ring)
 
