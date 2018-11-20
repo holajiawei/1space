@@ -681,6 +681,7 @@ class TestMigrator(unittest.TestCase):
         pool.max_size = 11
         self.logger = logging.getLogger()
         self.stream = StringIO()
+        self.segment_size = 500 * 1024 * 1024
         self.logger.addHandler(logging.StreamHandler(self.stream))
 
         selector = mock.Mock()
@@ -698,7 +699,7 @@ class TestMigrator(unittest.TestCase):
 
         self.migrator = s3_sync.migrator.Migrator(
             config, None, 1000, 5, pool, self.logger, selector,
-            11000000000)
+            self.segment_size)
         self.migrator.status = mock.Mock()
 
     def get_log_lines(self):
@@ -851,6 +852,7 @@ class TestMigrator(unittest.TestCase):
 
         tests = [{
             'objects': {
+                # MPU object
                 'foo': {
                     'remote_headers': {
                         'x-object-meta-custom': 'custom',
@@ -869,25 +871,8 @@ class TestMigrator(unittest.TestCase):
                     'hash': 'etag-7',
                     'bytes': '1024'
                 },
-                'bar': {
-                    'remote_headers': {
-                        'x-object-meta-custom': 'custom',
-                        'last-modified': create_timestamp(1.4e9),
-                        'etag': 'ba3',
-                        'Content-Length': '10240000000'},
-                    'expected_headers': {
-                        'x-object-meta-custom': 'custom',
-                        'x-timestamp': Timestamp(1.4e9).internal,
-                        'etag': 'ba3',
-                        s3_sync.utils.get_sys_migrator_header('object'): str(
-                            Timestamp(1.4e9).internal),
-                        'Content-Length': '10240000000'},
-                    'list-time': create_list_timestamp(1.4e9),
-                    'hash': 'etag',
-                    'bytes': '10240000000',
-                }
             },
-            'migrated': ['bar', 'foo'],
+            'migrated': ['foo'],
         }, {
             'objects': {
                 'foo': {
@@ -1162,6 +1147,8 @@ class TestMigrator(unittest.TestCase):
             provider.reset_mock()
             self.swift_client.reset_mock()
             self.swift_client.container_exists.return_value = True
+            self.swift_client.make_path.side_effect =\
+                lambda *args: '/'.join(args)
             provider.head_account.return_value = {}
 
             local_objects = test.get('local_objects', [])
@@ -1192,23 +1179,119 @@ class TestMigrator(unittest.TestCase):
                 yield None
 
             self.migrator._iterate_internal_listing = fake_internal_iterator
-
             self.swift_client.make_request.return_value = swift_seg_resp
 
             self.migrator.next_pass()
-
             try:
-                self.swift_client.make_request.assert_has_calls(
+                self.assertEqual(
                     [mock.call(
                         'PUT', mock.ANY,
                         objects[name]['expected_headers'], (2,), mock.ANY)
-                     for name in migrated])
-
+                     for name in sorted(migrated)],
+                    self.swift_client.make_request.mock_calls)
                 for call in self.swift_client.upload_object.mock_calls:
                     self.assertEqual('object body', ''.join(call[1][0]))
             except AssertionError as e:
                 e.args += ('\nTest case: ', test_case)
                 raise
+
+    @mock.patch('s3_sync.migrator.create_provider')
+    def test_migrate_big_object(self, create_provider_mock):
+        '''Test migration of objects bigger than Swift's max_file_size'''
+        provider = create_provider_mock.return_value
+        self.migrator.status.get_migration.return_value = {}
+
+        key = 'bar'
+        remote_headers = {
+            'x-object-meta-custom': 'custom',
+            'last-modified': create_timestamp(1.4e9),
+            'etag': 'ba3',
+            'Content-Length': '10240000000'}
+        expected_headers = {
+            'x-object-meta-custom': 'custom',
+            'x-timestamp': Timestamp(1.4e9).internal,
+            s3_sync.utils.REMOTE_ETAG: 'ba3',
+            'X-Static-Large-Object': str(True),
+            s3_sync.utils.get_sys_migrator_header('object'): str(
+                Timestamp(1.4e9).internal),
+            # This is the manifest size
+            'Content-Length': 2360}
+        expected_segment_headers = {
+            'x-object-meta-custom': 'custom',
+            'Content-Length': str(self.segment_size)
+        }
+        list_time = create_list_timestamp(1.4e9)
+        etag = 'etag'
+        size = '10240000000'
+        self.migrator._read_account_headers = mock.Mock(return_value={})
+        swift_seg_resp = mock.Mock()
+        swift_seg_resp.status_int = 200
+        swift_seg_resp.headers = {'etag': 'deadbeef'}
+        self.swift_client.container_exists.return_value = True
+        provider.head_account.return_value = {}
+
+        def get_object(name, **args):
+            if name != key:
+                raise RuntimeError('Unknown object: %s' % name)
+            return ProviderResponse(
+                True, 200, remote_headers, StringIO('object body'))
+
+        provider.list_objects.return_value = ProviderResponse(
+            True, 200, {},
+            [{'name': key, 'last_modified': list_time,
+              'hash': etag, 'bytes': size}])
+
+        provider.head_bucket.return_value = mock.Mock(
+            status=200, headers={})
+        provider.get_object.side_effect = get_object
+
+        def fake_internal_iterator(*args, **kwargs):
+            yield None
+
+        self.migrator._iterate_internal_listing = fake_internal_iterator
+        self.swift_client.make_request.return_value = swift_seg_resp
+        self.swift_client.make_path.side_effect =\
+            lambda *args: '/'.join(args)
+
+        self.migrator.next_pass()
+        expected_calls = [
+            mock.call('PUT',
+                      '%s/%s_segments/%s' % (
+                          self.migrator.config['account'],
+                          self.migrator.config['container'],
+                          '/'.join((key, '1400000000.0', size,
+                                    str(self.segment_size),
+                                    '%08d' % i))),
+                      dict(expected_segment_headers.items() + [
+                          ('Content-Length', str(min(
+                              self.segment_size,
+                              int(size) - (i - 1) * self.segment_size)))]),
+                      (2,), mock.ANY)
+            for i in range(
+                1, int(math.ceil(float(size) / self.segment_size)) + 1)]
+        expected_calls.append(
+            mock.call('PUT',
+                      '%s/%s/%s' % (self.migrator.config['account'],
+                                    self.migrator.config['container'],
+                                    key),
+                      expected_headers, (2,), mock.ANY))
+        self.assertEqual(len(expected_calls),
+                         len(self.swift_client.make_request.mock_calls))
+        for i in range(0, len(expected_calls)):
+            self.assertEqual(expected_calls[i],
+                             self.swift_client.make_request.mock_calls[i])
+        manifest = json.load(
+            self.swift_client.make_request.mock_calls[-1][1][-1])
+        self.assertEqual(len(expected_calls) - 1, len(manifest))
+        for i in range(0, len(manifest)):
+            expected_size = min(self.segment_size,
+                                int(size) - i * self.segment_size)
+            self.assertEqual(expected_size, manifest[i]['bytes'])
+            expected_name = '/'.join((
+                '', self.migrator.config['container'] + '_segments', key,
+                '1400000000.0', size, str(self.segment_size),
+                '%08d' % (i + 1)))
+            self.assertEqual(expected_name, manifest[i]['name'])
 
     @mock.patch('s3_sync.migrator.create_provider')
     def test_migrate_all_containers_next_pass(self, create_provider_mock):

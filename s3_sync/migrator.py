@@ -43,6 +43,7 @@ from .utils import (convert_to_local_headers, convert_to_swift_headers,
                     get_slo_etag, get_sys_migrator_header, iter_listing,
                     MigrationContainerStates, RemoteHTTPError,
                     SeekableFileLikeIter, SWIFT_TIME_FMT, REMOTE_ETAG)
+import swift.common.constraints
 from swift.common.http import HTTP_NOT_FOUND, HTTP_CONFLICT
 from swift.common.internal_client import UnexpectedResponse
 from swift.common import swob
@@ -1007,7 +1008,7 @@ class Migrator(object):
             self._migrate_mpu(aws_bucket, container, key, resp)
             return
         content_length = int(resp.headers['Content-Length'])
-        if content_length > self.segment_size:
+        if (content_length > swift.common.constraints.MAX_FILE_SIZE):
             self._migrate_as_slo(aws_bucket, container, key, resp)
             return
         put_headers = convert_to_local_headers(
@@ -1118,11 +1119,9 @@ class Migrator(object):
                 container, prefix + key, content, headers, bucket)
             put_resp = self._upload_object(
                 work, preserve_timestamp=False)
-            # Add segment to segments list
-            new_seg = {'name': '/' + container + '/' + prefix +
-                       key, 'bytes': size,
-                       'hash': put_resp.headers['etag']}
-            return new_seg
+            return {'name': '/'.join(('', container, prefix + key)),
+                    'bytes': size,
+                    'hash': put_resp.headers['etag']}
 
     def _migrate_dlo(self, aws_bucket, container, key, resp):
         put_headers = convert_to_local_headers(

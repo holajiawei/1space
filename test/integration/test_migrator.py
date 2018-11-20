@@ -20,6 +20,7 @@ import botocore
 from functools import partial
 import hashlib
 import json
+import mock
 import os
 import StringIO
 from swift.common.middleware.acl import format_acl
@@ -1538,7 +1539,7 @@ class TestMigrator(TestCloudSyncBase):
                 'processes': 1,
                 'status_file': '/var/lib/swift-s3-sync/migrator.status',
                 'workers': 10,
-                'segment_size': 2**20,
+                'segment_size': 1024 * 1024,
             }
         }
         conn_local = self.conn_for_acct(s3_migration['account'])
@@ -1548,7 +1549,10 @@ class TestMigrator(TestCloudSyncBase):
             status = migrator_utils.TempMigratorStatus(s3_migration)
             migrator = migrator_utils.MigratorFactory(
                 conf_path=fp.name).get_migrator(s3_migration, status)
-        migrator.next_pass()
+        with mock.patch('s3_sync.migrator.swift.common.constraints'
+                        '.MAX_FILE_SIZE', 2 * 1024 * 1024):
+            migrator.next_pass()
+
         _, listing = conn_local.get_container(s3_migration['container'])
         key_entry = [x for x in listing if x['name'] == key]
         self.assertEqual(1, len(key_entry))
@@ -1562,6 +1566,7 @@ class TestMigrator(TestCloudSyncBase):
         _, listing = conn_local.get_container(
             s3_migration['container'] + '_segments')
         names = [x['name'] for x in listing]
+        self.assertEqual(3, len(names))
         for entry in json.loads(body):
             self.assertIn(entry['path'].split('/', 2)[2], names)
         self.s3('delete_object', Bucket=s3_migration['aws_bucket'],
