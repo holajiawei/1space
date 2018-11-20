@@ -850,7 +850,7 @@ class TestMigrator(unittest.TestCase):
 
         tests = [{
             'objects': {
-                'foo1': {
+                'foo': {
                     'remote_headers': {
                         'x-object-meta-custom': 'custom',
                         'last-modified': create_timestamp(1.5e9),
@@ -868,7 +868,7 @@ class TestMigrator(unittest.TestCase):
                     'hash': 'etag-7',
                     'bytes': '1024'
                 },
-                'bar1': {
+                'bar': {
                     'remote_headers': {
                         'x-object-meta-custom': 'custom',
                         'last-modified': create_timestamp(1.4e9),
@@ -886,10 +886,10 @@ class TestMigrator(unittest.TestCase):
                     'bytes': '10240000000',
                 }
             },
-            'migrated': ['bar1', 'foo1'],
+            'migrated': ['bar', 'foo'],
         }, {
             'objects': {
-                'foo2': {
+                'foo': {
                     'remote_headers': {
                         'x-object-meta-custom': 'custom',
                         'last-modified': create_timestamp(1.5e9),
@@ -925,7 +925,7 @@ class TestMigrator(unittest.TestCase):
                     'bytes': '1024',
                 }
             },
-            'migrated': ['foo2', 'bar']
+            'migrated': ['foo', 'bar']
         }, {
             'objects': {
                 'foo': {
@@ -945,7 +945,7 @@ class TestMigrator(unittest.TestCase):
                     'hash': 'etag',
                     'bytes': '1024',
                 },
-                'bar2': {
+                'bar': {
                     'remote_headers': {
                         'x-object-meta-custom': 'custom',
                         'last-modified': create_timestamp(1.4e9),
@@ -967,10 +967,10 @@ class TestMigrator(unittest.TestCase):
                 'aws_bucket': 'container',
                 'protocol': 'swift'
             },
-            'migrated': ['bar2', 'foo'],
+            'migrated': ['bar', 'foo'],
         }, {
             'objects': {
-                'foo3': {
+                'foo': {
                     'remote_headers': {
                         'x-object-meta-custom': 'custom',
                         'last-modified': create_timestamp(1.5e9),
@@ -987,7 +987,7 @@ class TestMigrator(unittest.TestCase):
                     'hash': 'etag',
                     'bytes': '1024',
                 },
-                'bar3': {
+                'bar': {
                     'remote_headers': {
                         'x-object-meta-custom': 'custom',
                         'last-modified': create_timestamp(1.4e9),
@@ -1010,17 +1010,17 @@ class TestMigrator(unittest.TestCase):
                 'protocol': 'swift'
             },
             'local_objects': [
-                {'name': 'foo3',
+                {'name': 'foo',
                  'last_modified': create_list_timestamp(1.5e9),
                  'hash': 'etag'},
-                {'name': 'bar3',
+                {'name': 'bar',
                  'last_modified': create_list_timestamp(1.4e9),
                  'hash': 'etag'}
             ],
             'migrated': []
         }, {
             'objects': {
-                'foo4': {
+                'foo': {
                     'remote_headers': {
                         'x-object-meta-custom': 'custom',
                         'last-modified': create_timestamp(1.5e9),
@@ -1037,7 +1037,7 @@ class TestMigrator(unittest.TestCase):
                     'hash': 'etag',
                     'bytes': '1024',
                 },
-                'bar4': {
+                'bar': {
                     'remote_headers': {
                         'x-object-meta-custom': 'custom',
                         'last-modified': create_timestamp(1.4e9),
@@ -1060,17 +1060,17 @@ class TestMigrator(unittest.TestCase):
                 'protocol': 'swift'
             },
             'local_objects': [
-                {'name': 'foo4',
+                {'name': 'foo',
                  'last_modified': create_list_timestamp(1.4e9),
                  'hash': 'old-etag'},
-                {'name': 'bar4',
+                {'name': 'bar',
                  'last_modified': create_list_timestamp(1.3e9),
                  'hash': 'old-etag'}
             ],
-            'migrated': ['bar4', 'foo4']
+            'migrated': ['bar', 'foo']
         }, {
             'objects': {
-                'foo5': {
+                'foo': {
                     'remote_headers': {
                         'x-object-meta-custom': 'custom',
                         'last-modified': create_timestamp(1.5e9),
@@ -1087,7 +1087,7 @@ class TestMigrator(unittest.TestCase):
                     'hash': 'etag',
                     'bytes': '1024',
                 },
-                'bar5': {
+                'bar': {
                     'remote_headers': {
                         'x-object-meta-custom': 'custom',
                         'last-modified': create_timestamp(now - 35.0),
@@ -1105,7 +1105,7 @@ class TestMigrator(unittest.TestCase):
                     'hash': 'etag',
                     'bytes': '1024',
                 },
-                'baz5': {
+                'baz': {
                     'remote_headers': {
                         'x-object-meta-custom': 'custom',
                         'last-modified': create_timestamp(now),
@@ -1130,14 +1130,14 @@ class TestMigrator(unittest.TestCase):
                 'older_than': 30,
             },
             'local_objects': [
-                {'name': 'foo5',
+                {'name': 'foo',
                  'last_modified': create_list_timestamp(1.4e9),
                  'hash': 'old-etag'},
-                {'name': 'bar5',
+                {'name': 'bar',
                  'last_modified': create_list_timestamp(1.3e9),
                  'hash': 'old-etag'}
             ],
-            'migrated': ['bar5', 'foo5']
+            'migrated': ['bar', 'foo']
         }]
         config = self.migrator.config
         self.migrator._read_account_headers = mock.Mock(return_value={})
@@ -1145,7 +1145,7 @@ class TestMigrator(unittest.TestCase):
         swift_seg_resp.status_int = 200
         swift_seg_resp.headers = {'etag': 'deadbeef'}
 
-        for test in tests:
+        for test_case, test in enumerate(tests):
             objects = test['objects']
             if 'migrated' not in test:
                 migrated = objects.keys()
@@ -1196,14 +1196,18 @@ class TestMigrator(unittest.TestCase):
 
             self.migrator.next_pass()
 
-            self.swift_client.make_request.assert_has_calls(
-                [mock.call(
-                    'PUT', mock.ANY,
-                    objects[name]['expected_headers'], (2,), mock.ANY)
-                 for name in migrated])
+            try:
+                self.swift_client.make_request.assert_has_calls(
+                    [mock.call(
+                        'PUT', mock.ANY,
+                        objects[name]['expected_headers'], (2,), mock.ANY)
+                     for name in migrated])
 
-            for call in self.swift_client.upload_object.mock_calls:
-                self.assertEqual('object body', ''.join(call[1][0]))
+                for call in self.swift_client.upload_object.mock_calls:
+                    self.assertEqual('object body', ''.join(call[1][0]))
+            except AssertionError as e:
+                e.args += ('\nTest case: ', test_case)
+                raise
 
     @mock.patch('s3_sync.migrator.create_provider')
     def test_migrate_all_containers_next_pass(self, create_provider_mock):
@@ -1383,8 +1387,6 @@ class TestMigrator(unittest.TestCase):
                 self.swift_client.container_exists.side_effect = (False, True)
                 headers = {}
 
-#            self.migrator._iterate_internal_listing = \
-#                mock.Mock(return_value=iter([]))
             self.swift_client.make_path.return_value = '/'.join(
                 ['http://test/v1', self.migrator.config['account'],
                  self.migrator.config['container']])
@@ -1430,8 +1432,6 @@ class TestMigrator(unittest.TestCase):
         resp.headers = {}
         provider.head_bucket.return_value = resp
         provider.head_account.return_value = {}
-#        self.migrator._iterate_internal_listing = \
-#            mock.Mock(return_value=iter([]))
         self.swift_client.container_exists.return_value = False
         self.migrator._read_account_headers = mock.Mock(return_value={})
 
@@ -1455,8 +1455,6 @@ class TestMigrator(unittest.TestCase):
         resp.status = 200
         resp.headers = {}
         provider.head_bucket.return_value = resp
-#        self.migrator._iterate_internal_listing = \
-#            mock.Mock(return_value=iter([]))
         self.swift_client.container_exists.return_value = False
 
         def fake_app(env, func):
@@ -1619,8 +1617,6 @@ class TestMigrator(unittest.TestCase):
             [{'name': 'slo', 'hash': 'deadbeef', 'bytes': '2000'}])
         provider.get_object.side_effect = get_object
         provider.head_object.side_effect = head_object
-#        self.migrator._iterate_internal_listing = \
-#            mock.Mock(return_value=iter([]))
 
         self.migrator.next_pass()
 
@@ -1889,8 +1885,6 @@ class TestMigrator(unittest.TestCase):
         provider.head_bucket.return_value = bucket_resp
         provider.list_objects.side_effect = list_objects
         provider.get_object.side_effect = get_object
-#        self.migrator._iterate_internal_listing = \
-#            mock.Mock(return_value=iter([]))
 
         self.migrator.next_pass()
 

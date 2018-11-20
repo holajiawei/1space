@@ -1,3 +1,4 @@
+import copy
 import json
 import logging
 import s3_sync.daemon_utils
@@ -12,20 +13,25 @@ MYIPS = whataremyips('0.0.0.0')
 
 class TempMigratorStatus(object):
     def __init__(self, config):
-        self.config = config
-        self.status = {}
+        new_config = copy.deepcopy(config)
+        self.status_all = [{'config': new_config, 'status': {}}]
 
     def save_migration(self, config, marker, copied, scanned, bytes_count,
                        is_reset):
-        self.status['marker'] = marker
+        status = self.get_migration(config)
+        status['marker'] = marker
         s3_sync.migrator._update_status_counts(
-            self.status, copied, scanned, bytes_count, is_reset)
+            status, copied, scanned, bytes_count, is_reset)
 
     def get_migration(self, config):
         # Currently, we only support a single migration configuration
-        if not s3_sync.migrator.equal_migration(self.config, config):
-            raise NotImplementedError
-        return self.status
+        for stat in self.status_all:
+            if s3_sync.migrator.equal_migration(stat['config'], config):
+                return stat['status']
+        # doesn't exist
+        new_config = copy.deepcopy(config)
+        self.status_all.append({'config': new_config, 'status': {}})
+        return self.status_all[-1]['status']
 
 
 class MigratorFactory(object):

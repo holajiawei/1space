@@ -349,6 +349,7 @@ class Migrator(object):
         self.provider = None
         self.gthread_local = eventlet.corolocal.local()
         self.segment_size = segment_size
+        self.handled_containers = []
 
     def next_pass(self):
         if self.config['aws_bucket'] != '/*':
@@ -384,7 +385,7 @@ class Migrator(object):
                 ''.join(resp.body))
             return None
 
-        handled_containers = []
+        self.handled_containers = []
 
         # TODO: this is very similar to the code in _splice_listing() and
         # _find_missing_objects(). We might be able to provide a utility
@@ -409,7 +410,7 @@ class Migrator(object):
                 self.config['aws_bucket'] = remote_container
                 self.config['container'] = remote_container
                 self.provider.aws_bucket = remote_container
-                handled_containers.append(dict(self.config))
+                self.handled_containers.append(dict(self.config))
                 self._next_pass()
             if local_container and local_container['name'] == remote_container:
                 local_container = next(local_iterator)
@@ -417,7 +418,7 @@ class Migrator(object):
         while local_container:
             self._maybe_delete_internal_container(local_container['name'])
             local_container = next(local_iterator)
-        return handled_containers
+        return self.handled_containers
 
     def _process_account_metadata(self):
         if self.config.get('protocol') != 'swift':
@@ -838,15 +839,18 @@ class Migrator(object):
                     versioned_container = resp.headers.get(
                         'x-history-location')
                 if versioned_container:
-                    # This diverts from our usual strategy of splitting up
-                    # the work, but we cannot migrate the main container
-                    # until the versions container is migrated.
-                    # NOTE: currently, this container's statistics are rolled
-                    # into the parent container.
-                    self._process_container(
-                        container=versioned_container,
-                        aws_bucket=versioned_container, marker='',
-                        list_all=True)
+                    old_aws_bucket = self.config['aws_bucket']
+                    old_container = self.config['container']
+                    old_provider_aws_bucket = self.provider.aws_bucket
+
+                    self.config['aws_bucket'] = versioned_container
+                    self.config['container'] = versioned_container
+                    self.provider.aws_bucket = versioned_container
+                    self.handled_containers.append(dict(self.config))
+                    self._next_pass()
+                    self.config['aws_bucket'] = old_aws_bucket
+                    self.config['container'] = old_container
+                    self.provider.aws_bucket = old_provider_aws_bucket
 
             local_headers = None
             with self.ic_pool.item() as ic:

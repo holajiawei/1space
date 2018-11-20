@@ -484,10 +484,7 @@ class TestCloudSyncBase(unittest.TestCase):
         if old_migrator_pid:
             kill_a_pid(old_migrator_pid)
 
-        c = self.counters.get('msd', 0)
-        c += 1
-        self.counters['msd'] = c
-        devnull = open('/tmp/MSD%d' % c, 'wb')
+        devnull = open('/dev/null', 'wb')
         proc = subprocess.Popen(
             ['/usr/bin/python', '/usr/local/bin/swift-s3-migrator',
              '--config',
