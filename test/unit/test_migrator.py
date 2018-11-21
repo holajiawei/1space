@@ -565,8 +565,11 @@ class TestMigratorUtils(unittest.TestCase):
             json.dump(status_list, wf)
         status = s3_sync.migrator.Status(self.status_file_path)
         status.load_status_list()
+        is_local_cont = mock.Mock()
+        is_local_cont.return_value = True
         migrator = s3_sync.migrator.Migrator(
-            config, status, 10, 5, mock.Mock(max_size=1), None, 0, 1, 1000000)
+            config, status, 10, 5, mock.Mock(max_size=1), None, is_local_cont,
+            1000000)
         self.assertIn('custom_prefix', migrator.config)
         self.assertEqual('', migrator.config['custom_prefix'])
         status.save_migration(
@@ -679,8 +682,23 @@ class TestMigrator(unittest.TestCase):
         self.logger = logging.getLogger()
         self.stream = StringIO()
         self.logger.addHandler(logging.StreamHandler(self.stream))
+
+        selector = mock.Mock()
+        selector.is_local_container.return_value = True
+
+        def make_one_per(vals):
+            def is_per(*args):
+                vals[0] += 1
+                if vals[0] % vals[1] == 0:
+                    return True
+                return False
+            return is_per
+
+        selector.is_primary = make_one_per([-1, 3])
+
         self.migrator = s3_sync.migrator.Migrator(
-            config, None, 1000, 5, pool, self.logger, 0, 1, 1000000)
+            config, None, 1000, 5, pool, self.logger, selector,
+            11000000000)
         self.migrator.status = mock.Mock()
 
     def get_log_lines(self):
@@ -696,7 +714,7 @@ class TestMigrator(unittest.TestCase):
              'account': 'AUTH_test', 'custom_prefix': '',
              'aws_identity': 'source-account'},
             self.migrator.ic_pool.max_size, False)
-        self.migrator._next_pass.assert_called_once_with()
+        self.migrator._next_pass.assert_has_calls([mock.call()])
 
     @mock.patch('s3_sync.migrator.create_provider')
     def test_empty_container_status(self, create_provider_mock):
@@ -787,7 +805,9 @@ class TestMigrator(unittest.TestCase):
             self.assertEqual(self.migrator.ic_pool.max_size, conns)
             return provider_mock
 
-        def check_pass_provider():
+        def check_pass_provider(is_verify=False):
+            if is_verify:
+                return
             bucket = buckets[next_pass_call[0]]
             self.assertEqual(bucket['name'], self.migrator.config['container'])
             self.assertEqual(
@@ -800,8 +820,7 @@ class TestMigrator(unittest.TestCase):
         self.migrator._next_pass = mock.Mock(side_effect=check_pass_provider)
         self.migrator.next_pass()
         self.assertTrue(self.migrator.config['all_buckets'])
-        self.migrator._next_pass.assert_has_calls(
-            [mock.call(), mock.call()])
+        self.migrator._next_pass.assert_has_calls([mock.call()])
         provider_mock.list_buckets.assert_has_calls(
             [mock.call(None, 10000, None),
              mock.call(buckets[0]['name'], 10000, None)])
@@ -836,12 +855,12 @@ class TestMigrator(unittest.TestCase):
                         'x-object-meta-custom': 'custom',
                         'last-modified': create_timestamp(1.5e9),
                         'x-timestamp': 1499999999.66,
-                        'etag': 'f001a4',
+                        'etag': 'f001a4f001',
                         'Content-Length': '1024'},
                     'expected_headers': {
                         'x-object-meta-custom': 'custom',
                         'x-timestamp': Timestamp(1499999999.66).internal,
-                        'etag': 'f001a4',
+                        'etag': 'f001a4f001',
                         s3_sync.utils.get_sys_migrator_header('object'): str(
                             Timestamp(1499999999.66).internal),
                         'Content-Length': '1024'},
@@ -867,7 +886,7 @@ class TestMigrator(unittest.TestCase):
                     'bytes': '10240000000',
                 }
             },
-            'migrated': []
+            'migrated': ['bar', 'foo'],
         }, {
             'objects': {
                 'foo': {
@@ -875,12 +894,12 @@ class TestMigrator(unittest.TestCase):
                         'x-object-meta-custom': 'custom',
                         'last-modified': create_timestamp(1.5e9),
                         'x-timestamp': 1499999999.66,
-                        'etag': 'f001a4',
+                        'etag': 'f001a4foo2',
                         'Content-Length': '1024'},
                     'expected_headers': {
                         'x-object-meta-custom': 'custom',
                         'x-timestamp': Timestamp(1499999999.66).internal,
-                        'etag': 'f001a4',
+                        'etag': 'f001a4foo2',
                         s3_sync.utils.get_sys_migrator_header('object'): str(
                             Timestamp(1499999999.66).internal),
                         'Content-Length': '1024'},
@@ -892,12 +911,12 @@ class TestMigrator(unittest.TestCase):
                     'remote_headers': {
                         'x-object-meta-custom': 'custom',
                         'last-modified': create_timestamp(1.4e9),
-                        'etag': 'ba3',
+                        'etag': 'ba3bar',
                         'Content-Length': '1024'},
                     'expected_headers': {
                         'x-object-meta-custom': 'custom',
                         'x-timestamp': Timestamp(1.4e9).internal,
-                        'etag': 'ba3',
+                        'etag': 'ba3bar',
                         s3_sync.utils.get_sys_migrator_header('object'): str(
                             Timestamp(1.4e9).internal),
                         'Content-Length': '1024'},
@@ -906,18 +925,19 @@ class TestMigrator(unittest.TestCase):
                     'bytes': '1024',
                 }
             },
+            'migrated': ['foo', 'bar']
         }, {
             'objects': {
                 'foo': {
                     'remote_headers': {
                         'x-object-meta-custom': 'custom',
                         'last-modified': create_timestamp(1.5e9),
-                        'etag': 'f001a4',
+                        'etag': 'f001a4f00',
                         'Content-Length': '1024'},
                     'expected_headers': {
                         'x-object-meta-custom': 'custom',
                         'x-timestamp': Timestamp(1.5e9).internal,
-                        'etag': 'f001a4',
+                        'etag': 'f001a4f00',
                         s3_sync.utils.get_sys_migrator_header('object'): str(
                             Timestamp(1.5e9).internal),
                         'Content-Length': '1024'},
@@ -946,19 +966,20 @@ class TestMigrator(unittest.TestCase):
             'config': {
                 'aws_bucket': 'container',
                 'protocol': 'swift'
-            }
+            },
+            'migrated': ['bar', 'foo'],
         }, {
             'objects': {
                 'foo': {
                     'remote_headers': {
                         'x-object-meta-custom': 'custom',
                         'last-modified': create_timestamp(1.5e9),
-                        'etag': 'f001a4',
+                        'etag': 'f001a4f003',
                         'Content-Length': '1024'},
                     'expected_headers': {
                         'x-object-meta-custom': 'custom',
                         'x-timestamp': Timestamp(1.5e9).internal,
-                        'etag': 'f001a4',
+                        'etag': 'f001a4f003',
                         s3_sync.utils.get_sys_migrator_header('object'): str(
                             Timestamp(1.5e9).internal),
                         'Content-Length': '1024'},
@@ -1003,12 +1024,12 @@ class TestMigrator(unittest.TestCase):
                     'remote_headers': {
                         'x-object-meta-custom': 'custom',
                         'last-modified': create_timestamp(1.5e9),
-                        'etag': 'f001a4',
+                        'etag': 'f001a4f004',
                         'Content-Length': '1024'},
                     'expected_headers': {
                         'x-object-meta-custom': 'custom',
                         'x-timestamp': Timestamp(1.5e9).internal,
-                        'etag': 'f001a4',
+                        'etag': 'f001a4f004',
                         'Content-Length': '1024',
                         s3_sync.utils.get_sys_migrator_header('object'): str(
                             Timestamp(1.5e9).internal)},
@@ -1046,19 +1067,19 @@ class TestMigrator(unittest.TestCase):
                  'last_modified': create_list_timestamp(1.3e9),
                  'hash': 'old-etag'}
             ],
-            'migrated': ['foo', 'bar']
+            'migrated': ['bar', 'foo']
         }, {
             'objects': {
                 'foo': {
                     'remote_headers': {
                         'x-object-meta-custom': 'custom',
                         'last-modified': create_timestamp(1.5e9),
-                        'etag': 'f001a4',
+                        'etag': 'f001a4f005',
                         'Content-Length': '1024'},
                     'expected_headers': {
                         'x-object-meta-custom': 'custom',
                         'x-timestamp': Timestamp(1.5e9).internal,
-                        'etag': 'f001a4',
+                        'etag': 'f001a4f005',
                         'Content-Length': '1024',
                         s3_sync.utils.get_sys_migrator_header('object'): str(
                             Timestamp(1.5e9).internal)},
@@ -1116,12 +1137,15 @@ class TestMigrator(unittest.TestCase):
                  'last_modified': create_list_timestamp(1.3e9),
                  'hash': 'old-etag'}
             ],
-            'migrated': ['foo', 'bar']
+            'migrated': ['bar', 'foo']
         }]
         config = self.migrator.config
         self.migrator._read_account_headers = mock.Mock(return_value={})
+        swift_seg_resp = mock.Mock()
+        swift_seg_resp.status_int = 200
+        swift_seg_resp.headers = {'etag': 'deadbeef'}
 
-        for test in tests:
+        for test_case, test in enumerate(tests):
             objects = test['objects']
             if 'migrated' not in test:
                 migrated = objects.keys()
@@ -1156,22 +1180,34 @@ class TestMigrator(unittest.TestCase):
                   'last_modified': objects[name]['list-time'],
                   'hash': objects[name]['hash'],
                   'bytes': objects[name]['bytes']}
-                 for name in objects.keys()])
+                 for name in sorted(objects.keys())])
             provider.head_bucket.return_value = mock.Mock(
                 status=200, headers={})
             provider.get_object.side_effect = get_object
-            self.swift_client.iter_objects.return_value = iter(local_objects)
+
+            def fake_internal_iterator(*args, **kwargs):
+                for entry in local_objects:
+                    yield entry
+                yield None
+
+            self.migrator._iterate_internal_listing = fake_internal_iterator
+
+            self.swift_client.make_request.return_value = swift_seg_resp
 
             self.migrator.next_pass()
 
-            self.swift_client.make_request.assert_has_calls(
-                [mock.call(
-                    'PUT', mock.ANY,
-                    objects[name]['expected_headers'], (2,), mock.ANY)
-                 for name in migrated])
+            try:
+                self.swift_client.make_request.assert_has_calls(
+                    [mock.call(
+                        'PUT', mock.ANY,
+                        objects[name]['expected_headers'], (2,), mock.ANY)
+                     for name in migrated])
 
-            for call in self.swift_client.upload_object.mock_calls:
-                self.assertEqual('object body', ''.join(call[1][0]))
+                for call in self.swift_client.upload_object.mock_calls:
+                    self.assertEqual('object body', ''.join(call[1][0]))
+            except AssertionError as e:
+                e.args += ('\nTest case: ', test_case)
+                raise
 
     @mock.patch('s3_sync.migrator.create_provider')
     def test_migrate_all_containers_next_pass(self, create_provider_mock):
@@ -1189,12 +1225,15 @@ class TestMigrator(unittest.TestCase):
                         'etag': 'deadbeef',
                         'Content-Length': '1337'},
             StringIO(''))
-        self.swift_client.iter_objects.return_value = iter([])
         create_provider_mock.return_value = provider_mock
         self.migrator.config = {
             'account': 'AUTH_dev',
             'aws_bucket': '/*',
         }
+        swift_201_resp = mock.Mock()
+        swift_201_resp.status_int = 201
+        swift_201_resp.success = True
+        self.swift_client.make_request.return_value = swift_201_resp
         temp_dir = mkdtemp()
         self.addCleanup(lambda: shutil.rmtree(temp_dir))
         status_file = os.path.join(temp_dir, 'migrator.status')
@@ -1348,7 +1387,6 @@ class TestMigrator(unittest.TestCase):
                 self.swift_client.container_exists.side_effect = (False, True)
                 headers = {}
 
-            self.swift_client.iter_objects.return_value = iter([])
             self.swift_client.make_path.return_value = '/'.join(
                 ['http://test/v1', self.migrator.config['account'],
                  self.migrator.config['container']])
@@ -1394,7 +1432,6 @@ class TestMigrator(unittest.TestCase):
         resp.headers = {}
         provider.head_bucket.return_value = resp
         provider.head_account.return_value = {}
-        self.swift_client.iter_objects.return_value = iter([])
         self.swift_client.container_exists.return_value = False
         self.migrator._read_account_headers = mock.Mock(return_value={})
 
@@ -1418,7 +1455,6 @@ class TestMigrator(unittest.TestCase):
         resp.status = 200
         resp.headers = {}
         provider.head_bucket.return_value = resp
-        self.swift_client.iter_objects.return_value = iter([])
         self.swift_client.container_exists.return_value = False
 
         def fake_app(env, func):
@@ -1581,7 +1617,6 @@ class TestMigrator(unittest.TestCase):
             [{'name': 'slo', 'hash': 'deadbeef', 'bytes': '2000'}])
         provider.get_object.side_effect = get_object
         provider.head_object.side_effect = head_object
-        self.swift_client.iter_objects.return_value = iter([])
 
         self.migrator.next_pass()
 
@@ -1850,7 +1885,6 @@ class TestMigrator(unittest.TestCase):
         provider.head_bucket.return_value = bucket_resp
         provider.list_objects.side_effect = list_objects
         provider.get_object.side_effect = get_object
-        self.swift_client.iter_objects.return_value = iter([])
 
         self.migrator.next_pass()
 
@@ -2337,8 +2371,7 @@ class TestMain(unittest.TestCase):
             'logger': self.logger,
             'items_chunk': None,
             'workers': 5,
-            'node_id': 0,
-            'nodes': 1,
+            'selector': mock.Mock(),
             'poll_interval': 30,
             'segment_size': 1000000,
             'once': True,
@@ -2407,12 +2440,21 @@ class TestMain(unittest.TestCase):
 
         old_run = s3_sync.migrator.run
         with self.patch('setup_context') as mock_setup_context,\
+                self.patch('Ring') as mock_ring,\
+                self.patch('is_local_device') as mock_is_local,\
                 self.patch('Migrator') as mock_migrator,\
                 self.patch('Status') as mock_status,\
                 self.patch(
                     'run',
                     new_callable=lambda: mock.Mock(side_effect=old_run))\
                 as mock_run:
+            fake_container_ring = mock.Mock()
+            mock_ring.return_value = fake_container_ring
+            fake_container_ring.get_nodes.return_value = ('foo', [
+                {'ip': 'a.b.c', 'port': 6100},
+                {'ip': 'b.c.a', 'port': 6100},
+                {'ip': 'b.c.d', 'port': 6100}])
+            mock_is_local.return_value = (False, True, False)
             mock_setup_context.return_value = (
                 mock.Mock(log_level='warn', console=True, once=True),
                 config)
@@ -2421,10 +2463,10 @@ class TestMain(unittest.TestCase):
             mock_status.assert_called_once_with('/test/status')
             mock_migrator.assert_called_once_with(
                 config['migrations'][0], mock_status.return_value, 42, 1337,
-                mock.ANY, mock.ANY, 0, 15, 100000000)
+                mock.ANY, mock.ANY, mock.ANY, 100000000)
             mock_run.assert_called_once_with(
                 config['migrations'], mock_status.return_value, mock.ANY,
-                mock.ANY, 42, 1337, 0, 15, 60, 100000000, True)
+                mock.ANY, 42, 1337, mock.ANY, 60, 100000000, True)
 
     @mock.patch('s3_sync.migrator.create_provider')
     def test_migrate_all_containers_error(self, create_provider_mock):
@@ -2457,5 +2499,5 @@ class TestMain(unittest.TestCase):
 
         s3_sync.migrator.run(
             migrations, status, mock.Mock(max_size=10), logging.getLogger(),
-            1000, 10, 0, 1, 10, 1000000, True)
+            1000, 10, mock.Mock(return_value=True), 10, 1000000, True)
         self.assertEqual(old_list, status.status_list)

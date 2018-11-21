@@ -1,25 +1,37 @@
+import copy
 import json
 import logging
 import s3_sync.daemon_utils
 import s3_sync.migrator
+from swift.common.ring import Ring
+from swift.common.utils import whataremyips
+
+
+CONTAINER_RING = Ring('/etc/swift', ring_name='container')
+MYIPS = whataremyips('0.0.0.0')
 
 
 class TempMigratorStatus(object):
     def __init__(self, config):
-        self.config = config
-        self.status = {}
+        new_config = copy.deepcopy(config)
+        self.status_all = [{'config': new_config, 'status': {}}]
 
     def save_migration(self, config, marker, copied, scanned, bytes_count,
                        is_reset):
-        self.status['marker'] = marker
+        status = self.get_migration(config)
+        status['marker'] = marker
         s3_sync.migrator._update_status_counts(
-            self.status, copied, scanned, bytes_count, is_reset)
+            status, copied, scanned, bytes_count, is_reset)
 
     def get_migration(self, config):
         # Currently, we only support a single migration configuration
-        if not s3_sync.migrator.equal_migration(self.config, config):
-            raise NotImplementedError
-        return self.status
+        for stat in self.status_all:
+            if s3_sync.migrator.equal_migration(stat['config'], config):
+                return stat['status']
+        # doesn't exist
+        new_config = copy.deepcopy(config)
+        self.status_all.append({'config': new_config, 'status': {}})
+        return self.status_all[-1]['status']
 
 
 class MigratorFactory(object):
@@ -38,7 +50,8 @@ class MigratorFactory(object):
     def get_migrator(self, migration, status):
         ic_pool = s3_sync.migrator.create_ic_pool(
             self.config, self.SWIFT_DIR, self.migrator_config['workers'] + 1)
+        selector = s3_sync.migrator.Selector(MYIPS, CONTAINER_RING)
         return s3_sync.migrator.Migrator(
             migration, status, self.migrator_config['items_chunk'],
-            self.migrator_config['workers'], ic_pool, self.logger, 0, 1,
-            self.migrator_config.get('segment_size', 100000000))
+            self.migrator_config['workers'], ic_pool, self.logger,
+            selector, self.migrator_config.get('segment_size', 100000000))

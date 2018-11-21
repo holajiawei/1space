@@ -214,6 +214,7 @@ class TestCloudSyncBase(unittest.TestCase):
         },
     }
     S3_CREDS = {}
+    counters = {}
 
     conn_by_acct = {}  # utf8_acct => Connection()
     conn_by_acct_noshunt = {}  # as above, but bypasses any shunt
