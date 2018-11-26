@@ -2,10 +2,21 @@
 
 Features:
 
-- Migration spread accross multiple nodes for redundancy and speed. This
-  includes a new parameter in the migrator settings: 'ring_name' which is the
-  name of the ring to use for resolution of which container to work on and
-  which objects should be done first. Default is 'container'.
+- Added the ability to restore multi-part upload objects and objects bigger than
+  the Swift maximum size through the shunt during migrations.
+- Per-container/bucket migration is now distributed across multiple (container)
+  nodes in the cluster.
+- Container/bucket migrations are now spread accross multiple nodes. This
+  includes a new parameter in the migrator settings: `ring_name`. The specified
+  ring is used to determine the containers a node will process (that are local
+  to the node using that ring). Default ring name is `container`.
+- swift-s3-verify command allows for checking read-only access.
+- The shunt now allows for listing Amazon S3 buckets when configured with
+  a all buckets (`/*`) migration.
+
+Improvements:
+
+- Updated the container-crawler dependency to 0.1.0.
 
 ## 0.1.49.1
 
