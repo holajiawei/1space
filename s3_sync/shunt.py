@@ -18,8 +18,9 @@ import json
 
 from os.path import getmtime
 from swift.common import constraints, swob, utils
+from swift.common.http import HTTP_NOT_FOUND, HTTP_GONE
 from swift.common.wsgi import make_subrequest
-from swift.proxy.controllers.base import get_account_info
+from swift.proxy.controllers.base import get_account_info, get_container_info
 from time import time
 
 from .provider_factory import create_provider
@@ -286,19 +287,8 @@ class S3SyncShunt(object):
                 start_response(status, headers)
                 return app_iter
 
-        vers, acct, cont, _ = req.split_path(4, 4, True)
-        container_path = '/%s' % '/'.join([
-            vers, utils.quote(acct), utils.quote(cont)])
-        put_container_req = make_subrequest(
-            req.environ,
-            method='PUT',
-            path=container_path,
-            headers=headers,
-            swift_source='CloudSync Shunt')
-        put_container_req.environ['swift_owner'] = True
-        status, headers, body = put_container_req.call_application(self.app)
-        utils.close_if_possible(body)
-
+        status, headers = self._create_req_container(
+            req, headers, sync_profile.get('migration'))
         if int(status.split()[0]) // 100 != 2:
             self.logger.warning('Failed to create container: %s' % status)
 
@@ -344,6 +334,12 @@ class S3SyncShunt(object):
                     continue
                 headers[hdr.encode('utf8')] =\
                     remote_resp.headers[hdr].encode('utf8')
+
+            # For migrations (which is the only case where we shunt container
+            # GET requests), we should create the container in Swift.
+            if sync_profile.get('migration'):
+                self._create_req_container(req, headers, True)
+
             # TODO: If to_wsgi does the utf8 header encoding, we wouldn't have
             # to worry about it here.
             status = remote_resp.to_wsgi()[0]
@@ -385,6 +381,11 @@ class S3SyncShunt(object):
         self.logger.debug('Remote resp: %s' % resp.status)
 
         headers = filter_hop_by_hop_headers(headers)
+        # For migrations (which is the only case where we shunt container HEAD
+        # requests), we should create the container in Swift.
+        if sync_profile.get('migration'):
+            self._create_req_container(req, headers, True)
+
         headers.extend(trans_id_headers)
 
         # TODO: Unfortunately, on HEAD bucket, S3 returns a 200 OK. To
@@ -416,6 +417,26 @@ class S3SyncShunt(object):
                                    per_account=per_account)
         if req.method == 'GET' and sync_profile.get('restore_object', False) \
                 and 'range' not in req.headers:
+
+            maybe_restore = True
+            if sync_profile.get('migration'):
+                # For migrations, we should create the container in Swift, as
+                # otherwise restores will fail.
+                container_info = get_container_info(
+                    req.environ, self.app, swift_source='1space-shunt')
+                if container_info['status'] in (HTTP_NOT_FOUND, HTTP_GONE):
+                    resp = provider.head_bucket(sync_profile['aws_bucket'])
+                    if not resp.success:
+                        maybe_restore = False
+                    else:
+                        container_headers = [
+                            (k.encode('utf-8'), unicode(v).encode('utf-8'))
+                            for k, v in resp.headers.iteritems()]
+                        container_headers = filter_hop_by_hop_headers(
+                            container_headers)
+                        self._create_req_container(
+                            req, container_headers, True)
+
             # We incur an extra request hit by checking for a possible SLO.
             obj = obj.decode('utf-8')
             if sync_profile.get('migration') and\
@@ -428,7 +449,11 @@ class S3SyncShunt(object):
 
             if response_is_complete(int(status.split()[0]), headers):
                 put_headers = convert_to_local_headers(headers)
-                if check_slo(put_headers):
+                if not maybe_restore:
+                    # We are not attempting to restore an object -- preserve
+                    # the original body.
+                    pass
+                elif check_slo(put_headers):
                     if manifest:
                         app_iter = SwiftSloPutWrapper(
                             app_iter, put_headers, req.environ['PATH_INFO'],
@@ -451,6 +476,7 @@ class S3SyncShunt(object):
                         self._migrator_settings.get(
                             'segment_size', DEFAULT_SEGMENT_SIZE))
                 else:
+                    # Base case for restoring regular objects
                     app_iter = SwiftPutWrapper(
                         app_iter, put_headers, req.environ['PATH_INFO'],
                         self.app, self.logger)
@@ -513,6 +539,25 @@ class S3SyncShunt(object):
         status, headers, app_iter = provider.shunt_post(req, obj)
         start_response(status, headers)
         return app_iter
+
+    def _create_req_container(self, req, headers, migration=False):
+        vers, acct, cont, _ = req.split_path(3, 4, True)
+        container_path = '/%s' % '/'.join([
+            vers, utils.quote(acct), utils.quote(cont)])
+        headers = dict(headers)
+        if migration:
+            headers[get_sys_migrator_header('container')] =\
+                MigrationContainerStates.MIGRATING
+        put_container_req = make_subrequest(
+            req.environ,
+            method='PUT',
+            path=container_path,
+            headers=headers,
+            swift_source='1space-shunt')
+        put_container_req.environ['swift_owner'] = True
+        status, headers, body = put_container_req.call_application(self.app)
+        utils.close_if_possible(body)
+        return status, headers
 
 
 def filter_factory(global_conf, **local_conf):

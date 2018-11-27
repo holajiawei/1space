@@ -391,8 +391,7 @@ class TestMigrator(TestCloudSyncBase):
 
         def _verify_objects(conn, container):
             for name, expected_body, user_meta in test_objects:
-                hdrs, body = conn.get_object(container, name)
-                self.assertEqual(expected_body, body)
+                hdrs = conn.head_object(container, name)
                 for k, v in user_meta.items():
                     self.assertIn(k, hdrs)
                     self.assertEqual(v, hdrs[k])
@@ -514,7 +513,6 @@ class TestMigrator(TestCloudSyncBase):
                                    'x-container-meta-test': 'test metadata'})
 
         conn_noshunt = self.conn_for_acct_noshunt(migration['account'])
-        conn_local = self.conn_for_acct(migration['account'])
 
         def _check_container_created(conn):
             try:
@@ -523,18 +521,6 @@ class TestMigrator(TestCloudSyncBase):
                 if e.http_status == 404:
                     return False
                 raise
-
-        # verify get_head works through shunt
-        hdrs = conn_local.head_container(migration['container'])
-        self.assertIn('x-container-meta-test', hdrs)
-        self.assertEqual('test metadata', hdrs['x-container-meta-test'])
-
-        # Verify get_container works through shunt
-        res = _check_container_created(conn_local)
-        self.assertTrue(res)
-        hdrs, listing = res
-        self.assertIn('x-container-meta-test', hdrs)
-        self.assertEqual('test metadata', hdrs['x-container-meta-test'])
 
         # verify container not really there
         self.assertFalse(_check_container_created(conn_noshunt))
@@ -624,7 +610,7 @@ class TestMigrator(TestCloudSyncBase):
                     self.assertIn(k, hdrs)
                     self.assertEqual(v, hdrs[k])
 
-    def test_shunt_all_containers(self):
+    def test_shunt_list_container_all_containers(self):
         test_objects = [
             ('swift-blobBBB2', 'blob content', {}),
             (u'swift-2unicod\u00e9', '\xde\xad\xbe\xef', {}),
@@ -637,14 +623,116 @@ class TestMigrator(TestCloudSyncBase):
               'content-encoding': 'identity',
               'x-delete-at': str(int(time.time() + 7200))})]
 
-        self.swift_nuser.put_container('container')
+        container = 'container'
+        container_headers = {
+            'x-container-meta-test': 'test-header',
+            u'x-container-meta-unicod\u00e9': u'\u262f'}
+        self.swift_nuser.put_container(container, headers=container_headers)
         for name, body, headers in test_objects:
-            self.nuser_swift('put_object', 'container', name,
+            self.nuser_swift('put_object', container, name,
                              StringIO.StringIO(body), headers=headers)
-        _, listing = self.nuser2_swift('get_container', 'container')
+        # Ensure the container does not yet exist
+        conn_noshunt = self.conn_for_acct_noshunt('AUTH_nacct2')
+        with self.assertRaises(swiftclient.exceptions.ClientException) as ctx:
+            conn_noshunt.head_container(container)
+        self.assertEqual(404, ctx.exception.http_status)
+
+        _, listing = self.nuser2_swift('get_container', container)
         self.assertEqual(
             sorted([obj[0] for obj in test_objects]),
             [obj['name'] for obj in listing])
+        # The container should now exist
+        new_container_headers = conn_noshunt.head_container(container)
+        self.assertFalse(
+            any(filter(lambda k: k.startswith('Remote'),
+                       new_container_headers.keys())))
+        for hdr in container_headers:
+            self.assertEqual(
+                container_headers[hdr], new_container_headers[hdr])
+
+    def test_shunt_get_object_all_containers(self):
+        test_objects = [
+            ('swift-blobBBB2', 'blob content', {}),
+            (u'swift-2unicod\u00e9', '\xde\xad\xbe\xef', {}),
+            ('swift-2with-headers',
+             'header-blob',
+             {'x-object-meta-custom-header': 'value',
+              u'x-object-meta-unicod\u00e9': u'\u262f',
+              'content-type': 'migrator/test',
+              'content-disposition': "attachment; filename='test-blob.jpg'",
+              'content-encoding': 'identity',
+              'x-delete-at': str(int(time.time() + 7200))})]
+        container = 'shunt-get-object'
+        container_headers = {
+            'x-container-meta-test': 'test-header',
+            u'x-container-meta-unicod\u00e9': u'\u262f'}
+        self.swift_nuser.put_container(container, headers=container_headers)
+        for name, body, headers in test_objects:
+            self.nuser_swift('put_object', container, name,
+                             StringIO.StringIO(body), headers=headers)
+        # Ensure the container does not yet exist
+        conn_noshunt = self.conn_for_acct_noshunt('AUTH_nacct2')
+        with self.assertRaises(swiftclient.exceptions.ClientException) as ctx:
+            conn_noshunt.head_container(container)
+        self.assertEqual(404, ctx.exception.http_status)
+
+        # We should be able to restore the objects even if the container does
+        # not yet exist
+        for name, body, headers in test_objects:
+            restored_headers, restored_body = self.nuser2_swift(
+                'get_object', container, name)
+            self.assertEqual(body, restored_body)
+            for hdr in headers:
+                self.assertEqual(headers[hdr], restored_headers[hdr])
+
+        # The container should now exist
+        new_container_headers = conn_noshunt.head_container(container)
+        self.assertFalse(
+            any(filter(lambda k: k.startswith('Remote'),
+                       new_container_headers.keys())))
+        for hdr in container_headers:
+            self.assertEqual(
+                container_headers[hdr], new_container_headers[hdr])
+
+    def test_shunt_head_container(self):
+        '''HEAD on the container should create it'''
+        acl = 'AUTH_' + self.SWIFT_CREDS['dst']['user'].split(':')[0]
+        container_headers = {
+            'x-container-meta-test': 'test-header',
+            u'x-container-meta-unicod\u00e9': u'\u262f',
+            'x-container-read': acl}
+        container = 'shunt-head-container'
+        self.swift_nuser.put_container(container, headers=container_headers)
+
+        # Ensure the container does not yet exist
+        conn_noshunt = self.conn_for_acct_noshunt('AUTH_nacct2')
+        with self.assertRaises(swiftclient.exceptions.ClientException) as ctx:
+            conn_noshunt.head_container(container)
+        self.assertEqual(404, ctx.exception.http_status)
+
+        self.swift_nuser2.head_container(container)
+
+        # The container should now exist
+        new_container_headers = conn_noshunt.head_container(container)
+        self.assertFalse(
+            any(filter(lambda k: k.startswith('Remote'),
+                       new_container_headers.keys())))
+        for hdr in container_headers:
+            if hdr == 'x-container-read':
+                continue
+            self.assertEqual(
+                container_headers[hdr], new_container_headers[hdr])
+
+        # Try to read using the ACL
+        scheme, rest = self.SWIFT_CREDS['authurl'].split(':', 1)
+        swift_host, _ = urllib.splithost(rest)
+        remote_swift = swiftclient.client.Connection(
+            authurl=self.SWIFT_CREDS['authurl'],
+            user=self.SWIFT_CREDS['dst']['user'],
+            key=self.SWIFT_CREDS['dst']['key'],
+            os_options={'object_storage_url': '%s://%s/v1/AUTH_nacct2' % (
+                scheme, swift_host)})
+        remote_swift.get_container(container)
 
     def test_propagate_delete(self):
         migration = self.swift_migration()

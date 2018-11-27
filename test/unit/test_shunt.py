@@ -629,6 +629,7 @@ class TestShunt(unittest.TestCase):
         self.assertEqual([
             ('HEAD', '/v1/%s' % account),
             ('GET', '/v1/%s/foo' % path),
+            ('HEAD', '/v1/%s' % path),
             ('PUT', '/v1/%s_segments' % path),
             ('PUT', _part_segment(path, 0)),
             ('PUT', _part_segment(path, 1)),
@@ -680,6 +681,7 @@ class TestShunt(unittest.TestCase):
         self.assertEqual([
             ('HEAD', '/v1/%s' % account),
             ('GET', '/v1/%s/foo' % path),
+            ('HEAD', '/v1/%s' % path),
             ('PUT', '/v1/%s_segments' % path),
             ('PUT', _part_segment(path, 0)),
             ('PUT', _part_segment(path, 1)),

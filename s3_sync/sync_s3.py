@@ -287,7 +287,7 @@ class SyncS3(BaseSync):
     def head_bucket(self, bucket=None, **options):
         if not bucket:
             bucket = self.aws_bucket
-        return self._call_boto('head_bucket', bucket, None, **options)
+        return self._call_boto('head_bucket', Bucket=bucket, **options)
 
     def shunt_post(self, req, swift_key):
         """Propagate metadata to the remote store
