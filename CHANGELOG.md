@@ -1,3 +1,16 @@
+## 0.1.51
+
+Bug fixes:
+
+- The migrator will now create destination containers if one of the following
+  requests is made and the container does not yet exist: container HEAD/GET or
+  object GET. This allows restoring objects through the migrator even if
+  the container does not yet exist.
+- The migrator now will only convert to static large objects bigger than Swift
+  `MAX_FILE_SIZE`. Previously (in versions 0.1.49 to 0.1.50), objects larger
+  than the migrator segment size, but smaller than `MAX_FILE_SIZE` would also
+  be converted to SLOs.
+
 ## 0.1.50
 
 Features:
