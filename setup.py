@@ -6,7 +6,7 @@ setup(name='swift-s3-sync',
       version='0.1.51',
       author='SwiftStack',
       test_suite='nose.collector',
-      url='https://github.com/swiftstack/swift-s3-sync',
+      url='https://github.com/swiftstack/1space',
       packages=['s3_sync', 's3_sync.cloud_connector'],
       dependency_links=[
           'git://github.com/swiftstack/botocore.git@1.12.23.1'

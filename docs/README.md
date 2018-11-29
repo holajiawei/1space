@@ -1,7 +1,7 @@
-Swift-S3 Sync
--------------
+1space
+------
 
-Swift-S3 Sync is a way to share data between on-premises [OpenStack
+1space is a way to share data between on-premises [OpenStack
 Swift](https://github.com/openstack/swift)
 deployments and [Amazon S3](https://aws.amazon.com/s3) (or S3-clones). The
 project initially allowed for propagating any changes from Swift to S3 -- PUT,
@@ -21,17 +21,17 @@ access](https://cloud.google.com/storage/docs/migrating#keys) to be enabled.
 
 ### Design overview
 
-`swift-s3-sync` runs as a standalone process, intended to be used on Swift
+`1space` runs as a standalone process, intended to be used on Swift
 container nodes. The container database provides the list of changes to the
 objects in Swift (whether it was a metadata update, new object, or a deletion).
 
 To provide on-line access to archived Swift objects, there is a Swift middleware
-[component](https://github.com/swiftstack/swift-s3-sync/blob/master/s3_sync/shunt.py).
+[component](https://github.com/swiftstack/1space/blob/master/s3_sync/shunt.py).
 If a Swift container was configured to be archived, the middleware will query the
 destination store for contents on a GET request, as well as splice the results
 of LIST requests between the two stores.
 
-There is no explicit coordination between the `swift-s3-sync` daemons.
+There is no explicit coordination between the `1space` daemons.
 Implicitly, they coordinate through their progress in the container database.
 Each daemon looks up the number of container nodes in the system (with the
 assumption that each node has a running daemon). Initially, each only handles
@@ -44,7 +44,7 @@ the remote store in the common case).
 
 ### How to setup and use
 
-`swift-s3-sync` depends on:
+`1space` depends on:
 
 - [container-crawler library](https://github.com/swiftstack/container-crawler)
 - [botocore](https://github.com/swiftstack/botocore/tree/1.12.23.1)
@@ -54,7 +54,7 @@ the remote store in the common case).
 - [eventlet](https://github.com/eventlet/eventlet)
 
 Until we can merge the boto patches, you will also have to install botocore from
-our fork (do this before installing swift-s3-sync):
+our fork (do this before installing 1space):
 `pip install -e git://github.com/swiftstack/botocore.git@1.12.23.1#egg=botocore`
 
 Build the package to be installed on the nodes with:
@@ -78,9 +78,9 @@ After that, you should have the `swift-s3-sync` executable available in
 `swift-s3-sync` has to be invoked with a configuration file, specifying which
 containers to watch, where the contents should be placed, as well as a number of
 global settings. A sample configuration file is in the
-[repository](https://github.com/swiftstack/swift-s3-sync/blob/master/sync.json-sample).
+[repository](https://github.com/swiftstack/1space/blob/master/sync.json-sample).
 
-To configure the Swift Proxy servers to use `swift-s3-sync` to redirect requests
+To configure the Swift Proxy servers to use `1space` to redirect requests
 for archived objects, you have to add the following to the proxy pipeline:
 ```
 [filter:swift_s3_shunt]
@@ -195,12 +195,12 @@ To deploy cloud-connector, you need the following inputs:
 1. A JSON-format database of authorized cloud-connector users and their
    corresponding secret S3-API keys **from the Swift cluster that the
    cloud-connector container will be pointed at**.  See
-   [here](https://github.com/swiftstack/swift-s3-sync/blob/master/containers/swift-s3-sync/s3-passwd.json)
+   [here](https://github.com/swiftstack/1space/blob/master/containers/swift-s3-sync/s3-passwd.json)
    for an example.
 1. A copy of the CloudSync JSON-format config file as used inside the Swift
    cluster.
 1. A configuration file for cloud-connector.  See
-   [here](https://github.com/swiftstack/swift-s3-sync/blob/master/containers/swift-s3-sync/cloud-connector.conf)
+   [here](https://github.com/swiftstack/1space/blob/master/containers/swift-s3-sync/cloud-connector.conf)
    for an example.  Of particular interest are the `swift_baseurl` setting in
    the `[DEFAULT]` section, `conf_file` setting in the `[app:proxy-server]`
    section, and the `s3_passwd_json` setting in the
