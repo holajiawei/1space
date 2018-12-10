@@ -453,6 +453,24 @@ class TestCloudSync(TestCloudSyncBase):
 
         self._assert_stats(mapping, 1, 'copied_objects')
 
+    def test_swift_sync_container_metadata(self):
+        mapping = self._find_mapping(
+            lambda m: m.get('sync_container_metadata'))
+        crawler = utils.get_container_crawler(mapping)
+        conn = self.conn_for_acct(mapping['account'])
+        test_metadata = {
+            'x-container-meta-test1': 'test1value',
+            'x-container-meta-test2': 'test2value',
+            u'x-container-meta-tes\u00e9t': u'test\u262f metadata',
+        }
+        conn.put_container(
+            # Note: copying dict because SwiftClient mutates headers
+            mapping['container'], headers=dict(test_metadata))
+        crawler.run_once()
+        hdrs = self.remote_swift('head_container', mapping['aws_bucket'])
+        for key in test_metadata:
+            self.assertEqual(hdrs.get(key), test_metadata[key])
+
     def test_provider_s3_put_object_defaults(self):
         mapping = self.s3_sync_mapping()
         provider = create_provider(mapping, 1)

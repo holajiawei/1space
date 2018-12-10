@@ -853,6 +853,9 @@ class SyncS3(BaseSync):
             parts.append(error.message)
         return ' '.join(parts)
 
+    def select_container_metadata(self, metadata_dict):
+        return {}
+
     @staticmethod
     def check_etag(swift_etag, s3_etag):
         # S3 ETags are enclosed in ""
