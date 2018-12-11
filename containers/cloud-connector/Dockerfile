@@ -10,6 +10,7 @@ RUN apk --no-cache add \
     automake \
     build-base \
     ca-certificates \
+    expat-dev \
     git \
     libffi-dev \
     libressl-dev \
@@ -55,6 +56,8 @@ ARG CONF_BUCKET=cloud-connector-conf
 RUN apk del .python-rundeps && apk --no-cache add \
     bash \
     ca-certificates \
+    libffi \
+    expat \
     libxml2 \
     libxslt \
     sqlite-libs \
