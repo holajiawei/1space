@@ -24,8 +24,8 @@ Features:
   ring is used to determine the containers a node will process (that are local
   to the node using that ring). Default ring name is `container`.
 - swift-s3-verify command allows for checking read-only access.
-- The shunt now allows for listing Amazon S3 buckets when configured with
-  a all buckets (`/*`) migration.
+- The shunt now allows for listing Amazon S3 buckets when configured with an
+  all buckets (`/*`) migration.
 
 Improvements:
 
