@@ -30,7 +30,7 @@ RUN apk --no-cache add \
 # Install non-cloud-builder Python dependencies
 COPY containers/cloud-connector/*.txt requirements.txt ./
 ARG SWIFT_REPO=openstack/swift
-ARG SWIFT_TAG=2.17.0
+ARG SWIFT_TAG=2.19.0
 RUN pip install --no-warn-script-location -I --root /python-root \
     -r ./requirements.txt -r ./cloud-connector-requirements.txt \
     "git+https://github.com/${SWIFT_REPO}@${SWIFT_TAG}#egg=swift"
