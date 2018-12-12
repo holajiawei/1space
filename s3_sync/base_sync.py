@@ -113,6 +113,16 @@ class BaseSync(object):
     MB = 1024 * 1024
     GB = 1024 * MB
 
+    # Possible results of upload_object
+    class UploadStatus(object):
+        NOOP = 0  # object already exists
+        PUT = 1
+        POST = 2
+        SKIPPED_METADATA = 3  # if metadata does not match
+        INVALID_SLO = 4  # if the manifest cannot be validated
+        NOT_FOUND = 5  # object does not appear to exist in Swift
+        SKIPPED_NESTED_SLO = 6
+
     class HttpClientPoolEntry(object):
         def __init__(self, client, pool):
             self.semaphore = eventlet.semaphore.Semaphore(

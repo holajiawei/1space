@@ -364,7 +364,7 @@ class SyncSwift(BaseSync):
                 headers=req_hdrs)
         except UnexpectedResponse as e:
             if '404 Not Found' in e.message:
-                return True
+                return self.UploadStatus.NOT_FOUND
             raise
 
         if not segment:
@@ -377,27 +377,28 @@ class SyncSwift(BaseSync):
             self.logger.debug(
                 'Not archiving %s as metadata does not match: %s %s' % (
                     key, metadata, self.selection_criteria))
-            return False
+            return self.UploadStatus.SKIPPED_METADATA
 
         if check_slo(metadata):
             if segment:
                 self.logger.warning(
                     'Nested SLOs are not currently supported. Failing to '
                     'upload: %s/%s/%s' % (self.account, src_container, key))
-                return False
+                return self.UploadStatus.SKIPPED_NESTED_SLO
 
             if remote_meta and self._check_slo_uploaded(
                     key, remote_meta, internal_client, req_hdrs):
                 if not self._is_meta_synced(metadata, remote_meta):
                     self.update_metadata(key, metadata, dst_container)
-                return True
-            self._upload_slo(key, internal_client, req_hdrs)
-            return True
+                    return self.UploadStatus.POST
+                return self.UploadStatus.NOOP
+            return self._upload_slo(key, internal_client, req_hdrs)
 
         if remote_meta and metadata['etag'] == remote_meta['etag']:
             if not self._is_meta_synced(metadata, remote_meta):
                 self.update_metadata(key, metadata, dst_container)
-            return True
+                return self.UploadStatus.POST
+            return self.UploadStatus.NOOP
 
         with self.client_pool.get_client() as swift_client:
             wrapper_stream = FileWrapper(internal_client,
@@ -422,7 +423,7 @@ class SyncSwift(BaseSync):
                     content_length=len(wrapper_stream))
             finally:
                 wrapper_stream.close()
-        return True
+        return self.UploadStatus.PUT
 
     def _make_content_location(self, bucket):
         # If the identity gets in here as UTF8-encoded string (e.g. through the
@@ -499,6 +500,7 @@ class SyncSwift(BaseSync):
                 self.remote_container, key, json.dumps(new_manifest),
                 headers=manifest_hdrs,
                 query_string='multipart-manifest=put')
+        return self.UploadStatus.PUT
 
     def get_manifest(self, key, bucket=None):
         if bucket is None:

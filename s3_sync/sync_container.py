@@ -17,6 +17,9 @@ limitations under the License.
 import eventlet
 eventlet.patcher.monkey_patch(all=True)
 
+import container_crawler.base_sync
+from container_crawler.exceptions import RetryError
+
 import json
 import logging
 import os
@@ -27,9 +30,8 @@ from swift.common.internal_client import UnexpectedResponse
 import time
 import urllib
 
-import container_crawler.base_sync
+from .base_sync import BaseSync
 from .provider_factory import create_provider
-from container_crawler.exceptions import RetryError
 
 from .base_sync import LOGGER_NAME
 
@@ -159,17 +161,22 @@ class SyncContainer(container_crawler.base_sync.BaseSync):
         if row['deleted']:
             if self.propagate_delete:
                 self.provider.delete_object(row['name'])
-            self.statsd_increment('deleted_objects', 1)
+                self.statsd_increment('deleted_objects', 1)
         else:
             # The metadata timestamp should always be the latest timestamp
             _, _, meta_ts = decode_timestamps(row['created_at'])
             if time.time() <= self.copy_after + meta_ts.timestamp:
                 raise RetryError('Object is not yet eligible for archive')
-            uploaded = self.provider.upload_object(row, swift_client)
-            if uploaded:
+            status = self.provider.upload_object(row, swift_client)
+            if status == BaseSync.UploadStatus.PUT:
                 self.statsd_increment('copied_objects', 1)
 
-            if not self.retain_local and uploaded:
+            uploaded_statuses = [
+                BaseSync.UploadStatus.PUT,
+                BaseSync.UploadStatus.POST,
+                # NOOP means the object already exists
+                BaseSync.UploadStatus.NOOP]
+            if not self.retain_local and status in uploaded_statuses:
                 # NOTE: We rely on the DELETE object X-Timestamp header to
                 # mitigate races where the object may be overwritten. We
                 # increment the offset to ensure that we never remove new

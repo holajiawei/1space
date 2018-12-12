@@ -950,9 +950,7 @@ class TestCloudSync(TestCloudSyncBase):
                 self.assertEqual(
                     old_headers[(cont, obj)]['x-timestamp'],
                     hdrs['x-timestamp'])
-        # NOTE: currently, we do not distinguish between uploading an object
-        # and updating its metadata.
-        self._assert_stats(mapping, 1, 'copied_objects')
+        self._assert_stats(mapping, 0, 'copied_objects')
         clear_swift_container(self.swift_src, mapping['container'])
         clear_swift_container(self.swift_dst, mapping['aws_bucket'])
 

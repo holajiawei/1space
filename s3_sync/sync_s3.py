@@ -165,7 +165,7 @@ class SyncS3(BaseSync):
                 headers=swift_req_hdrs)
         except UnexpectedResponse as e:
             if '404 Not Found' in e.message:
-                return
+                return self.UploadStatus.NOT_FOUND
             raise
         _, _, metadata_timestamp = decode_timestamps(row['created_at'])
         if float(metadata['x-timestamp']) < metadata_timestamp.timestamp:
@@ -175,19 +175,18 @@ class SyncS3(BaseSync):
             self.logger.debug(
                 'Not archiving %s as metadata does not match: %s %s' % (
                     swift_key, metadata, self.selection_criteria))
-            return False
+            return self.UploadStatus.SKIPPED_METADATA
 
         self.logger.debug("Metadata: %s" % str(metadata))
         if check_slo(metadata):
-            self.upload_slo(row, s3_meta, internal_client)
-            return True
+            return self.upload_slo(row, s3_meta, internal_client)
 
         if s3_meta and self.check_etag(metadata['etag'], s3_meta['ETag']):
             if self.is_object_meta_synced(s3_meta, metadata):
-                return True
+                return self.UploadStatus.NOOP
             elif not self.in_glacier(s3_meta):
                 self.update_metadata(swift_key, metadata)
-                return True
+                return self.UploadStatus.POST
 
         with self.client_pool.get_client() as s3_client:
             wrapper_stream = FileWrapper(internal_client,
@@ -214,7 +213,7 @@ class SyncS3(BaseSync):
                 s3_client.put_object(**params)
             finally:
                 wrapper_stream.close()
-        return True
+        return self.UploadStatus.PUT
 
     def delete_object(self, swift_key):
         s3_key = self.get_s3_name(swift_key)
@@ -519,27 +518,27 @@ class SyncS3(BaseSync):
             # failures.
             self.logger.error('Failed to validate the SLO manifest for %s' %
                               self._full_name(swift_key))
-            return
+            return self.UploadStatus.INVALID_SLO
 
         if self._google():
             if s3_meta:
                 slo_etag = s3_meta['Metadata'].get(SLO_ETAG_FIELD, None)
                 if slo_etag == headers['etag']:
                     if self.is_object_meta_synced(s3_meta, headers):
-                        return
+                        return self.UploadStatus.NOOP
                     self.update_metadata(swift_key, headers)
-                    return
+                    return self.UploadStatus.POST
             self._upload_google_slo(manifest, headers, s3_key, internal_client)
         else:
             expected_etag = get_slo_etag(manifest)
 
             if s3_meta and self.check_etag(expected_etag, s3_meta['ETag']):
                 if self.is_object_meta_synced(s3_meta, headers):
-                    return
+                    return self.UploadStatus.NOOP
                 elif not self.in_glacier(s3_meta):
                     self.update_slo_metadata(headers, manifest, s3_key,
                                              swift_req_hdrs, internal_client)
-                    return
+                    return self.UploadStatus.POST
             self._upload_slo(manifest, headers, s3_key, internal_client)
 
         with self.client_pool.get_client() as s3_client:
@@ -555,6 +554,7 @@ class SyncS3(BaseSync):
             if self._is_amazon() and self.encryption:
                 params['ServerSideEncryption'] = 'AES256'
             s3_client.put_object(**params)
+            return self.UploadStatus.PUT
 
     def _upload_google_slo(self, manifest, metadata, s3_key, internal_client):
         with self.client_pool.get_client() as s3_client:

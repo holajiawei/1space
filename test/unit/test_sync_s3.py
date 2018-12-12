@@ -36,6 +36,11 @@ from utils import FakeStream
 
 
 class TestSyncS3(unittest.TestCase):
+    boto_not_found = ClientError(
+        dict(Error=dict(Code='NotFound', Message='Not found'),
+             ResponseMetadata=dict(HTTPStatusCode=404, HTTPReaders={})),
+        'HEAD')
+
     @mock.patch('s3_sync.sync_s3.boto3.session.Session')
     def setUp(self, mock_boto3):
         self.mock_boto3_session = mock.Mock()
@@ -1961,3 +1966,79 @@ class TestSyncS3(unittest.TestCase):
                 {'name': 'key',
                  'storage_policy_index': 0,
                  'created_at': str(2e9)}, mock_ic)
+
+    def test_lifecycle_skip_selection_criteria(self):
+        '''Should not lifecycle objects if metadata does not match.'''
+        self.mock_boto3_client.head_object.side_effect = self.boto_not_found
+        mock_ic = mock.Mock(get_object_metadata=mock.Mock(
+            return_value={'x-object-meta-foo': 'False',
+                          'x-timestamp': 1e9}))
+        self.sync_s3.selection_criteria = {
+            'AND': [{'x-object-meta-foo': 'True'},
+                    {'x-object-meta-bar': 'False'}]}
+
+        self.assertEqual(SyncS3.UploadStatus.SKIPPED_METADATA,
+                         self.sync_s3.upload_object(
+                             {'name': 'key',
+                              'storage_policy_index': 0,
+                              'created_at': str(1e9)}, mock_ic))
+
+    def test_lifecycle_match_selection_criteria(self):
+        '''Should lifecycle objects with matching metadata.'''
+        object_meta = {u'x-object-meta-fo\u00f4'.encode('utf-8'): 'True',
+                       u'x-object-meta-b\u00e4r'.encode('utf-8'): 'False',
+                       'x-timestamp': 1e9,
+                       'Content-Length': '1024',
+                       'etag': 'deadbeef',
+                       'content-type': 'applcation/unknown'}
+        self.mock_boto3_client.head_object.side_effect = self.boto_not_found
+        mock_ic = mock.Mock(
+            get_object_metadata=mock.Mock(return_value=object_meta),
+            get_object=mock.Mock(
+                return_value=(200, object_meta, FakeStream())))
+        self.sync_s3.selection_criteria = {
+            'AND': [{u'x-object-meta-fo\u00d4': 'True'},
+                    {u'x-object-meta-b\u00c4r': 'False'}]}
+
+        self.assertEqual(SyncS3.UploadStatus.PUT,
+                         self.sync_s3.upload_object(
+                             {'name': 'key',
+                              'storage_policy_index': 0,
+                              'created_at': str(1e9)}, mock_ic))
+
+    def test_upload_not_found(self):
+        '''Should return NOT_FOUND for objects we can't GET'''
+        mock_ic = mock.Mock(
+            get_object_metadata=mock.Mock(
+                side_effect=UnexpectedResponse('404 Not Found', None)))
+        self.mock_boto3_client.head_object.side_effect = self.boto_not_found
+
+        self.assertEqual(SyncS3.UploadStatus.NOT_FOUND,
+                         self.sync_s3.upload_object(
+                             {'name': 'key',
+                              'storage_policy_index': 0,
+                              'created_at': str(1e9)}, mock_ic))
+
+    def test_upload_invalid_slo(self):
+        '''Should return INVALID_SLO for SLOs we cannot upload'''
+        object_meta = {'x-static-large-object': 'True',
+                       'x-timestamp': 1e9}
+        bad_manifest = [{'name': '/container/object'}]
+        mock_ic = mock.Mock(
+            get_object_metadata=mock.Mock(return_value=object_meta),
+            get_object=mock.Mock(
+                return_value=(200, object_meta,
+                              FakeStream(content=json.dumps(bad_manifest)))))
+        self.assertEqual(SyncS3.UploadStatus.INVALID_SLO,
+                         self.sync_s3.upload_object(
+                             {'name': 'key',
+                              'storage_policy_index': 0,
+                              'created_at': str(1e9)}, mock_ic))
+        self.assertEqual(
+            [mock.call(
+                'SLO segment /container/object must include size and etag'),
+             mock.call(
+                'Failed to validate the SLO manifest for '
+                'account/container/key')],
+            self.logger.error.mock_calls)
+        self.logger.error.reset_mock()

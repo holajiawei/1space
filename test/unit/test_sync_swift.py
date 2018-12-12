@@ -53,6 +53,9 @@ class FakeBody(object):
 
 
 class TestSyncSwift(unittest.TestCase):
+    not_found = swiftclient.exceptions.ClientException(
+        'not found', http_status=404)
+
     def setUp(self):
         self.aws_bucket = 'container'
         self.scratch_space = 'scratch'
@@ -1310,3 +1313,44 @@ class TestSyncSwift(unittest.TestCase):
                 {'name': 'key',
                  'storage_policy_index': 0,
                  'created_at': str(2e9)}, mock_ic)
+
+    @mock.patch('s3_sync.sync_swift.swiftclient.client.Connection')
+    def test_lifecycle_skip_selection_criteria(self, mock_swift):
+        '''Should not lifecycle objects if metadata does not match.'''
+        mock_swift.return_value.head_object.side_effect = self.not_found
+        mock_ic = mock.Mock(get_object_metadata=mock.Mock(
+            return_value={'x-object-meta-foo': 'False',
+                          'x-timestamp': 1e9}))
+        self.sync_swift.selection_criteria = {
+            'AND': [{'x-object-meta-foo': 'True'},
+                    {'x-object-meta-bar': 'False'}]}
+
+        self.assertEqual(SyncSwift.UploadStatus.SKIPPED_METADATA,
+                         self.sync_swift.upload_object(
+                             {'name': 'key',
+                              'storage_policy_index': 0,
+                              'created_at': str(1e9)}, mock_ic))
+
+    @mock.patch('s3_sync.sync_swift.swiftclient.client.Connection')
+    def test_lifecycle_match_selection_criteria(self, mock_swift):
+        '''Should lifecycle objects with matching metadata.'''
+        mock_swift.return_value.head_object.side_effect = self.not_found
+        object_meta = {u'x-object-meta-fo\u00f4'.encode('utf-8'): 'True',
+                       u'x-object-meta-b\u00e4r'.encode('utf-8'): 'False',
+                       'x-timestamp': 1e9,
+                       'Content-Length': '1024',
+                       'etag': 'deadbeef',
+                       'content-type': 'applcation/unknown'}
+        mock_ic = mock.Mock(
+            get_object_metadata=mock.Mock(return_value=object_meta),
+            get_object=mock.Mock(
+                return_value=(200, object_meta, FakeStream())))
+        self.sync_swift.selection_criteria = {
+            'AND': [{u'x-object-meta-fo\u00d4': 'True'},
+                    {u'x-object-meta-b\u00c4r': 'False'}]}
+
+        self.assertEqual(SyncSwift.UploadStatus.PUT,
+                         self.sync_swift.upload_object(
+                             {'name': 'key',
+                              'storage_policy_index': 0,
+                              'created_at': str(1e9)}, mock_ic))

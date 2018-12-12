@@ -463,6 +463,7 @@ class TestSyncContainer(unittest.TestCase):
 
         sync = SyncContainer(self.scratch_space, settings)
         sync.provider = mock.Mock()
+        sync.provider.upload_object.return_value = SyncS3.UploadStatus.PUT
         swift_client = mock.Mock()
         row = {'deleted': 0,
                'created_at': str(time.time() - 5),
