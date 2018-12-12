@@ -4,5 +4,5 @@ git+https://github.com/swiftstack/container-crawler.git@0.1.0#egg=container-craw
 requests
 python-swiftclient
 lxml
-eventlet<0.23.0
+eventlet>=0.17.4,!=0.23.0
 git+https://github.com/swiftstack/py-statsd.git@ss-release-1.7.4#egg=pystatsd

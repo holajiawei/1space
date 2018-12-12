@@ -38,7 +38,7 @@
         "host": "localhost",
         "port": 514,
         "proto": "udp"
-    }
+    },
     "poll_interval": 5,
     "status_dir": "/var/lib/swift-s3-sync",
     "workers": 10

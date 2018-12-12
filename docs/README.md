@@ -53,9 +53,10 @@ the remote store in the common case).
 - [boto](https://github.com/boto/boto3)
 - [eventlet](https://github.com/eventlet/eventlet)
 
-Until we can merge the boto patches, you will also have to install botocore from
-our fork (do this before installing 1space):
-`pip install -e git://github.com/swiftstack/botocore.git@1.12.23.1#egg=botocore`
+All dependencies, can be installed automatically with `pip`:
+```
+pip install -r requirements.txt
+```
 
 Build the package to be installed on the nodes with:
 ```
@@ -64,21 +65,20 @@ python ./setup.py build sdist
 
 Install the tarball with:
 ```
-pip install swift-s3-sync-<version>.tar.gz
+pip install dist/swift-s3-sync-<version>.tar.gz
 ```
 
-You also will need to install the `container-crawler` library from Git:
-```
-pip install -e git://github.com/swiftstack/container-crawler.git@0.1.0#egg=container-crawler
-```
+After that, you should have the `swift-s3-sync` and `swift-s3-migrator`
+executables available in `/usr/local/bin`.
 
-After that, you should have the `swift-s3-sync` executable available in
-`/usr/local/bin`.
-
-`swift-s3-sync` has to be invoked with a configuration file, specifying which
-containers to watch, where the contents should be placed, as well as a number of
-global settings. A sample configuration file is in the
+Both `swift-s3-sync` and `swift-s3-migrator` must be invoked with a
+configuration file, specifying which containers to watch, where the
+contents should be placed, as well as a number of global settings. A
+sample configuration file is in the
 [repository](https://github.com/swiftstack/1space/blob/master/sync.json-sample).
+
+Both of these tools run in the foreground, so starting each in their own
+respective screen sessions is advisable.
 
 To configure the Swift Proxy servers to use `1space` to redirect requests
 for archived objects, you have to add the following to the proxy pipeline:
