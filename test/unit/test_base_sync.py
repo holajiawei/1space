@@ -155,6 +155,9 @@ class TestMatchers(unittest.TestCase):
              False),
             ({u'FO\u00d3': u'B\u00c1R'},
              {u'fo\u00f3'.encode('utf-8'): u'b\u00e1r'.encode('utf-8')},
+             True),
+            ({'Foo': 'Bar'},
+             {'Foo': 'Bar'},
              True)
         ]
         for i, testcase in enumerate(testcases):
