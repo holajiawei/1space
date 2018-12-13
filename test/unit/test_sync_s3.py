@@ -279,9 +279,7 @@ class TestSyncS3(unittest.TestCase):
         wrapper.get_s3_headers.return_value = {}
         wrapper.get_headers.return_value = {'etag': 'fabcabbeef'}
         mock_file_wrapper.return_value = wrapper
-        self.mock_boto3_client.head_object.side_effect = ClientError(
-            {'Error': {'Code': 'NotFound'},
-             'ResponseMetadata': {'HTTPStatusCode': 404}}, 'HEAD')
+        self.mock_boto3_client.head_object.side_effect = self.boto_not_found
         self.sync_s3.check_slo = mock.Mock()
         self.sync_s3.check_slo.return_value = False
         mock_ic = mock.Mock()
@@ -322,9 +320,7 @@ class TestSyncS3(unittest.TestCase):
         wrapper.get_s3_headers.return_value = {}
         wrapper.get_headers.return_value = {'etag': 'fabcabbeef'}
         mock_file_wrapper.return_value = wrapper
-        self.mock_boto3_client.head_object.side_effect = ClientError(
-            {'Error': {'Code': 'NotFound'},
-             'ResponseMetadata': {'HTTPStatusCode': 404}}, 'HEAD')
+        self.mock_boto3_client.head_object.side_effect = self.boto_not_found
         self.sync_s3.check_slo = mock.Mock()
         self.sync_s3.check_slo.return_value = False
         mock_ic = mock.Mock()
@@ -364,9 +360,7 @@ class TestSyncS3(unittest.TestCase):
         wrapper.get_s3_headers.return_value = {}
         wrapper.get_headers.return_value = {'etag': 'fabcabbeef'}
         mock_file_wrapper.return_value = wrapper
-        self.mock_boto3_client.head_object.side_effect = ClientError(
-            {'Error': {'Code': 'NotFound'},
-             'ResponseMetadata': {'HTTPStatusCode': 404}}, 'HEAD')
+        self.mock_boto3_client.head_object.side_effect = self.boto_not_found
         self.sync_s3.check_slo = mock.Mock()
         self.sync_s3.check_slo.return_value = False
         mock_ic = mock.Mock()
@@ -414,9 +408,7 @@ class TestSyncS3(unittest.TestCase):
         wrapper.get_s3_headers.return_value = {}
         wrapper.get_headers.return_value = {'etag': 'fabcabbeef'}
         mock_file_wrapper.return_value = wrapper
-        self.mock_boto3_client.head_object.side_effect = ClientError(
-            {'Error': {'Code': 'NotFound'},
-             'ResponseMetadata': {'HTTPStatusCode': 404}}, 'HEAD')
+        self.mock_boto3_client.head_object.side_effect = self.boto_not_found
         self.sync_s3.check_slo = mock.Mock()
         self.sync_s3.check_slo.return_value = False
         mock_ic = mock.Mock()
@@ -673,9 +665,7 @@ class TestSyncS3(unittest.TestCase):
 
     def test_delete_missing_object(self):
         key = 'key'
-        error = ClientError(
-            {'Error': {'Code': 'NotFound'},
-             'ResponseMetadata': {'HTTPStatusCode': 404}}, None)
+        error = self.boto_not_found
         self.mock_boto3_client.delete_object.side_effect = error
         self.sync_s3.delete_object(key)
         self.mock_boto3_client.delete_object.assert_has_calls([
@@ -794,9 +784,7 @@ class TestSyncS3(unittest.TestCase):
                      'hash': 'beefdead',
                      'bytes': 5 * 2**20}]
 
-        self.mock_boto3_client.head_object.side_effect = ClientError(
-            {'Error': {'Code': 'NotFound'},
-             'ResponseMetadata': {'HTTPStatusCode': 404}}, 'HEAD')
+        self.mock_boto3_client.head_object.side_effect = self.boto_not_found
 
         def get_metadata(account, container, key, headers):
             if key == slo_key:
@@ -961,9 +949,7 @@ class TestSyncS3(unittest.TestCase):
                      'hash': 'beefdead',
                      'bytes': 200}]
 
-        self.mock_boto3_client.head_object.side_effect = ClientError(
-            {'Error': {'Code': 'NotFound'},
-             'ResponseMetadata': {'HTTPStatusCode': 404}}, 'HEAD')
+        self.mock_boto3_client.head_object.side_effect = self.boto_not_found
 
         def get_metadata(account, container, key, headers):
             if key == slo_key:
@@ -1944,10 +1930,7 @@ class TestSyncS3(unittest.TestCase):
         self.assertIn('tragic error', context.exception.message)
 
     def test_upload_object_boto_failure(self):
-        self.mock_boto3_client.head_object.side_effect = ClientError(
-            dict(Error=dict(Code='NotFound', Message='Not found'),
-                 ResponseMetadata=dict(HTTPStatusCode=404, HTTPReaders={})),
-            'head_object')
+        self.mock_boto3_client.head_object.side_effect = self.boto_not_found
         self.mock_boto3_client.put_object.side_effect = RuntimeError(
             'Failed to upload')
         object_body = FakeStream(1024)

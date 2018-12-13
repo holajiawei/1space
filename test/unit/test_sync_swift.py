@@ -173,9 +173,7 @@ class TestSyncSwift(unittest.TestCase):
             'etag': 'deadbeef',
             'Content-Type': 'application/testing'}
         mock_file_wrapper.return_value = wrapper
-        not_found = swiftclient.exceptions.ClientException('not found',
-                                                           http_status=404)
-        swift_client.head_object.side_effect = not_found
+        swift_client.head_object.side_effect = self.not_found
 
         mock_check_slo.return_value = False
         mock_ic = mock.Mock()
@@ -212,9 +210,7 @@ class TestSyncSwift(unittest.TestCase):
         wrapper.__len__ = lambda s: 0
         wrapper.get_headers.return_value = {'etag': 'deadbeef'}
         mock_file_wrapper.return_value = wrapper
-        not_found = swiftclient.exceptions.ClientException('not found',
-                                                           http_status=404)
-        swift_client.head_object.side_effect = not_found
+        swift_client.head_object.side_effect = self.not_found
 
         mock_check_slo.return_value = False
         mock_ic = mock.Mock()
@@ -243,9 +239,7 @@ class TestSyncSwift(unittest.TestCase):
         swift_client = mock.Mock()
         mock_swift.return_value = swift_client
 
-        not_found = swiftclient.exceptions.ClientException('not found',
-                                                           http_status=404)
-        swift_client.head_object.side_effect = not_found
+        swift_client.head_object.side_effect = self.not_found
         swift_client.put_object.side_effect = RuntimeError('Failed to PUT')
 
         mock_check_slo.return_value = False
@@ -399,12 +393,10 @@ class TestSyncSwift(unittest.TestCase):
                      'hash': 'beefdead',
                      'bytes': 1024}]
 
-        not_found = swiftclient.exceptions.ClientException(
-            'not found', http_status=404, http_response_headers={})
         swift_client = mock.Mock()
         mock_swift.return_value = swift_client
-        swift_client.head_object.side_effect = not_found
-        swift_client.get_object.side_effect = not_found
+        swift_client.head_object.side_effect = self.not_found
+        swift_client.get_object.side_effect = self.not_found
 
         def get_metadata(account, container, key, headers):
             if key == slo_key:
@@ -508,12 +500,10 @@ class TestSyncSwift(unittest.TestCase):
                      'hash': 'beefdead',
                      'bytes': 1024}]
 
-        not_found = swiftclient.exceptions.ClientException(
-            'not found', http_status=404, http_response_headers={})
         swift_client = mock.Mock()
         mock_swift.return_value = swift_client
-        swift_client.head_object.side_effect = not_found
-        swift_client.get_object.side_effect = not_found
+        swift_client.head_object.side_effect = self.not_found
+        swift_client.get_object.side_effect = self.not_found
 
         def get_metadata(account, container, key, headers):
             if key == slo_key:
@@ -619,12 +609,10 @@ class TestSyncSwift(unittest.TestCase):
                      'hash': 'beefdead',
                      'bytes': 1024}]
 
-        not_found = swiftclient.exceptions.ClientException(
-            'not found', http_status=404, http_response_headers={})
         swift_client = mock.Mock()
         mock_swift.return_value = swift_client
-        swift_client.head_object.side_effect = not_found
-        swift_client.get_object.side_effect = not_found
+        swift_client.head_object.side_effect = self.not_found
+        swift_client.get_object.side_effect = self.not_found
 
         def get_metadata(account, container, key, headers):
             if key == slo_key:
@@ -914,9 +902,7 @@ class TestSyncSwift(unittest.TestCase):
         mock_swift.return_value = swift_client
 
         key = 'key'
-        not_found = swiftclient.exceptions.ClientException(
-            'not found', http_status=404)
-        swift_client.head_object.side_effect = not_found
+        swift_client.head_object.side_effect = self.not_found
         self.sync_swift.delete_object(key)
         swift_client.delete_object.assert_not_called()
 
