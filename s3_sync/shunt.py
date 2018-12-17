@@ -322,6 +322,11 @@ class S3SyncShunt(object):
 
         remote_resp, remote_iter = self.iter_remote_objects(
             sync_profile, per_account, marker, limit, prefix, delimiter)
+        if not remote_resp.success:
+            # Propagate the error we received from the remote site
+            start_response(remote_resp.to_wsgi()[0],
+                           remote_resp.headers.items())
+            return remote_resp.body
 
         if status.startswith('404 '):
             # This must be a migration, where the container has not yet been

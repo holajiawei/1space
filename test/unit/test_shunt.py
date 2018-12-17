@@ -1064,6 +1064,55 @@ class TestShunt(unittest.TestCase):
             'a', 'a/', u'unicod\xe9'.encode('utf-8'), 'z/',
         ])
 
+    def test_list_container_shunt_error(self):
+        self.mock_list_swift.return_value = ProviderResponse(
+            False, 404, {}, 'resource not found!')
+        req = swob.Request.blank(
+            '/v1/AUTH_a/sw\xc3\xa9ft?delimiter=/&limit=4',
+            environ={'__test__.status': '200 OK',
+                     '__test__.body': json.dumps([{
+                         'name': 'a',
+                         'hash': 'ffff',
+                         'bytes': 42,
+                         'last_modified': 'date',
+                         'content_type': 'type'}]),
+                     'swift.trans_id': 'id'})
+        status, headers, body_iter = req.call_application(self.app)
+        self.assertEqual('404 Not Found', status)
+        self.assertEqual('resource not found!', body_iter)
+
+    def test_migration_list_missing_container(self):
+        self.mock_list_s3.side_effect = [
+            ProviderResponse(True, 200,
+                             {'x-container-meta-foo': 'foo',
+                              'Content-Length': 1024},
+                             [{'name': 'a',
+                               'hash': 'ffff',
+                               'bytes': 42,
+                               'last_modified': 'date',
+                               'content_type': 'type',
+                               'content_location': 'mock-s3:bucket'}]),
+            ProviderResponse(True, 200, {'x-container-meta-foo': 'foo'}, [])]
+        self.swift.responses = {
+            'GET': [lambda _, __: ('404 Not Found', {}, 'not found!')],
+            'PUT': [lambda _, __: ('201 Created', {}, '')]}
+        req = swob.Request.blank('/v1/AUTH_migrate/destination')
+        status, headers, body_iter = req.call_application(self.app)
+        self.assertEqual('200 OK', status)
+        self.assertEqual(len(body_iter), int(dict(headers)['Content-Length']))
+        self.assertEqual([
+            # used for get_account_info() to check if ProxyFS
+            ('HEAD', '/v1/AUTH_migrate', {}),
+            ('GET', '/v1/AUTH_migrate/destination', {}),
+            ('PUT', '/v1/AUTH_migrate/destination',
+             {'x-container-meta-foo': 'foo',
+              'x-container-sysmeta-multi-cloud-internal-migrator':
+              'migrating'})],
+            [(env['REQUEST_METHOD'], env['PATH_INFO'],
+              {k[5:].replace('_', '-').lower(): v
+               for k, v in env.items() if k.startswith('HTTP_X')})
+             for env in self.swift.calls])
+
     def test_shunt_migration_put_object_missing_container(self):
         responses = {'PUT': {
             '/v1/AUTH_migrate/destination/object': [
