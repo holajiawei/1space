@@ -40,5 +40,12 @@ docker exec swift-s3-sync timeout 40 \
              --auth-version 3 --debug stat; do sleep 0.5; done' >/dev/null 2>&1
 
 # the AWS_* environment variables allow some tests to run against real S3
-docker exec -e DOCKER=true -e AWS_IDENTITY=$AWS_IDENTITY -e AWS_SECRET=$AWS_SECRET -e AWS_BUCKET=$AWS_BUCKET  swift-s3-sync nosetests /swift-s3-sync/test/integration/
+export COVER_HTML_DIR=/swift-s3-sync/.coverhtml
+docker exec -e DOCKER=true -e AWS_IDENTITY=$AWS_IDENTITY \
+    -e AWS_SECRET=$AWS_SECRET -e AWS_BUCKET=$AWS_BUCKET \
+    swift-s3-sync /bin/bash -c "mkdir -p $COVER_HTML_DIR; \
+    cd /swift-s3-sync; \
+    nosetests --with-coverage --cover-branches \
+    --cover-package=s3_sync --cover-erase --cover-html \
+    --cover-html-dir=$COVER_HTML_DIR test/integration"
 exit $(($unit_test_status + $?))
