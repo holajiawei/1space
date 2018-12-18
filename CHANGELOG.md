@@ -1,3 +1,11 @@
+## 0.1.52
+
+Bug fixes:
+
+- Fixed the duplicated statsd metrics for uploaded objects (previously,
+  the uploaded object count was increased even if the object was found to have
+  been already uploaded).
+
 ## 0.1.51
 
 Bug fixes:
