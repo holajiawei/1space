@@ -4,3 +4,4 @@ mock==2.0.0
 psutil
 s3cmd
 coverage
+coveralls

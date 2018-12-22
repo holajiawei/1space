@@ -12,6 +12,7 @@ cd "$MYDIR"
 
 ./run_unit_tests
 unit_test_status=$?
+mv .coverage coverage.unit_tests
 
 # Keystone takes a long time to start -- we can kick it off early
 ./scripts/ensure_keystone_started
@@ -48,4 +49,6 @@ docker exec -e DOCKER=true -e AWS_IDENTITY=$AWS_IDENTITY \
     nosetests --with-coverage --cover-branches \
     --cover-package=s3_sync --cover-erase --cover-html \
     --cover-html-dir=$COVER_HTML_DIR test/integration"
-exit $(($unit_test_status + $?))
+integration_test_status=$?
+docker exec swift-s3-sync bash -c "cd /swift-s3-sync && coverage combine .coverage coverage.unit_tests"
+exit $(($unit_test_status + $integration_test_status))
