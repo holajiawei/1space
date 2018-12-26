@@ -58,7 +58,6 @@ LOGGER_NAME = 'swift-s3-migrator'
 
 IGNORE_KEYS = set(('status', 'aws_secret', 'all_buckets', 'custom_prefix'))
 
-SwitchQueue = namedtuple('SwitchQueue', 'queue')
 MigrateObjectWork = namedtuple('MigrateObjectWork', 'aws_bucket container key')
 UploadObjectWork = namedtuple('UploadObjectWork', 'container key object '
                               'headers aws_bucket')
@@ -326,7 +325,7 @@ class Migrator(object):
         self.status = status
         self.work_chunk = work_chunk
         self.max_conns = swift_pool.max_size
-        self.verify_queue = eventlet.queue.Queue(work_chunk)
+        self.verify_queue = eventlet.queue.Queue()
         self.primary_queue = eventlet.queue.Queue(self.max_conns * 2)
         self.object_queue = self.primary_queue
         self.container_queue = eventlet.queue.Queue()
@@ -485,26 +484,18 @@ class Migrator(object):
             self.logger.error('Failed to migrate "%s"' %
                               self.config['aws_bucket'])
             self.logger.error(''.join(traceback.format_exc()))
-
         self.object_queue.join()
-
         self._process_dlos()
-
         self.object_queue.join()
 
-        for _ in xrange(self.workers):
-            self.primary_queue.put(SwitchQueue(self.verify_queue))
-
-        self.object_queue = self.verify_queue
-
+        # Process verify objects
+        while not self.verify_queue.empty():
+            self.object_queue.put(self.verify_queue.get())
         self.object_queue.join()
-
         self._process_dlos()
-
         self.object_queue.join()
 
         self._stop_workers(self.object_queue)
-
         self.check_errors()
 
         # TODO: record the number of errors, as well
@@ -1220,10 +1211,6 @@ class Migrator(object):
         current_queue = self.primary_queue
         while True:
             work = current_queue.get()
-            if isinstance(work, SwitchQueue):
-                current_queue.task_done()
-                current_queue = work[0]
-                continue
             try:
                 if not work:
                     break

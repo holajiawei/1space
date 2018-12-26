@@ -34,6 +34,41 @@ from .utils import FakeSwift
 
 
 class TestShunt(unittest.TestCase):
+    def _assert_xml_listing(self, xml_string, elements, container=None,
+                            account=None):
+        def _assert_xml_entry(entry, xml_props):
+            for k in entry.keys():
+                if k == 'content_location':
+                    self.assertTrue(k not in xml_props)
+                else:
+                    self.assertEqual(entry[k], xml_props[k])
+
+        root = lxml.etree.fromstring(xml_string)
+        context = lxml.etree.iterwalk(root, events=("start", "end"))
+        element_index = 0
+        cur_elem_properties = {}
+        for action, elem in context:
+            if action == 'end':
+                if elem.tag == 'account':
+                    self.assertEqual(account, elem.get('name'))
+                elif elem.tag == 'container':
+                    if container:
+                        self.assertEqual(container, elem.get('name'))
+                    else:
+                        _assert_xml_entry(elements[element_index],
+                                          cur_elem_properties)
+                        element_index += 1
+                elif elem.tag == 'object':
+                    _assert_xml_entry(elements[element_index],
+                                      cur_elem_properties)
+                    element_index += 1
+                else:
+                    try:
+                        int_value = int(elem.text)
+                        cur_elem_properties[elem.tag] = int_value
+                    except ValueError:
+                        cur_elem_properties[elem.tag] = elem.text
+
     def setUp(self):
         self.logger = logging.getLogger()
         self.stream = StringIO.StringIO()
@@ -128,14 +163,20 @@ class TestShunt(unittest.TestCase):
                     'aws_identity': 'user',
                     'aws_secret': 'key',
                 }],
-            'migrations': [{
-                'account': 'AUTH_migrate',
-                'container': 'destination',
-                'aws_bucket': 'source',
-                'aws_identity': 'migration',
-                'aws_secret': 'migration_key',
-                'protocol': 's3'
-            }],
+            'migrations': [
+                {'account': 'AUTH_migrate',
+                 'container': 'destination',
+                 'aws_bucket': 'source',
+                 'aws_identity': 'migration',
+                 'aws_secret': 'migration_key',
+                 'protocol': 's3'},
+                {'account': 'AUTH_migrate-star',
+                 'container': '/*',
+                 'aws_bucket': '/*',
+                 'aws_identity': 'migration',
+                 'aws_secret': 'migration_key',
+                 'protocol': 's3'},
+            ],
             'migrator_settings': {
                 'segment_size': 3000
             }
@@ -224,6 +265,17 @@ class TestShunt(unittest.TestCase):
                 'migration': True,
                 'restore_object': True,
                 'aws_bucket': 'source',
+                'aws_identity': 'migration',
+                'aws_secret': 'migration_key',
+                'custom_prefix': '',
+                'protocol': 's3'
+            },
+            ('AUTH_migrate-star', '/*'): {
+                'account': 'AUTH_migrate-star',
+                'container': '/*',
+                'migration': True,
+                'restore_object': True,
+                'aws_bucket': '/*',
                 'aws_identity': 'migration',
                 'aws_secret': 'migration_key',
                 'custom_prefix': '',
@@ -799,28 +851,7 @@ class TestShunt(unittest.TestCase):
             mock.call(marker='', limit=10000, prefix='', delimiter=''),
             mock.call(marker=u'unicod\xc3\xa9'.encode('utf-8'), limit=10000,
                       prefix='', delimiter='')])
-        root = lxml.etree.fromstring(body_iter)
-        context = lxml.etree.iterwalk(root, events=("start", "end"))
-        element_index = 0
-        cur_elem_properties = {}
-        for action, elem in context:
-            if action == 'end':
-                if elem.tag == 'container':
-                    self.assertEqual('s3', elem.get('name'))
-                elif elem.tag == 'object':
-                    for k in elements[element_index].keys():
-                        if k == 'content_location':
-                            self.assertTrue(k not in cur_elem_properties)
-                        else:
-                            self.assertEqual(elements[element_index][k],
-                                             cur_elem_properties[k])
-                    element_index += 1
-                else:
-                    try:
-                        int_value = int(elem.text)
-                        cur_elem_properties[elem.tag] = int_value
-                    except ValueError:
-                        cur_elem_properties[elem.tag] = elem.text
+        self._assert_xml_listing(body_iter, elements, 's3')
 
     def test_list_container_accept_xml(self):
         elements = [{'name': 'abc',
@@ -851,28 +882,7 @@ class TestShunt(unittest.TestCase):
             mock.call(marker='', limit=10000, prefix='', delimiter=''),
             mock.call(marker=u'unicod\xc3\xa9'.encode('utf-8'), limit=10000,
                       prefix='', delimiter='')])
-        root = lxml.etree.fromstring(body_iter)
-        context = lxml.etree.iterwalk(root, events=("start", "end"))
-        element_index = 0
-        cur_elem_properties = {}
-        for action, elem in context:
-            if action == 'end':
-                if elem.tag == 'container':
-                    self.assertEqual('s3', elem.get('name'))
-                elif elem.tag == 'object':
-                    for k in elements[element_index].keys():
-                        if k == 'content_location':
-                            self.assertTrue(k not in cur_elem_properties)
-                        else:
-                            self.assertEqual(elements[element_index][k],
-                                             cur_elem_properties[k])
-                    element_index += 1
-                else:
-                    try:
-                        int_value = int(elem.text)
-                        cur_elem_properties[elem.tag] = int_value
-                    except ValueError:
-                        cur_elem_properties[elem.tag] = elem.text
+        self._assert_xml_listing(body_iter, elements, 's3')
 
     def test_list_container_shunt_s3_json(self):
         elements = [{'name': 'abc',
@@ -1063,6 +1073,127 @@ class TestShunt(unittest.TestCase):
         self.assertEqual(names, [
             'a', 'a/', u'unicod\xe9'.encode('utf-8'), 'z/',
         ])
+
+    @mock.patch('s3_sync.sync_s3.SyncS3.list_buckets')
+    def test_list_account_accept_json(self, mock_list_buckets):
+        elements = [{'name': 'abc',
+                     'last_modified': 'date',
+                     'content_location': 'AWS S3',
+                     'count': 0,
+                     'bytes': 0},
+                    {'name': u'unicod\xc3\xa9',
+                     'last_modified': 'date',
+                     'content_location': 'AWS S3',
+                     'count': 0,
+                     'bytes': 0}]
+        mock_result = [dict(entry) for entry in elements]
+        mock_list_buckets.side_effect = [
+            ProviderResponse(True, 200, {}, mock_result),
+            ProviderResponse(True, 200, {}, [])]
+        req = swob.Request.blank(
+            '/v1/AUTH_migrate-star?format=json',
+            environ={'__test__.status': '200 OK',
+                     '__test__.body': '[]',
+                     'swift.trans_id': 'id'})
+        status, headers, body_iter = req.call_application(self.app)
+        self.assertEqual(self.mock_shunt_swift.mock_calls, [])
+        self.assertEqual(
+            [mock.call(marker='', limit=10000, prefix='', delimiter=''),
+             mock.call(marker=u'unicod\xc3\xa9'.encode('utf-8'), limit=10000,
+                       prefix='', delimiter='')],
+            mock_list_buckets.mock_calls)
+        results = json.loads(body_iter)
+        for index, entry in enumerate(results):
+            for k, v in entry.items():
+                if k == 'content_location':
+                    self.assertEqual([elements[index][k]], entry[k])
+                else:
+                    self.assertEqual(elements[index][k], entry[k])
+
+    @mock.patch('s3_sync.sync_s3.SyncS3.list_buckets')
+    def test_list_account_accept_plain(self, mock_list_buckets):
+        elements = [{'name': 'abc',
+                     'last_modified': 'date',
+                     'content_location': 'AWS S3',
+                     'count': 0,
+                     'bytes': 0},
+                    {'name': u'unicod\xc3\xa9',
+                     'last_modified': 'date',
+                     'content_location': 'AWS S3',
+                     'count': 0,
+                     'bytes': 0}]
+        mock_result = [dict(entry) for entry in elements]
+        mock_list_buckets.side_effect = [
+            ProviderResponse(True, 200, {}, mock_result),
+            ProviderResponse(True, 200, {}, [])]
+        req = swob.Request.blank(
+            '/v1/AUTH_migrate-star',
+            environ={'__test__.status': '200 OK',
+                     '__test__.body': '[]',
+                     'swift.trans_id': 'id'})
+        status, headers, body_iter = req.call_application(self.app)
+        self.assertEqual(self.mock_shunt_swift.mock_calls, [])
+        self.assertEqual(
+            [mock.call(marker='', limit=10000, prefix='', delimiter=''),
+             mock.call(marker=u'unicod\xc3\xa9'.encode('utf-8'), limit=10000,
+                       prefix='', delimiter='')],
+            mock_list_buckets.mock_calls)
+        self.assertEqual(['abc', u'unicod\xc3\xa9'.encode('utf-8')],
+                         body_iter.split('\n'))
+
+    @mock.patch('s3_sync.sync_s3.SyncS3.list_buckets')
+    def test_list_account_accept_xml(self, mock_list_buckets):
+        elements = [{'name': 'abc',
+                     'last_modified': 'date',
+                     'content_location': 'AWS S3',
+                     'count': 0,
+                     'bytes': 0},
+                    {'name': u'unicod\xc3\xa9',
+                     'last_modified': 'date',
+                     'content_location': 'AWS S3',
+                     'count': 0,
+                     'bytes': 0}]
+        mock_result = [dict(entry) for entry in elements]
+        mock_list_buckets.side_effect = [
+            ProviderResponse(True, 200, {}, mock_result),
+            ProviderResponse(True, 200, {}, [])]
+        req = swob.Request.blank(
+            '/v1/AUTH_migrate-star?format=xml',
+            environ={'__test__.status': '200 OK',
+                     '__test__.body': '[]',
+                     'swift.trans_id': 'id'})
+        status, headers, body_iter = req.call_application(self.app)
+        self.assertEqual(self.mock_shunt_swift.mock_calls, [])
+        self.assertEqual(
+            [mock.call(marker='', limit=10000, prefix='', delimiter=''),
+             mock.call(marker=u'unicod\xc3\xa9'.encode('utf-8'), limit=10000,
+                       prefix='', delimiter='')],
+            mock_list_buckets.mock_calls)
+        self._assert_xml_listing(body_iter, elements,
+                                 account='AUTH_migrate-star')
+
+    @mock.patch('s3_sync.sync_s3.SyncS3.list_buckets')
+    def test_list_account_splice_delimiter(self, mock_list_buckets):
+        mock_result = [{'subdir': u'unicod\xc3\xa9-',
+                        'content_location': 'AWS S3'}]
+        mock_list_buckets.side_effect = [
+            ProviderResponse(True, 200, {}, mock_result),
+            ProviderResponse(True, 200, {}, [])]
+        req = swob.Request.blank(
+            '/v1/AUTH_migrate-star?delimiter=-',
+            environ={'__test__.status': '200 OK',
+                     '__test__.body': '[{"subdir": "abc-"}, '
+                                      '{"subdir": "xyz-"}]',
+                     'swift.trans_id': 'id'})
+        status, headers, body_iter = req.call_application(self.app)
+        self.assertEqual(self.mock_shunt_swift.mock_calls, [])
+        self.assertEqual(
+            [mock.call(marker='', limit=10000, prefix='', delimiter='-'),
+             mock.call(marker=u'unicod\xc3\xa9-'.encode('utf-8'), limit=10000,
+                       prefix='', delimiter='-')],
+            mock_list_buckets.mock_calls)
+        self.assertEqual(['abc-', u'unicod\xc3\xa9-'.encode('utf-8'), 'xyz-'],
+                         body_iter.split('\n'))
 
     def test_shunt_migration_put_object_missing_container(self):
         responses = {'PUT': {
