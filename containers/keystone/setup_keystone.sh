@@ -66,7 +66,7 @@ fi
 ENDPOINT=$(openstack endpoint list | awk "/ swift / { print \$2 }")
 if [ "$ENDPOINT" == "" ]; then
 	echo "Adding an object store endpoint"
-	openstack endpoint create object-store public 'http://swift-s3-sync:8080/v1/KEY_$(tenant_id)s'
+	openstack endpoint create object-store public 'http://1space:8080/v1/KEY_$(tenant_id)s'
 fi
 
 wait

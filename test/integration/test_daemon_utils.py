@@ -7,7 +7,7 @@ class TestDaemonUtils(TestCloudSyncBase):
     def test_syslog(self):
         initialize_loggers({'log_file': '/tmp/test_file',
                             'log_level': 'debug',
-                            'syslog': {'host': 'swift-s3-sync'}})
+                            'syslog': {'host': '1space'}})
         retries = 15
         asserts = set(
             ['s3-sync [DEBUG]: Using syslog',

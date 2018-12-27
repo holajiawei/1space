@@ -18,8 +18,8 @@ mv .coverage coverage.unit_tests
 ./scripts/ensure_keystone_started
 
 echo Waiting for the 1space services to start...
-docker exec swift-s3-sync timeout 120 \
-    bash -c "until s3cmd -c /swift-s3-sync/s3cfg ls s3://\$CONF_BUCKET/s3-passwd.json; do sleep 1; done"
+docker exec 1space timeout 120 \
+    bash -c "until s3cmd -c /1space/s3cfg ls s3://\$CONF_BUCKET/s3-passwd.json; do sleep 1; done"
 echo "1space services started"
 
 # cloud-connector will quit if configuration object is not found, so start the
@@ -34,21 +34,21 @@ docker exec 1space-keystone timeout 120 \
 echo "keystone started"
 
 # make sure we can actually authenticate using keystone
-docker exec swift-s3-sync timeout 40 \
+docker exec 1space timeout 40 \
     bash -c 'until swift --os-auth-url http://1space-keystone:5000/v3 \
              --os-username tester --os-password testing --os-project-name test \
              --os-project-domain-name default --os-user-domain-name default \
              --auth-version 3 --debug stat; do sleep 0.5; done' >/dev/null 2>&1
 
 # the AWS_* environment variables allow some tests to run against real S3
-export COVER_HTML_DIR=/swift-s3-sync/.coverhtml
+export COVER_HTML_DIR=/1space/.coverhtml
 docker exec -e DOCKER=true -e AWS_IDENTITY=$AWS_IDENTITY \
     -e AWS_SECRET=$AWS_SECRET -e AWS_BUCKET=$AWS_BUCKET \
-    swift-s3-sync /bin/bash -c "mkdir -p $COVER_HTML_DIR; \
-    cd /swift-s3-sync; \
+    1space /bin/bash -c "mkdir -p $COVER_HTML_DIR; \
+    cd /1space; \
     nosetests --with-coverage --cover-branches \
     --cover-package=s3_sync --cover-erase --cover-html \
     --cover-html-dir=$COVER_HTML_DIR test/integration"
 integration_test_status=$?
-docker exec swift-s3-sync bash -c "cd /swift-s3-sync && coverage combine .coverage coverage.unit_tests"
+docker exec 1space bash -c "cd /1space && coverage combine .coverage coverage.unit_tests"
 exit $(($unit_test_status + $integration_test_status))

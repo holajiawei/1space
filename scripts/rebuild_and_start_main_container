@@ -17,16 +17,15 @@ test -f ./port-mapping.env && . ./port-mapping.env
 docker pull bouncestorage/swift-aio:latest
 
 # Build our image
-docker build --cache-from swift-s3-sync:latest -t swift-s3-sync -f containers/swift-s3-sync/Dockerfile .
+docker build --cache-from 1space:latest -t 1space -f containers/1space/Dockerfile .
 
 # Create a network for our party
-docker network create --attachable swift-s3-sync-net 2>/dev/null ||:
+docker network create --attachable 1space-net 2>/dev/null ||:
 
-docker container stop swift-s3-sync 2>/dev/null ||:
-docker container rm swift-s3-sync 2>/dev/null ||:
+docker container stop 1space 2>/dev/null ||:
+docker container rm 1space 2>/dev/null ||:
 
-docker run -d -v `pwd`:/swift-s3-sync \
-    --hostname swift-s3-sync --name swift-s3-sync \
-    --network swift-s3-sync-net --network-alias swift-s3-sync \
-    -p "${HOST_SWIFT_PORT:-8080}:8080" \
-    swift-s3-sync
+docker run -d -v `pwd`:/1space \
+    --hostname 1space --name 1space \
+    --network 1space-net --network-alias 1space \
+    -p "${HOST_SWIFT_PORT:-8080}:8080" 1space

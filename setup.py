@@ -17,9 +17,9 @@ setup(name='swift-s3-sync',
       install_requires=['boto3==1.9.23'],
       entry_points={
           'console_scripts': [
-              'swift-s3-sync = s3_sync.__main__:main',
-              'swift-s3-verify = s3_sync.verify:main',
-              'swift-s3-migrator = s3_sync.migrator:main',
+              '1space-sync = s3_sync.__main__:main',
+              '1space-verify = s3_sync.verify:main',
+              '1space-migrator = s3_sync.migrator:main',
               'cloud-connector = s3_sync.cloud_connector.app:main',
           ],
           'paste.filter_factory': [

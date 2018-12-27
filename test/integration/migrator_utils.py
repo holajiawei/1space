@@ -35,7 +35,7 @@ class TempMigratorStatus(object):
 
 
 class MigratorFactory(object):
-    CONFIG = '/swift-s3-sync/containers/swift-s3-sync/swift-s3-sync.conf'
+    CONFIG = '/1space/containers/1space/1space.conf'
     SWIFT_DIR = '/etc/swift'
 
     def __init__(self, conf_path=CONFIG):

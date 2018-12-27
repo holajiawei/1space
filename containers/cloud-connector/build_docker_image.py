@@ -15,7 +15,7 @@ def swift_s3_sync_base_dir(args):
         subprocess.check_call([
             'git', 'clone', '-b', args.swift_s3_sync_tag,
             '--single-branch', '--depth', '1',
-            'https://github.com/swiftstack/swift-s3-sync.git',
+            'https://github.com/swiftstack/1space.git',
             code_base],
             cwd=args.base_dir)
         try:

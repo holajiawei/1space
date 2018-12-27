@@ -1607,12 +1607,12 @@ class TestMigrator(TestCloudSyncBase):
             'migrations': [s3_migration],
             'migrator_settings': {
                 'items_chunk': 1000,
-                'log_file': '/var/log/swift-s3-migrator.log',
+                'log_file': '/var/log/1space-migrator.log',
                 'log_level': 'debug',
                 'poll_interval': 300,
                 'process': 0,
                 'processes': 1,
-                'status_file': '/var/lib/swift-s3-sync/migrator.status',
+                'status_file': '/var/lib/1space-sync/migrator.status',
                 'workers': 10,
                 'segment_size': 1024 * 1024,
             }
@@ -1679,12 +1679,12 @@ class TestMigrator(TestCloudSyncBase):
             'migrations': [migration],
             'migrator_settings': {
                 'items_chunk': 1000,
-                'log_file': '/var/log/swift-s3-migrator.log',
+                'log_file': '/var/log/1space-migrator.log',
                 'log_level': 'debug',
                 'poll_interval': 300,
                 'process': 0,
                 'processes': 1,
-                'status_file': '/var/lib/swift-s3-sync/migrator.status',
+                'status_file': '/var/lib/1space-sync/migrator.status',
                 'workers': 10,
             },
         }

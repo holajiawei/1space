@@ -18,13 +18,13 @@ docker build -t cloud-connector-wheel --cache-from cloud-connector-wheel:latest 
 docker build --cache-from cloud-connector:latest --cache-from cloud-connector-wheel:latest -t cloud-connector -f containers/cloud-connector/Dockerfile .
 
 # Create a network for our party (if necessary)
-docker network create --attachable swift-s3-sync-net 2>/dev/null ||:
+docker network create --attachable 1space-net 2>/dev/null ||:
 
 docker container stop cloud-connector 2>/dev/null ||:
 docker container rm cloud-connector 2>/dev/null ||:
 
-docker run -d -v `pwd`:/swift-s3-sync \
-    --network swift-s3-sync-net --network-alias cloud-connector \
+docker run -d -v `pwd`:/1space \
+    --network 1space-net --network-alias cloud-connector \
     --restart on-failure --name cloud-connector \
     -p "${HOST_CLOUD_CONNECTOR_PORT:-8081}:8081" \
     -e AWS_ACCESS_KEY_ID=s3-sync-test -e AWS_SECRET_ACCESS_KEY=s3-sync-test \

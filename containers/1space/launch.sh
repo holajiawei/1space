@@ -10,10 +10,10 @@ find /var/run/ -name *.pid -delete
 # Include our own internal-client config.
 # Ditto for proxy-server config, and a config that will run a no-auth, no-shunt
 # proxy-server instance on port 8082.
-cp -f /swift-s3-sync/containers/swift-s3-sync/{internal-client,proxy-server,proxy-server-noshunt}.conf /etc/swift/
+cp -f /1space/containers/1space/{internal-client,proxy-server,proxy-server-noshunt}.conf /etc/swift/
 
 # Copied from the docker swift container. Unfortunately, there is no way to
-# plugin an additional invocation to start swift-s3-sync, so we had to do this.
+# plugin an additional invocation to start 1space-sync, so we had to do this.
 /usr/sbin/service rsyslog start
 /usr/sbin/service rsync start
 /usr/sbin/service memcached start
@@ -32,26 +32,26 @@ mkdir -p /srv/1/node/sdb1 /srv/2/node/sdb2 /srv/3/node/sdb3 /srv/4/node/sdb4 \
     /srv/3 /srv/4 /var/run/swift
 /usr/bin/sudo -u swift /swift/bin/remakerings
 
-cd /swift-s3-sync; pip install -e .
+cd /1space; pip install -e .
 
 /usr/bin/sudo -u swift /swift/bin/startmain
 
 # Set up stuff for cloud-connector
 # NOTE: s3cmd is installed via requirements-test.txt in the Dockerfile
 set +e
-s3cmd -c /swift-s3-sync/s3cfg info s3://$CONF_BUCKET
+s3cmd -c /1space/s3cfg info s3://$CONF_BUCKET
 rc=$?
 set -e
 
 if [ $rc -ne 0 ]; then
-    s3cmd -c /swift-s3-sync/s3cfg mb s3://$CONF_BUCKET
+    s3cmd -c /1space/s3cfg mb s3://$CONF_BUCKET
 fi
 
-s3cmd -c /swift-s3-sync/s3cfg put /swift-s3-sync/containers/swift-s3-sync/cloud-connector.conf \
+s3cmd -c /1space/s3cfg put /1space/containers/1space/cloud-connector.conf \
     s3://$CONF_BUCKET
-s3cmd -c /swift-s3-sync/s3cfg put /swift-s3-sync/containers/swift-s3-sync/swift-s3-sync.conf \
+s3cmd -c /1space/s3cfg put /1space/containers/1space/1space.conf \
     s3://$CONF_BUCKET/sync-config.json
-s3cmd -c /swift-s3-sync/s3cfg put /swift-s3-sync/containers/swift-s3-sync/s3-passwd.json \
+s3cmd -c /1space/s3cfg put /1space/containers/1space/s3-passwd.json \
     s3://$CONF_BUCKET/s3-passwd.json
 
 /usr/local/bin/supervisord -n -c /etc/supervisord.conf

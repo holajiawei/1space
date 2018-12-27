@@ -134,7 +134,7 @@ def get_container_ports(image_name):
 
 
 class TestCloudSyncBase(unittest.TestCase):
-    IMAGE_NAME = 'swift-s3-sync'
+    IMAGE_NAME = '1space'
     PORTS = get_container_ports(IMAGE_NAME)
     SWIFT_STORAGE_BASE = 'http://localhost:%d/v1/' % PORTS['swift']
     CLOUD_CONNECTOR_STORAGE_BASE = 'http://cloud-connector:%d/v1/' % (
@@ -142,8 +142,7 @@ class TestCloudSyncBase(unittest.TestCase):
     NOSHUNT_STORAGE_BASE = 'http://localhost:%d/v1/' % PORTS['noshunt']
 
     CLOUD_SYNC_CONF = os.path.join(
-        os.path.dirname(__file__),
-        '../../containers/swift-s3-sync/swift-s3-sync.conf')
+        os.path.dirname(__file__), '../../containers/1space/1space.conf')
     SWIFT_CREDS = {
         'authurl': 'http://localhost:%d/auth/v1.0' % PORTS['swift'],
         'src': {

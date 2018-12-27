@@ -139,7 +139,7 @@ class TempSyncContainerFactory(s3_sync.sync_container.SyncContainerFactory):
 def get_container_crawler(profile, **kwargs):
     defaults = {
         'log_level': 'info',
-        'log_file': '/var/log/swift-s3-sync.log',
+        'log_file': '/var/log/1space-sync.log',
         'verification_slack': 60,
         'enumerator_workers': 10,
         'workers': 10,

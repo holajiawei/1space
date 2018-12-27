@@ -10,13 +10,13 @@ S3PROXY_VERSION=1.6.1-SNAPSHOT-11-09-18
 docker pull swiftstack/s3proxy:${S3PROXY_VERSION}
 
 # Create a network for our party (if necessary)
-docker network create --attachable swift-s3-sync-net 2>/dev/null ||:
+docker network create --attachable 1space-net 2>/dev/null ||:
 
 docker container stop 1space-s3proxy 2>/dev/null ||:
 docker container rm 1space-s3proxy 2>/dev/null ||:
 
 docker run -d \
-    --network swift-s3-sync-net --network-alias 1space-s3proxy \
+    --network 1space-net --network-alias 1space-s3proxy \
     --restart on-failure --name 1space-s3proxy \
     -p "${HOST_S3_PORT:-10080}:10080" \
     swiftstack/s3proxy:${S3PROXY_VERSION}

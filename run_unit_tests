@@ -7,12 +7,11 @@ cd "$MYDIR"
 # Make sure container is running
 ./up
 
-docker exec swift-s3-sync /bin/bash -c \
-    'cd /swift-s3-sync; flake8'
+docker exec 1space /bin/bash -c 'cd /1space; flake8'
 
-export COVER_HTML_DIR=/swift-s3-sync/.coverhtml
-docker exec swift-s3-sync /bin/bash -c "mkdir -p $COVER_HTML_DIR; \
-    cd /swift-s3-sync; \
+export COVER_HTML_DIR=/1space/.coverhtml
+docker exec 1space /bin/bash -c "mkdir -p $COVER_HTML_DIR; \
+    cd /1space; \
     nosetests --with-coverage --cover-branches \
     --cover-package=s3_sync --cover-erase --cover-html \
     --cover-html-dir=$COVER_HTML_DIR test/unit"

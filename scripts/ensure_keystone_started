@@ -10,13 +10,13 @@ docker pull $(awk 'tolower($1) == "from" && NF == 2{print $2;exit}' containers/k
 docker build --cache-from 1space-keystone -t 1space-keystone -f containers/keystone/Dockerfile .
 
 # Create a network for our party (if necessary)
-docker network create --attachable swift-s3-sync-net 2>/dev/null ||:
+docker network create --attachable 1space-net 2>/dev/null ||:
 
 docker container stop 1space-keystone 2>/dev/null ||:
 docker container rm 1space-keystone 2>/dev/null ||:
 
 docker run -d \
-    --network swift-s3-sync-net --network-alias 1space-keystone \
+    --network 1space-net --network-alias 1space-keystone \
     --restart on-failure --name 1space-keystone \
     -p "${HOST_KEYSTONE_PORT:-5000}:5000" \
     -p "${HOST_KEYSTONE_AUTH_PORT:-35357}:35357" \
