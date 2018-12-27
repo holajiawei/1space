@@ -14,6 +14,8 @@ See the License for the specific language governing permissions and
 limitations under the License.
 """
 
+from __future__ import absolute_import
+
 import eventlet
 import logging
 
@@ -99,7 +101,7 @@ class ProviderResponse(object):
         raise ValueError('reraise had no prior exception for %s' % me_as_a_str)
 
 
-class BaseSync(object):
+class BaseProvider(object):
     """Generic base class that each provider must implement.
 
        These classes implement the actual data transfers, validation that
@@ -126,7 +128,7 @@ class BaseSync(object):
     class HttpClientPoolEntry(object):
         def __init__(self, client, pool):
             self.semaphore = eventlet.semaphore.Semaphore(
-                BaseSync.HTTP_CONN_POOL_SIZE)
+                BaseProvider.HTTP_CONN_POOL_SIZE)
             self.client = client
             self.pool = pool
 
@@ -134,7 +136,7 @@ class BaseSync(object):
             return self.semaphore.acquire(blocking=False)
 
         def close(self):
-            if self.semaphore.balance > BaseSync.HTTP_CONN_POOL_SIZE - 1:
+            if self.semaphore.balance > BaseProvider.HTTP_CONN_POOL_SIZE - 1:
                 logging.getLogger(LOGGER_NAME).error(
                     'Detected double release of the semaphore')
                 raise RuntimeError('Detected double release of the semaphore!')
@@ -153,8 +155,8 @@ class BaseSync(object):
             self.client_pool = self._create_pool(client_factory, max_conns)
 
         def _create_pool(self, client_factory, max_conns):
-            clients = max_conns / BaseSync.HTTP_CONN_POOL_SIZE
-            if max_conns % BaseSync.HTTP_CONN_POOL_SIZE:
+            clients = max_conns / BaseProvider.HTTP_CONN_POOL_SIZE
+            if max_conns % BaseProvider.HTTP_CONN_POOL_SIZE:
                 clients += 1
             self.pool_size = clients
             self.client_factory = client_factory
@@ -172,7 +174,7 @@ class BaseSync(object):
                 if client.acquire():
                     return client
             if len(self.client_pool) < self.pool_size:
-                new_entry = BaseSync.HttpClientPoolEntry(
+                new_entry = BaseProvider.HttpClientPoolEntry(
                     self.client_factory(), self)
                 new_entry.acquire()
                 self.client_pool.append(new_entry)

@@ -27,8 +27,8 @@ import unittest
 from .utils import FakeStream, FakeSwift
 
 from s3_sync import utils
-from s3_sync import base_sync
-from s3_sync.sync_s3 import SyncS3
+from s3_sync.providers import base_provider
+from s3_sync.providers.s3 import S3
 
 
 class TestUtilsFunctions(unittest.TestCase):
@@ -726,7 +726,7 @@ class TestSLOFileWrapper(unittest.TestCase):
 class TestClosingResourceIterable(unittest.TestCase):
     def test_resource_close_afted_read(self):
         pool = mock.Mock()
-        resource = base_sync.BaseSync.HttpClientPoolEntry(None, pool)
+        resource = base_provider.BaseProvider.HttpClientPoolEntry(None, pool)
         self.assertTrue(resource.acquire())
         self.assertEqual(0, resource.semaphore.balance)
         data_src = StringIO.StringIO('test data')
@@ -741,7 +741,7 @@ class TestClosingResourceIterable(unittest.TestCase):
 
     def test_resource_close(self):
         pool = mock.Mock()
-        resource = base_sync.BaseSync.HttpClientPoolEntry(None, pool)
+        resource = base_provider.BaseProvider.HttpClientPoolEntry(None, pool)
         self.assertTrue(resource.acquire())
         self.assertEqual(0, resource.semaphore.balance)
         data_src = StringIO.StringIO('test data')
@@ -753,7 +753,7 @@ class TestClosingResourceIterable(unittest.TestCase):
 
     def test_resource_close_destructor(self):
         pool = mock.Mock()
-        resource = base_sync.BaseSync.HttpClientPoolEntry(None, pool)
+        resource = base_provider.BaseProvider.HttpClientPoolEntry(None, pool)
         self.assertTrue(resource.acquire())
         self.assertEqual(0, resource.semaphore.balance)
         data_src = StringIO.StringIO('test data')
@@ -764,7 +764,7 @@ class TestClosingResourceIterable(unittest.TestCase):
 
     def test_closed_resource_destructor(self):
         pool = mock.Mock()
-        resource = base_sync.BaseSync.HttpClientPoolEntry(None, pool)
+        resource = base_provider.BaseProvider.HttpClientPoolEntry(None, pool)
         self.assertTrue(resource.acquire())
         self.assertEqual(0, resource.semaphore.balance)
         data_src = StringIO.StringIO('test data')
@@ -778,7 +778,7 @@ class TestClosingResourceIterable(unittest.TestCase):
 
     def test_double_close(self):
         pool = mock.Mock()
-        resource = base_sync.BaseSync.HttpClientPoolEntry(None, pool)
+        resource = base_provider.BaseProvider.HttpClientPoolEntry(None, pool)
         self.assertTrue(resource.acquire())
         self.assertEqual(0, resource.semaphore.balance)
         data_src = StringIO.StringIO('test data')
@@ -869,11 +869,11 @@ class TestPutWrapper(unittest.TestCase):
 
     def test_stores_mpu_with_segments(self):
         provider = mock.Mock(
-            SyncS3({'aws_identity': 'key',
-                    'aws_secret': 'secret',
-                    'account': 'account',
-                    'container': 'container',
-                    'aws_bucket': 'bucket'}))
+            S3({'aws_identity': 'key',
+                'aws_secret': 'secret',
+                'account': 'account',
+                'container': 'container',
+                'aws_bucket': 'bucket'}))
         parts = {1: 10,
                  2: 20,
                  3: 50,
@@ -881,7 +881,7 @@ class TestPutWrapper(unittest.TestCase):
         ts = '1542760538.81'
 
         def _head_object(*args, **kwargs):
-            return base_sync.ProviderResponse(
+            return base_provider.ProviderResponse(
                 True, 204, {'Content-Length': parts[kwargs['PartNumber']]}, '')
 
         provider.head_object.side_effect = _head_object
@@ -947,18 +947,18 @@ class TestPutWrapper(unittest.TestCase):
 
     def test_mpu_error_does_not_upload_manifest(self):
         provider = mock.Mock(
-            SyncS3({'aws_identity': 'key',
-                    'aws_secret': 'secret',
-                    'account': 'account',
-                    'container': 'container',
-                    'aws_bucket': 'bucket'}))
+            S3({'aws_identity': 'key',
+                'aws_secret': 'secret',
+                'account': 'account',
+                'container': 'container',
+                'aws_bucket': 'bucket'}))
         parts = {1: 10,
                  2: 20,
                  3: 50,
                  4: 10}
 
         def _head_object(*args, **kwargs):
-            return base_sync.ProviderResponse(
+            return base_provider.ProviderResponse(
                 True, 204, {'Content-Length': parts[kwargs['PartNumber']]}, '')
 
         provider.head_object.side_effect = _head_object

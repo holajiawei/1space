@@ -22,7 +22,7 @@ import json
 import logging
 import math
 import mock
-from s3_sync.base_sync import ProviderResponse
+from s3_sync.providers.base_provider import ProviderResponse
 import s3_sync.migrator
 from StringIO import StringIO
 from swift.common.internal_client import UnexpectedResponse
@@ -1749,7 +1749,7 @@ class TestMigrator(unittest.TestCase):
                 self.assertEqual(manifest, json.loads(''.join(body)))
             parts[obj] = True
 
-    @mock.patch('s3_sync.sync_s3.SyncS3._get_client_factory')
+    @mock.patch('s3_sync.providers.s3.S3._get_client_factory')
     @mock.patch('s3_sync.migrator.create_provider')
     def test_closes_s3_connections(
             self, create_provider_mock, client_factory_mock):
@@ -1757,7 +1757,7 @@ class TestMigrator(unittest.TestCase):
         fake_factory = mock.Mock()
         fake_factory.return_value = conn_mock
         client_factory_mock.return_value = lambda: conn_mock
-        fake_provider = s3_sync.sync_s3.SyncS3(self.migrator.config)
+        fake_provider = s3_sync.providers.s3.S3(self.migrator.config)
         create_provider_mock.return_value = fake_provider
         conn_mock.list_objects.return_value = {'Contents': []}
         self.swift_client.make_request.return_value = mock.Mock(
@@ -1770,7 +1770,7 @@ class TestMigrator(unittest.TestCase):
         self.migrator.close()
         conn_mock._endpoint.http_session.close.assert_called_once_with()
 
-    @mock.patch('s3_sync.sync_swift.SyncSwift._get_client_factory')
+    @mock.patch('s3_sync.providers.swift.Swift._get_client_factory')
     @mock.patch('s3_sync.migrator.create_provider')
     def test_closes_swift_connections(
             self, create_provider_mock, client_factory_mock):
@@ -1778,7 +1778,7 @@ class TestMigrator(unittest.TestCase):
         fake_factory = mock.Mock()
         fake_factory.return_value = conn_mock
         client_factory_mock.return_value = lambda: conn_mock
-        fake_provider = s3_sync.sync_swift.SyncSwift(self.migrator.config)
+        fake_provider = s3_sync.providers.swift.Swift(self.migrator.config)
         create_provider_mock.return_value = fake_provider
         conn_mock.get_container.return_value = ({}, [])
         self.swift_client.make_request.return_value = mock.Mock(

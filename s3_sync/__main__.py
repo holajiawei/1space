@@ -21,7 +21,7 @@ import traceback
 from container_crawler.crawler import Crawler
 from .daemon_utils import load_swift, setup_context, initialize_loggers
 
-from .base_sync import LOGGER_NAME
+from .providers.base_provider import LOGGER_NAME
 
 
 def main():

@@ -14,6 +14,8 @@ See the License for the specific language governing permissions and
 limitations under the License.
 """
 
+from __future__ import absolute_import
+
 from container_crawler.exceptions import RetryError
 import eventlet
 import hashlib
@@ -25,9 +27,9 @@ import sys
 import traceback
 import urllib
 
-from .base_sync import BaseSync, ProviderResponse, match_item
-from .utils import (FileWrapper, ClosingResourceIterable, check_slo,
-                    SWIFT_USER_META_PREFIX)
+from .base_provider import BaseProvider, ProviderResponse, match_item
+from s3_sync.utils import (FileWrapper, ClosingResourceIterable, check_slo,
+                           SWIFT_USER_META_PREFIX)
 
 # We have to import keystone upfront to avoid green threads issue with the lazy
 # importer
@@ -40,9 +42,9 @@ except ImportError:
 DEFAULT_SEGMENT_DELAY = 60 * 60 * 24
 
 
-class SyncSwift(BaseSync):
+class Swift(BaseProvider):
     def __init__(self, *args, **kwargs):
-        super(SyncSwift, self).__init__(*args, **kwargs)
+        super(Swift, self).__init__(*args, **kwargs)
         # Used to verify the remote container in case of per_account uploads
         self.verified_container = False
         self.remote_delete_after = self.settings.get('remote_delete_after', 0)

@@ -25,10 +25,10 @@ import unittest
 
 from swift.common import swob
 
-from s3_sync.base_sync import ProviderResponse
+from s3_sync.providers.base_provider import ProviderResponse
 from s3_sync import shunt
-from s3_sync import sync_s3
-from s3_sync import sync_swift
+from s3_sync.providers import s3
+from s3_sync.providers import swift
 from s3_sync import utils
 from .utils import FakeSwift
 
@@ -39,10 +39,10 @@ class TestShunt(unittest.TestCase):
         self.stream = StringIO.StringIO()
         self.logger.addHandler(logging.StreamHandler(self.stream))
         self.patchers = [mock.patch(name) for name in (
-            's3_sync.sync_swift.SyncSwift.shunt_object',
-            's3_sync.sync_s3.SyncS3.shunt_object',
-            's3_sync.sync_swift.SyncSwift.list_objects',
-            's3_sync.sync_s3.SyncS3.list_objects')]
+            's3_sync.providers.swift.Swift.shunt_object',
+            's3_sync.providers.s3.S3.shunt_object',
+            's3_sync.providers.swift.Swift.list_objects',
+            's3_sync.providers.s3.S3.list_objects')]
         self.mock_shunt_swift = self.patchers[0].__enter__()
         self.mock_shunt_swift.return_value = (
             '200 OK', [
@@ -412,8 +412,8 @@ class TestShunt(unittest.TestCase):
         _test_methods('/v1/AUTH_a/s3/o',
                       ('OPTIONS', 'PUT', 'POST', 'DELETE'))
 
-    @mock.patch.object(sync_swift.SyncSwift, 'get_manifest')
-    @mock.patch.object(sync_s3.SyncS3, 'get_manifest')
+    @mock.patch.object(swift.Swift, 'get_manifest')
+    @mock.patch.object(s3.S3, 'get_manifest')
     def test_object_shunt(self, mock_s3_manifest, mock_swift_manifest):
 
         self.app.shunted_app.logger = self.logger
@@ -484,10 +484,10 @@ class TestShunt(unittest.TestCase):
         _test_shunted('/v1/AUTH_b/c1/o', True)
         _test_shunted('/v1/AUTH_b/c2/o', True)
 
-    @mock.patch.object(sync_swift.SyncSwift, 'get_manifest')
-    @mock.patch.object(sync_s3.SyncS3, 'get_manifest')
-    @mock.patch.object(sync_swift.SyncSwift, 'shunt_object')
-    @mock.patch.object(sync_s3.SyncS3, 'shunt_object')
+    @mock.patch.object(swift.Swift, 'get_manifest')
+    @mock.patch.object(s3.S3, 'get_manifest')
+    @mock.patch.object(swift.Swift, 'shunt_object')
+    @mock.patch.object(s3.S3, 'shunt_object')
     def test_tee(self, mock_s3_shunt, mock_swift_shunt, mock_s3_get_manifest,
                  mock_swift_get_manifest):
         payload = 'bytes from remote'
@@ -577,8 +577,8 @@ class TestShunt(unittest.TestCase):
             mock_call.reset_mock()
             self.swift.calls = []
 
-    @mock.patch.object(sync_s3.SyncS3, 'head_object')
-    @mock.patch.object(sync_s3.SyncS3, 'shunt_object')
+    @mock.patch.object(s3.S3, 'head_object')
+    @mock.patch.object(s3.S3, 'shunt_object')
     def test_tee_migration_mpu(self, mock_shunt_object, mock_head_object):
         payload = 'content' * 1024
         parts = [3000, 3000, len(payload) - 6000]
@@ -643,7 +643,7 @@ class TestShunt(unittest.TestCase):
         self.assertEqual(payload, resp_body)
 
     @mock.patch('s3_sync.shunt.constraints')
-    @mock.patch.object(sync_s3.SyncS3, 'shunt_object')
+    @mock.patch.object(s3.S3, 'shunt_object')
     def test_tee_migration_big(self, mock_shunt_object, mock_constraints):
         self.conf['migrator_settings'] = {'segment_size': 3000}
         mock_constraints.EFFECTIVE_CONSTRAINTS = {'max_file_size': 3000}
@@ -694,8 +694,8 @@ class TestShunt(unittest.TestCase):
                          self.swift.calls[-1]['QUERY_STRING'])
         self.assertEqual(payload, resp_body)
 
-    @mock.patch.object(sync_s3.SyncS3, 'get_manifest')
-    @mock.patch.object(sync_s3.SyncS3, 'shunt_object')
+    @mock.patch.object(s3.S3, 'get_manifest')
+    @mock.patch.object(s3.S3, 'shunt_object')
     def test_missing_slo_manifest(
             self, mock_s3_shunt, mock_s3_get_manifest):
         payload = 'bytes from remote'

@@ -20,7 +20,7 @@ import requests
 import time
 import traceback
 
-from s3_sync.sync_s3 import SyncS3
+from s3_sync.providers.s3 import S3
 
 
 class ConfigReloaderMixin(object):
@@ -173,7 +173,7 @@ def get_conf_file_from_s3(obj_name, env_options, if_none_match=None):
     if env_options.get('AWS_SECURITY_TOKEN_STRING', None):
         provider_settings['aws_session_token'] = \
             env_options['AWS_SECURITY_TOKEN_STRING']
-    provider = SyncS3(provider_settings)
+    provider = S3(provider_settings)
     get_object_opts = {'IfNoneMatch': if_none_match} \
         if if_none_match is not None else {}
     resp = provider.get_object(obj_name, **get_object_opts)

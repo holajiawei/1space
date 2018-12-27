@@ -24,7 +24,7 @@ import sys
 import time
 import socket
 
-from .base_sync import LOGGER_NAME
+from .providers.base_provider import LOGGER_NAME
 
 MAX_LOG_SIZE = 100 * 1024 * 1024
 MIN_SWIFT_VERSION = LooseVersion('2.13')

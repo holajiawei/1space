@@ -152,10 +152,11 @@ def get_container_crawler(profile, **kwargs):
     for key in defaults:
         conf[key] = kwargs.get(key, defaults[key])
 
-    logger = logging.getLogger(s3_sync.base_sync.LOGGER_NAME)
+    logger = logging.getLogger(s3_sync.providers.base_provider.LOGGER_NAME)
     if not logger.handlers:
         s3_sync.daemon_utils.initialize_loggers(conf)
-        s3_sync.daemon_utils.load_swift(s3_sync.base_sync.LOGGER_NAME, True)
+        s3_sync.daemon_utils.load_swift(
+            s3_sync.providers.base_provider.LOGGER_NAME, True)
 
     logger.debug('Starting S3Sync')
 

@@ -19,7 +19,7 @@ import mock
 import os
 import pwd
 
-from s3_sync.base_sync import ProviderResponse
+from s3_sync.providers.base_provider import ProviderResponse
 from s3_sync.cloud_connector import util as cc_util
 
 from .test_cloud_connector_app import TestCloudConnectorBase
@@ -152,7 +152,7 @@ class TestCloudConnectorUtil(TestCloudConnectorBase):
         # get_env_options called every time we check
         self.assertEqual([mock.call()], mock_get_env.mock_calls)
 
-    @mock.patch('s3_sync.cloud_connector.util.SyncS3')
+    @mock.patch('s3_sync.cloud_connector.util.S3')
     def test_get_conf_file_from_s3_unchanged(self, mock_syncs3):
         mock_syncs3().get_object.return_value = ProviderResponse(
             False, 304, {}, iter(['']))
@@ -180,7 +180,7 @@ class TestCloudConnectorUtil(TestCloudConnectorBase):
         ], mock_syncs3.mock_calls)
 
     @mock.patch('s3_sync.cloud_connector.util.os.geteuid')
-    @mock.patch('s3_sync.cloud_connector.util.SyncS3')
+    @mock.patch('s3_sync.cloud_connector.util.S3')
     def test_get_and_write_bad_geteuid(self, mock_syncs3, mock_geteuid):
         target_path = os.path.join(self.tempdir, 'dlkfjke')
         resp = mock_syncs3().get_object.return_value
@@ -215,7 +215,7 @@ class TestCloudConnectorUtil(TestCloudConnectorBase):
         ], mock_syncs3.mock_calls)
         self.assertFalse(os.path.exists(target_path))
 
-    @mock.patch('s3_sync.cloud_connector.util.SyncS3')
+    @mock.patch('s3_sync.cloud_connector.util.S3')
     def test_get_and_write_bad_get(self, mock_syncs3):
         target_path = os.path.join(self.tempdir, 'dlkfjke')
         resp = mock_syncs3().get_object.return_value
@@ -251,7 +251,7 @@ class TestCloudConnectorUtil(TestCloudConnectorBase):
     @mock.patch('s3_sync.cloud_connector.util.os.fchmod')
     @mock.patch('s3_sync.cloud_connector.util.os.geteuid')
     @mock.patch('s3_sync.cloud_connector.util.os.fchown')
-    @mock.patch('s3_sync.cloud_connector.util.SyncS3')
+    @mock.patch('s3_sync.cloud_connector.util.S3')
     def test_get_and_write(self, mock_syncs3, mock_fchown, mock_geteuid,
                            mock_fchmod):
         target_path = os.path.join(self.tempdir, 'dlkfjke')
@@ -288,7 +288,7 @@ class TestCloudConnectorUtil(TestCloudConnectorBase):
     @mock.patch('s3_sync.cloud_connector.util.pwd.getpwnam')
     @mock.patch('s3_sync.cloud_connector.util.os.geteuid')
     @mock.patch('s3_sync.cloud_connector.util.os.fchown')
-    @mock.patch('s3_sync.cloud_connector.util.SyncS3')
+    @mock.patch('s3_sync.cloud_connector.util.S3')
     def test_get_and_write_with_ownership(self, mock_syncs3, mock_fchown,
                                           mock_geteuid, mock_getpwnam):
         target_path = os.path.join(self.tempdir, 'dlkfjke')
@@ -330,7 +330,7 @@ class TestCloudConnectorUtil(TestCloudConnectorBase):
 
     @mock.patch('s3_sync.cloud_connector.util.os.geteuid')
     @mock.patch('s3_sync.cloud_connector.util.os.fchown')
-    @mock.patch('s3_sync.cloud_connector.util.SyncS3')
+    @mock.patch('s3_sync.cloud_connector.util.S3')
     def test_get_and_write_with_extras(self, mock_syncs3, mock_fchown,
                                        mock_geteuid):
         target_path = os.path.join(self.tempdir, 'dlkfjke')

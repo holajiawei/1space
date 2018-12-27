@@ -14,6 +14,8 @@ See the License for the specific language governing permissions and
 limitations under the License.
 """
 
+from __future__ import absolute_import
+
 import base64
 import boto3
 import botocore.exceptions
@@ -31,20 +33,20 @@ import urllib
 from swift.common.internal_client import UnexpectedResponse
 from swift.common.utils import decode_timestamps
 
-from .base_sync import BaseSync, ProviderResponse, match_item
-from .utils import (
+from .base_provider import BaseProvider, ProviderResponse, match_item
+from s3_sync.utils import (
     convert_to_s3_headers, convert_to_swift_headers, FileWrapper,
     SLOFileWrapper, ClosingResourceIterable, get_slo_etag, check_slo,
     SLO_ETAG_FIELD, SLO_HEADER, SWIFT_USER_META_PREFIX, SWIFT_TIME_FMT,
     SeekableFileLikeIter)
 
 
-class SyncS3(BaseSync):
+class S3(BaseProvider):
     # S3 prefix space: 6 16 digit characters
     PREFIX_LEN = 6
     PREFIX_SPACE = 16 ** PREFIX_LEN
-    MIN_PART_SIZE = 5 * BaseSync.MB
-    MAX_PART_SIZE = 5 * BaseSync.GB
+    MIN_PART_SIZE = 5 * BaseProvider.MB
+    MAX_PART_SIZE = 5 * BaseProvider.GB
     MAX_PARTS = 10000
     GOOGLE_API = 'https://storage.googleapis.com'
     CLOUD_SYNC_VERSION = '5.0'
@@ -53,7 +55,7 @@ class SyncS3(BaseSync):
 
     def __init__(self, settings, max_conns=10, per_account=False, logger=None,
                  extra_headers=None):
-        super(SyncS3, self).__init__(
+        super(S3, self).__init__(
             settings, max_conns, per_account, logger, extra_headers)
         if self._google():
             self.location_prefix = 'Google Cloud Storage'

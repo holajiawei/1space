@@ -32,7 +32,7 @@ from swift3.etree import fromstring
 from swift3 import request as swift3_request
 from swift3.controllers import ObjectController
 
-from s3_sync.base_sync import ProviderResponse
+from s3_sync.providers.base_provider import ProviderResponse
 from s3_sync.cloud_connector import app
 from s3_sync.cloud_connector.util import GetAndWriteFileException
 

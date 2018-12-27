@@ -21,8 +21,8 @@ import unittest
 
 from container_crawler.exceptions import RetryError
 from s3_sync.sync_container import SyncContainer, SyncContainerFactory
-from s3_sync.sync_s3 import SyncS3
-from s3_sync.sync_swift import SyncSwift
+from s3_sync.providers.s3 import S3
+from s3_sync.providers.swift import Swift
 from swift.common.utils import decode_timestamps, Timestamp
 
 
@@ -59,7 +59,7 @@ class TestSyncContainer(unittest.TestCase):
             if offset != 0:
                 raise RuntimeError
 
-    @mock.patch('s3_sync.sync_s3.boto3.session.Session')
+    @mock.patch('s3_sync.providers.s3.boto3.session.Session')
     def setUp(self, mock_boto3):
         self.mock_boto3_session = mock.Mock()
         self.mock_boto3_client = mock.Mock()
@@ -396,7 +396,7 @@ class TestSyncContainer(unittest.TestCase):
 
         for settings in test_settings:
             sync = SyncContainer(self.scratch_space, settings, max_conns=1)
-            self.assertIsInstance(sync.provider, SyncS3)
+            self.assertIsInstance(sync.provider, S3)
             self.assertEqual(sync.provider.settings, settings)
             self.assertEqual(len(sync.provider.client_pool.client_pool), 0)
             self.assertEqual(sync.provider.client_pool.pool_size, 1)
@@ -410,7 +410,7 @@ class TestSyncContainer(unittest.TestCase):
                     'container': 'container',
                     'protocol': 'swift'}
         sync = SyncContainer(self.scratch_space, settings, max_conns=1)
-        self.assertIsInstance(sync.provider, SyncSwift)
+        self.assertIsInstance(sync.provider, Swift)
         self.assertEqual(sync.provider.settings, settings)
         self.assertEqual(len(sync.provider.client_pool.client_pool), 0)
         self.assertEqual(sync.provider.client_pool.pool_size, 1)
@@ -425,7 +425,7 @@ class TestSyncContainer(unittest.TestCase):
         with self.assertRaises(NotImplementedError):
             SyncContainer(self.scratch_space, settings, 1)
 
-    @mock.patch('s3_sync.sync_s3.boto3.session.Session')
+    @mock.patch('s3_sync.providers.s3.boto3.session.Session')
     def test_retry_copy_after(self, session_mock):
         settings = {
             'aws_bucket': self.aws_bucket,
@@ -451,7 +451,7 @@ class TestSyncContainer(unittest.TestCase):
             sync.provider.upload_object.assert_called_once_with(
                 row, None)
 
-    @mock.patch('s3_sync.sync_s3.boto3.session.Session')
+    @mock.patch('s3_sync.providers.s3.boto3.session.Session')
     def test_retain_copy(self, session_mock):
         settings = {
             'aws_bucket': self.aws_bucket,
@@ -463,7 +463,7 @@ class TestSyncContainer(unittest.TestCase):
 
         sync = SyncContainer(self.scratch_space, settings)
         sync.provider = mock.Mock()
-        sync.provider.upload_object.return_value = SyncS3.UploadStatus.PUT
+        sync.provider.upload_object.return_value = S3.UploadStatus.PUT
         swift_client = mock.Mock()
         row = {'deleted': 0,
                'created_at': str(time.time() - 5),
@@ -480,7 +480,7 @@ class TestSyncContainer(unittest.TestCase):
             settings['account'], settings['container'], row['name'],
             headers={'X-Timestamp': Timestamp(swift_ts).internal})
 
-    @mock.patch('s3_sync.sync_s3.boto3.session.Session')
+    @mock.patch('s3_sync.providers.s3.boto3.session.Session')
     def test_no_propagate_delete(self, session_mock):
         settings = {
             'aws_bucket': self.aws_bucket,
@@ -498,7 +498,7 @@ class TestSyncContainer(unittest.TestCase):
         # Make sure we do nothing with this row
         self.assertEqual([], sync.provider.mock_calls)
 
-    @mock.patch('s3_sync.sync_s3.boto3.session.Session')
+    @mock.patch('s3_sync.providers.s3.boto3.session.Session')
     def test_propagate_delete(self, session_mock):
         settings = {
             'aws_bucket': self.aws_bucket,

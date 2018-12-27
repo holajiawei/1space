@@ -30,10 +30,10 @@ from swift.common.internal_client import UnexpectedResponse
 import time
 import urllib
 
-from .base_sync import BaseSync
+from .providers.base_provider import BaseProvider
 from .provider_factory import create_provider
 
-from .base_sync import LOGGER_NAME
+from .providers.base_provider import LOGGER_NAME
 
 
 class SyncContainer(container_crawler.base_sync.BaseSync):
@@ -168,14 +168,14 @@ class SyncContainer(container_crawler.base_sync.BaseSync):
             if time.time() <= self.copy_after + meta_ts.timestamp:
                 raise RetryError('Object is not yet eligible for archive')
             status = self.provider.upload_object(row, swift_client)
-            if status == BaseSync.UploadStatus.PUT:
+            if status == BaseProvider.UploadStatus.PUT:
                 self.statsd_increment('copied_objects', 1)
 
             uploaded_statuses = [
-                BaseSync.UploadStatus.PUT,
-                BaseSync.UploadStatus.POST,
+                BaseProvider.UploadStatus.PUT,
+                BaseProvider.UploadStatus.POST,
                 # NOOP means the object already exists
-                BaseSync.UploadStatus.NOOP]
+                BaseProvider.UploadStatus.NOOP]
             if not self.retain_local and status in uploaded_statuses:
                 # NOTE: We rely on the DELETE object X-Timestamp header to
                 # mitigate races where the object may be overwritten. We

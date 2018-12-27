@@ -15,7 +15,7 @@ limitations under the License.
 """
 
 import mock
-from s3_sync import base_sync
+from s3_sync.providers import base_provider
 from swift.common import swob
 import sys
 import unittest
@@ -36,7 +36,7 @@ class TestMatchers(unittest.TestCase):
         ]
         for i, (test_dict, expected_res) in enumerate(testcases):
             self.assertEqual(
-                base_sync.match_all(metadata, test_dict),
+                base_provider.match_all(metadata, test_dict),
                 expected_res, "Failed test %d" % i)
 
     def test_matchany(self):
@@ -53,7 +53,7 @@ class TestMatchers(unittest.TestCase):
         ]
         for i, (test_dict, expected_res) in enumerate(testcases):
             self.assertEqual(
-                base_sync.match_any(metadata, test_dict),
+                base_provider.match_any(metadata, test_dict),
                 expected_res, "Failed test %d" % i)
 
     def test_match_item(self):
@@ -168,7 +168,7 @@ class TestMatchers(unittest.TestCase):
             test_dict = testcase[0]
             expected = testcase[-1]
             self.assertEqual(
-                base_sync.match_item(test_meta, test_dict),
+                base_provider.match_item(test_meta, test_dict),
                 expected, "Failed test %s" % str(testcase))
 
 
@@ -180,22 +180,24 @@ class TestBaseSync(unittest.TestCase):
             'aws_bucket': 'bucket'
         }
 
-    @mock.patch('s3_sync.base_sync.BaseSync._get_client_factory')
+    @mock.patch(
+        's3_sync.providers.base_provider.BaseProvider._get_client_factory')
     def test_http_pool_locking(self, factory_mock):
         factory_mock.return_value = mock.Mock()
 
-        base = base_sync.BaseSync(self.settings, max_conns=1)
+        base = base_provider.BaseProvider(self.settings, max_conns=1)
         with base.client_pool.get_client():
             self.assertEqual(0, base.client_pool.get_semaphore.balance)
             self.assertEqual(
                 0, base.client_pool.client_pool[0].semaphore.balance)
         self.assertEqual(1, base.client_pool.get_semaphore.balance)
 
-    @mock.patch('s3_sync.base_sync.BaseSync._get_client_factory')
+    @mock.patch(
+        's3_sync.providers.base_provider.BaseProvider._get_client_factory')
     def test_double_release(self, factory_mock):
         factory_mock.return_value = mock.Mock()
 
-        base = base_sync.BaseSync(self.settings, max_conns=1)
+        base = base_provider.BaseProvider(self.settings, max_conns=1)
         client = base.client_pool.get_client()
         self.assertEqual(0, base.client_pool.get_semaphore.balance)
         self.assertEqual(
@@ -215,8 +217,8 @@ class TestBaseSync(unittest.TestCase):
         try:
             blammo()
         except Exception:
-            r = base_sync.ProviderResponse(False, 404, {}, iter(['']),
-                                           exc_info=sys.exc_info())
+            r = base_provider.ProviderResponse(False, 404, {}, iter(['']),
+                                               exc_info=sys.exc_info())
 
         with self.assertRaises(Exception) as cm:
             r.reraise()
@@ -228,7 +230,8 @@ class TestBaseSync(unittest.TestCase):
             'HTTP_FOO': 'bar',
             'CONTENT_LENGTH': '88',
         })
-        r = base_sync.ProviderResponse(True, 204, headers, iter(['ab', 'cd']))
+        r = base_provider.ProviderResponse(
+            True, 204, headers, iter(['ab', 'cd']))
         with self.assertRaises(ValueError) as cm:
             r.reraise()
         self.assertEqual(
@@ -244,7 +247,8 @@ class TestBaseSync(unittest.TestCase):
             'HTTP_FOO': 'bar',
             'CONTENT_LENGTH': '88',
         })
-        r = base_sync.ProviderResponse(True, 204, headers, iter(['A'] * 100))
+        r = base_provider.ProviderResponse(
+            True, 204, headers, iter(['A'] * 100))
         with self.assertRaises(ValueError) as cm:
             r.reraise()
         self.assertEqual(

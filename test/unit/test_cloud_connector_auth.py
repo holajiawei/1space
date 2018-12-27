@@ -20,7 +20,7 @@ import mock
 
 from swift.common import swob
 
-from s3_sync.base_sync import ProviderResponse
+from s3_sync.providers.base_provider import ProviderResponse
 from s3_sync.cloud_connector import auth
 
 from .test_cloud_connector_app import TestCloudConnectorBase

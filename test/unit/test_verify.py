@@ -21,7 +21,7 @@ import StringIO
 import sys
 import unittest
 
-from s3_sync.base_sync import ProviderResponse
+from s3_sync.providers.base_provider import ProviderResponse
 from s3_sync.verify import main
 
 
@@ -344,7 +344,8 @@ class TestMainTrackProvider(unittest.TestCase):
         self.assertTrue(create_bucket)
 
 
-@mock.patch('s3_sync.base_sync.BaseSync.HttpClientPool.get_client')
+@mock.patch(
+    's3_sync.providers.base_provider.BaseProvider.HttpClientPool.get_client')
 class TestMainTrackClientCalls(unittest.TestCase):
     def assert_calls(self, mock_obj, calls):
         actual_calls = iter(mock_obj.mock_calls)
