@@ -24,7 +24,7 @@
             "protocol": "swift"
         }
     ],
-    "migrator_config": {
+    "migrator_settings": {
         "workers": 10,
         "process": 0,
         "processes": 1,
