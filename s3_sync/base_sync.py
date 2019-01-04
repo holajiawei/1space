@@ -112,6 +112,7 @@ class BaseSync(object):
     SLO_QUEUE_SIZE = 100
     MB = 1024 * 1024
     GB = 1024 * MB
+    RELEVANT_CONTAINER_METADATA = {}
 
     # Possible results of upload_object
     class UploadStatus(object):
@@ -223,6 +224,8 @@ class BaseSync(object):
         self.aws_bucket = settings['aws_bucket']
 
         self.selection_criteria = settings.get('selection_criteria', {})
+        self.sync_container_metadata = settings.get(
+            'sync_container_metadata', False)
 
         # custom prefix can potentially cause conflicts/data over write,
         # be VERY CAREFUL with this.
@@ -241,6 +244,31 @@ class BaseSync(object):
             's3:/' if self.endpoint is None else self.endpoint.rstrip('/'),
             self.aws_bucket,
         )
+
+    def post_container(self, metadata):
+        return ProviderResponse(False, 501, {}, '')
+
+    def select_container_metadata(self, metadata):
+        """Select container metadata to track
+
+        This is used to select which metadata to care about with regards to
+        sync'ing with the remote cluster. It also translates from the database
+        representation to a header format.
+        :param metadata: in the format from broker.metadata, that is a dict of
+                         the form {<key>: (<value>, <timestamp>), ...)
+        :returns: dict of the form {<key>: <value>, ...) containing only
+                  relevant key value pairs
+        """
+        result = {}
+        if not self.sync_container_metadata:
+            return result
+        for key in self.RELEVANT_CONTAINER_METADATA:
+            if key in metadata:
+                result[key] = metadata[key][0]
+        for key in metadata:
+            if key.startswith('X-Container-Meta-'):
+                result[key] = metadata[key][0]
+        return result
 
     def post_object(self, swift_key, headers):
         raise NotImplementedError()

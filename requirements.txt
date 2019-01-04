@@ -1,6 +1,6 @@
 boto3==1.9.23
 git+https://github.com/swiftstack/botocore.git@1.12.23.1#egg=botocore
-git+https://github.com/swiftstack/container-crawler.git@0.1.0#egg=container-crawler
+git+https://github.com/swiftstack/container-crawler.git@0.1.1#egg=container-crawler
 requests
 python-swiftclient
 lxml

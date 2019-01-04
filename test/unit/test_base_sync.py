@@ -208,6 +208,30 @@ class TestBaseSync(unittest.TestCase):
             client.close()
         self.assertEqual(1, client.semaphore.balance)
 
+    @mock.patch('s3_sync.base_sync.BaseSync._get_client_factory')
+    def test_select_container_metadata(self, factory_mock):
+        factory_mock.return_value = mock.Mock()
+        test_headers = {
+            'X-Container-Meta-foo': ('foo', '1545179217.201453'),
+            'x-delete-at': ('1645179217', '1545179217.201453'),
+            'someotherkey': ('boo', '1545179217.201453'),
+            'X-Versions-Location': (
+                'test_versions_location', '1545179217.201453'),
+            'X-Container-Meta-bar': ('bar', '1545179217.201453'),
+        }
+        expected_result = {
+            'X-Container-Meta-foo': 'foo',
+            'X-Container-Meta-bar': 'bar',
+        }
+        base = base_sync.BaseSync(self.settings, max_conns=1)
+        self.assertFalse(base.sync_container_metadata)
+        self.assertEqual({}, base.select_container_metadata(test_headers))
+        self.settings['sync_container_metadata'] = True
+        base = base_sync.BaseSync(self.settings, max_conns=1)
+        self.assertTrue(base.sync_container_metadata)
+        self.assertEqual(expected_result,
+                         base.select_container_metadata(test_headers))
+
     def test_provider_response_reraise(self):
         def blammo():
             raise Exception('boom?')

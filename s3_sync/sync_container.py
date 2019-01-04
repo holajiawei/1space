@@ -22,6 +22,7 @@ from container_crawler.exceptions import RetryError
 
 import json
 import logging
+import md5
 import os
 import os.path
 import pystatsd.statsd
@@ -36,6 +37,11 @@ from .provider_factory import create_provider
 from .base_sync import LOGGER_NAME
 
 
+def hash_dict(data):
+    # Only used for metadata, so keys and values are strings
+    return md5.md5(str(sorted(data.items()))).hexdigest()
+
+
 class SyncContainer(container_crawler.base_sync.BaseSync):
     # There is an implicit link between the names of the json fields and the
     # object fields -- they have to be the same.
@@ -45,6 +51,7 @@ class SyncContainer(container_crawler.base_sync.BaseSync):
 
     PROCESSED_ROW_KEY = 'last_row'
     VERIFIED_ROW_KEY = 'last_verified_row'
+    METADATA_HASH_KEY = 'metadata_hash'
 
     def __init__(self, status_dir, sync_settings, max_conns=10,
                  per_account=False, statsd_client=None):
@@ -156,6 +163,31 @@ class SyncContainer(container_crawler.base_sync.BaseSync):
             return
         self.statsd_client.update_stats(
             '.'.join([self.statsd_prefix, metric]), value)
+
+    def _get_metadata_hash(self, db_id):
+        res = self._get_status_row(self.METADATA_HASH_KEY, db_id)
+        # if the row doesn't exist or if there is a KeyError it returns 0
+        # signifying that there is no metadata hash stored for this db_id
+        # which for most conceivable purposes is the same as if the hash has
+        # changed.
+        if res == 0:
+            return None
+        return res
+
+    def handle_container_metadata(self, metadata_dict, db_id):
+        relevant_metadata = self.provider.select_container_metadata(
+            metadata_dict)
+        metadata_hash = hash_dict(relevant_metadata)
+        last_hash = self._get_metadata_hash(db_id)
+        if last_hash == metadata_hash:
+            return
+        post_resp = self.provider.post_container(relevant_metadata)
+        if post_resp.success:
+            self._save_status_row(metadata_hash, self.METADATA_HASH_KEY, db_id)
+            self.logger.debug(
+                'Container metadata updated for %s' % (self.aws_bucket,))
+        elif post_resp.exc_info:
+            self.logger.info(post_resp.exc_info)
 
     def handle(self, row, swift_client):
         if row['deleted']:

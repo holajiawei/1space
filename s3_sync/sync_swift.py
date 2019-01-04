@@ -582,6 +582,10 @@ class SyncSwift(BaseSync):
                          % key)
         return True
 
+    def post_container(self, metadata):
+        return self._call_swiftclient(
+            'post_container', self.remote_container, None, headers=metadata)
+
     @staticmethod
     def _is_meta_synced(local_metadata, remote_metadata):
         remote_keys = [key.lower() for key in remote_metadata.keys()

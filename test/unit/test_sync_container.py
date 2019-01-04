@@ -20,7 +20,8 @@ import time
 import unittest
 
 from container_crawler.exceptions import RetryError
-from s3_sync.sync_container import SyncContainer, SyncContainerFactory
+from s3_sync.sync_container import (SyncContainer, SyncContainerFactory,
+                                    hash_dict)
 from s3_sync.sync_s3 import SyncS3
 from s3_sync.sync_swift import SyncSwift
 from swift.common.utils import decode_timestamps, Timestamp
@@ -515,6 +516,66 @@ class TestSyncContainer(unittest.TestCase):
 
         # Make sure that we do not make any additional calls
         self.assertEqual([mock.call.delete_object(row['name'])],
+                         sync.provider.mock_calls)
+
+    def test_hash_invariance(self):
+        testdata = [({}, {}),
+                    ({'foo': 'bar'}, {'foo': 'bar'}),
+                    ({'foo1': 'bar1', 'foo2': 'bar2'},
+                     {'foo2': 'bar2', 'foo1': 'bar1'}),
+                    ({'\xd8\xaafoo': '\xd8\xaabar', 'foo': 'bar'},
+                     {'foo': 'bar', '\xd8\xaafoo': '\xd8\xaabar'})]
+        for case in testdata:
+            self.assertEqual(hash_dict(case[0]), hash_dict(case[1]))
+
+    @mock.patch('__builtin__.open')
+    @mock.patch('s3_sync.sync_container.os.path.exists')
+    @mock.patch('s3_sync.sync_s3.boto3.session.Session')
+    def test_handle_container_metadata(
+            self, session_mock, mock_exists, mock_open):
+        mock_exists.return_value = True
+        db_entries = {'db-id-1': {'aws_bucket': 'bucket', 'last_row': 5},
+                      'db-id-2': {'aws_bucket': 'old-bucket', 'last_row': 7}}
+        fake_conf_file = self.MockMetaConf(db_entries)
+        mock_open.return_value = fake_conf_file
+        settings = {
+            'aws_bucket': self.aws_bucket,
+            'aws_identity': 'identity',
+            'aws_secret': 'credential',
+            'account': 'account',
+            'sync_container_metadata': True,
+            'container': 'container',
+            'propagate_delete': True}
+
+        sync = SyncContainer(self.scratch_space, settings)
+        sync.provider = mock.Mock()
+        sync.provider.select_container_metadata.return_value = {}
+        metadata = {
+            'X-Container-Meta-Foo': ('foo', '1545179217.201453'),
+            'X-Delete-At': ('1645179217', '1545179217.201453'),
+            'Some-Other-Key': ('val', '1545179217.201453'),
+            'X-Versions-Locations': ('versions', '1545179217.201453'),
+            'X-Container-Meta-Bar': ('bar', '1545179217.201453'),
+        }
+        sync.handle_container_metadata(metadata, 'db-id-1')
+        sync.handle_container_metadata(metadata, 'db-id-1')
+
+        # Make sure that we do not make any additional calls
+        self.assertEqual([mock.call.select_container_metadata(metadata),
+                          mock.call.post_container({}),
+                          mock.call.select_container_metadata(metadata)],
+                         sync.provider.mock_calls)
+        sync.provider.reset_mock()
+        new_metadata = {
+            'X-Container-Meta-Foo': 'foo',
+            'X-Container-Meta-Bar': 'bar'
+        }
+        sync.provider.select_container_metadata.return_value = new_metadata
+        sync.handle_container_metadata(metadata, 'db-id-1')
+        sync.handle_container_metadata(metadata, 'db-id-1')
+        self.assertEqual([mock.call.select_container_metadata(metadata),
+                          mock.call.post_container(new_metadata),
+                          mock.call.select_container_metadata(metadata)],
                          sync.provider.mock_calls)
 
 
