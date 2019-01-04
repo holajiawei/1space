@@ -17,7 +17,6 @@ limitations under the License.
 
 import boto3
 import botocore
-from functools import partial
 import hashlib
 import json
 import mock
@@ -31,8 +30,8 @@ import unittest
 import urllib
 import uuid
 from . import (
-    TestCloudSyncBase, clear_swift_container, wait_for_condition,
-    clear_s3_bucket, clear_swift_account, WaitTimedOut)
+    TestCloudSyncBase, clear_swift_container,
+    clear_s3_bucket, clear_swift_account)
 import migrator_utils
 from s3_sync.utils import ACCOUNT_ACL_KEY
 
@@ -85,6 +84,9 @@ class TestMigrator(TestCloudSyncBase):
 
     def test_s3_migration(self):
         migration = self.s3_migration()
+        status = migrator_utils.TempMigratorStatus(migration)
+        migrator = migrator_utils.MigratorFactory().get_migrator(
+            migration, status)
 
         test_objects = [
             ('s3-blob', 's3 content', {}, {}),
@@ -133,8 +135,8 @@ class TestMigrator(TestCloudSyncBase):
         # But they are visible through the shunt
         self.assertTrue(_check_objects_copied(conn_local))
 
-        with self.migrator_running():
-            wait_for_condition(5, partial(_check_objects_copied, conn_noshunt))
+        migrator.next_pass()
+        self.assertTrue(_check_objects_copied(conn_noshunt))
 
         for name, expected_body, user_meta, req_headers in expected_objects:
             for conn in (conn_noshunt, conn_local):
@@ -158,6 +160,9 @@ class TestMigrator(TestCloudSyncBase):
 
     def test_swift_migration(self):
         migration = self.swift_migration()
+        status = migrator_utils.TempMigratorStatus(migration)
+        migrator = migrator_utils.MigratorFactory().get_migrator(
+            migration, status)
 
         test_objects = [
             ('swift-blob', 'blob content', {}),
@@ -192,8 +197,8 @@ class TestMigrator(TestCloudSyncBase):
         # But they are visible through the shunt
         self.assertTrue(_check_objects_copied(conn_local))
 
-        with self.migrator_running():
-            wait_for_condition(5, partial(_check_objects_copied, conn_noshunt))
+        migrator.next_pass()
+        self.assertTrue(_check_objects_copied(conn_noshunt))
 
         for name, expected_body, user_meta in test_objects:
             for conn in (conn_remote, conn_noshunt, conn_local):
@@ -206,6 +211,9 @@ class TestMigrator(TestCloudSyncBase):
     def test_swift_migration_unicode_acct(self):
         migration = self._find_migration(
             lambda m: m.get('container') == 'flotty')
+        status = migrator_utils.TempMigratorStatus(migration)
+        migrator = migrator_utils.MigratorFactory().get_migrator(
+            migration, status)
 
         test_objects = [
             ('swift-blog', 'blog content', {}),
@@ -239,8 +247,8 @@ class TestMigrator(TestCloudSyncBase):
         # But they are visible through the shunt
         self.assertTrue(_check_objects_copied(conn_local))
 
-        with self.migrator_running():
-            wait_for_condition(5, partial(_check_objects_copied, conn_noshunt))
+        migrator.next_pass()
+        self.assertTrue(_check_objects_copied(conn_noshunt))
 
         for name, expected_body, user_meta in test_objects:
             for conn in (conn_remote, conn_noshunt, conn_local):
@@ -360,6 +368,9 @@ class TestMigrator(TestCloudSyncBase):
     def test_swift_migrate_new_container_location(self):
         migration = self._find_migration(
             lambda cont: cont['container'] == 'no-auto-migration-swift-reloc')
+        status = migrator_utils.TempMigratorStatus(migration)
+        migrator = migrator_utils.MigratorFactory().get_migrator(
+            migration, status)
 
         test_objects = [
             ('swift-blobBBBB', 'blob content', {}),
@@ -414,23 +425,16 @@ class TestMigrator(TestCloudSyncBase):
         self.assertFalse(_check_objects_copied(conn_noshunt,
                                                migration['container']))
 
-        with self.migrator_running():
-            try:
-                wait_for_condition(5, partial(_check_objects_copied,
-                                              conn_noshunt,
-                                              migration['container']))
-            except WaitTimedOut:
-                hdrs, listing = conn_noshunt.get_container(
-                    migration['container'])
-                swift_names = [obj['name'] for obj in listing]
-                self.assertEqual(test_object_set, set(swift_names))
-
+        migrator.next_pass()
         # verify objects are really there
         _verify_objects(conn_noshunt, migration['container'])
 
     def test_s3_migrate_new_container_location(self):
         migration = self._find_migration(
             lambda cont: cont['container'] == 'migration-s3-target')
+        status = migrator_utils.TempMigratorStatus(migration)
+        migrator = migrator_utils.MigratorFactory().get_migrator(
+            migration, status)
 
         test_objects = [
             ('s3-blob', 's3 content', {}, {}),
@@ -494,17 +498,16 @@ class TestMigrator(TestCloudSyncBase):
         _verify_remote_s3_objects(migration['aws_bucket'])
 
         # run migration
-        with self.migrator_running():
-            wait_for_condition(5, partial(_check_objects_copied,
-                                          conn_noshunt,
-                                          migration['container']))
-
+        migrator.next_pass()
         # verify objects have migrated over
         _verify_local_s3_objects(conn_noshunt, migration['container'])
 
     def test_container_meta(self):
         migration = self._find_migration(
             lambda cont: cont['container'] == 'no-auto-acl')
+        status = migrator_utils.TempMigratorStatus(migration)
+        migrator = migrator_utils.MigratorFactory().get_migrator(
+            migration, status)
 
         acl = 'AUTH_' + migration['aws_identity'].split(':')[0]
         self.remote_swift('put_container', migration['aws_bucket'],
@@ -514,21 +517,14 @@ class TestMigrator(TestCloudSyncBase):
 
         conn_noshunt = self.conn_for_acct_noshunt(migration['account'])
 
-        def _check_container_created(conn):
-            try:
-                return conn.get_container(migration['container'])
-            except swiftclient.exceptions.ClientException as e:
-                if e.http_status == 404:
-                    return False
-                raise
-
         # verify container not really there
-        self.assertFalse(_check_container_created(conn_noshunt))
+        with self.assertRaises(swiftclient.exceptions.ClientException) as ctx:
+            conn_noshunt.get_container(migration['container'])
+        self.assertEqual(404, ctx.exception.http_status)
 
-        with self.migrator_running():
-            hdrs, listing = wait_for_condition(5, partial(
-                _check_container_created, conn_noshunt))
+        migrator.next_pass()
 
+        hdrs = conn_noshunt.head_container(migration['container'])
         self.assertIn('x-container-meta-test', hdrs)
         self.assertEqual('test metadata', hdrs['x-container-meta-test'])
 
@@ -546,9 +542,12 @@ class TestMigrator(TestCloudSyncBase):
         self.assertEqual(body, 'test')
 
     def test_migrate_all_containers(self):
-
         migration = self._find_migration(
             lambda cont: cont['aws_bucket'] == '/*')
+        status = migrator_utils.TempMigratorStatus(migration)
+        migrator = migrator_utils.MigratorFactory().get_migrator(
+            migration, status)
+
         test_objects = [
             ('swift-blobBBB2', 'blob content', {}),
             (u'swift-2unicod\u00e9', '\xde\xad\xbe\xef', {}),
@@ -567,21 +566,6 @@ class TestMigrator(TestCloudSyncBase):
         conn_local = self.conn_for_acct(migration['account'])
         conn_remote = self.conn_for_acct(migration['aws_account'])
 
-        def _check_objects_copied():
-            test_names = set([obj[0] for obj in test_objects])
-            for cont in test_containers:
-                try:
-                    hdrs, listing = conn_local.get_container(cont)
-                except swiftclient.exceptions.ClientException as ce:
-                    if '404' in str(ce):
-                        return False
-                    else:
-                        raise
-                swift_names = set([obj['name'] for obj in listing])
-                if test_names != swift_names:
-                    return False
-            return True
-
         for i, container in enumerate(test_containers):
             container_meta = {
                 u'x-container-meta-tes\u00e9t': u'test\u262f metadata%d' % i}
@@ -599,8 +583,13 @@ class TestMigrator(TestCloudSyncBase):
                 conn_remote.put_object(
                     container, name, StringIO.StringIO(body), headers=headers)
 
-        with self.migrator_running():
-            wait_for_condition(5, _check_objects_copied)
+        migrator.next_pass()
+
+        test_names = set([obj[0] for obj in test_objects])
+        for cont in test_containers:
+            hdrs, listing = conn_local.get_container(cont)
+            swift_names = set([obj['name'] for obj in listing])
+            self.assertEqual(test_names, swift_names)
 
         for name, expected_body, user_meta in test_objects:
             for cont in test_containers:
@@ -1246,6 +1235,9 @@ class TestMigrator(TestCloudSyncBase):
 
     def test_post_deleted_source_objects(self):
         migration = self.swift_migration()
+        status = migrator_utils.TempMigratorStatus(migration)
+        migrator = migrator_utils.MigratorFactory().get_migrator(
+            migration, status)
 
         test_objects = [
             (u'post-blob-\u062a', 'blob content',
@@ -1256,143 +1248,140 @@ class TestMigrator(TestCloudSyncBase):
         conn_remote = self.conn_for_acct(migration['aws_account'])
         conn_local = self.conn_for_acct(migration['account'])
 
-        def _check_objects_copied():
-            hdrs, listing = conn_local.get_container(migration['container'])
-            swift_names = [obj['name'] for obj in listing
-                           if 'swift' in obj.get('content_location', '')]
-            return set([obj[0] for obj in test_objects]) == set(swift_names)
-
         for name, body, headers in test_objects:
             conn_remote.put_object(migration['aws_bucket'], name,
                                    StringIO.StringIO(body),
                                    headers=headers)
 
-        self.assertFalse(_check_objects_copied())
+        _, listing = conn_local.get_container(migration['container'])
+        swift_names = [obj['name'] for obj in listing
+                       if 'swift' in obj.get('content_location', '')]
+        self.assertEqual(0, len(swift_names))
 
-        with self.migrator_running():
-            wait_for_condition(5, _check_objects_copied)
+        migrator.next_pass()
+
+        _, listing = conn_local.get_container(migration['container'])
+        swift_names = [obj['name'] for obj in listing
+                       if 'swift' in obj.get('content_location', '')]
+        self.assertEqual(set([obj[0] for obj in test_objects]),
+                         set(swift_names))
 
         conn_local.post_object(migration['container'], u'post-blob-\u062a',
                                {'x-object-meta-foo': 'foo'})
         for obj in test_objects:
             conn_remote.delete_object(migration['aws_bucket'], obj[0])
 
-        def _check_unmodified_objects_removed():
-            _, listing = conn_local.get_container(migration['container'])
-            if len(listing) != 1:
-                return False
-            if 'content_location' in listing[0]:
-                return False
-            return listing[0]['name'] == u'post-blob-\u062a'
+        migrator.next_pass()
 
-        with self.migrator_running():
-            wait_for_condition(5, _check_unmodified_objects_removed)
+        _, listing = conn_local.get_container(migration['container'])
+        self.assertEqual(1, len(listing))
+        self.assertFalse('content_location' in listing[0])
+        self.assertEqual(u'post-blob-\u062a', listing[0]['name'])
 
-    def _setup_deleted_container_test(self):
+    def _setup_deleted_container_test(self, migration, migrator):
         '''Common code for the deleted origin container tests'''
-        migration = self._find_migration(
-            lambda cont: cont['aws_bucket'] == '/*')
-
         conn_source = self.conn_for_acct(migration['aws_account'])
         conn_destination = self.conn_for_acct(migration['account'])
 
         conn_source.put_container('test-delete')
         conn_source.put_object('test-delete', 'source_object', 'body')
 
-        def _check_object_copied():
-            hdrs, listing = conn_destination.get_container('test-delete')
-            if not listing:
-                return False
-            if listing[0]['name'] != 'source_object':
-                return False
-            if 'swift' not in listing[0]['content_location']:
-                return False
-            return True
+        migrator.next_pass()
 
-        with self.migrator_running():
-            wait_for_condition(5, _check_object_copied)
+        _, listing = conn_destination.get_container('test-delete')
+        self.assertEqual('source_object', listing[0]['name'])
+        self.assertIn('swift', listing[0]['content_location'])
 
     def test_deleted_source_container(self):
         '''Delete the migrated container after it is erased from the source.'''
-        self._setup_deleted_container_test()
-
         migration = self._find_migration(
             lambda cont: cont['aws_bucket'] == '/*')
+        status = migrator_utils.TempMigratorStatus(migration)
+        migrator = migrator_utils.MigratorFactory().get_migrator(
+            migration, status)
+
+        self._setup_deleted_container_test(migration, migrator)
 
         conn_source = self.conn_for_acct(migration['aws_account'])
         conn_destination = self.conn_for_acct(migration['account'])
 
-        def _check_container_removed():
-            hdrs, listing = conn_destination.get_account()
-            if listing:
-                return False
-            return True
-
         conn_source.delete_object('test-delete', 'source_object')
         conn_source.delete_container('test-delete')
-        with self.migrator_running():
-            wait_for_condition(5, _check_container_removed)
+
+        # reset the migrator config to /*
+        migrator.config['container'] = '/*'
+        migrator.config['aws_bucket'] = '/*'
+        migrator.next_pass()
+
+        _, listing = conn_destination.get_account()
+        self.assertEqual(0, len(listing))
 
     def test_deleted_container_after_new_object(self):
         '''Destination container remains if it has extra objects'''
         migration = self._find_migration(
             lambda cont: cont['aws_bucket'] == '/*')
+        status = migrator_utils.TempMigratorStatus(migration)
+        migrator = migrator_utils.MigratorFactory().get_migrator(
+            migration, status)
 
         conn_source = self.conn_for_acct(migration['aws_account'])
         conn_destination = self.conn_for_acct(migration['account'])
 
-        self._setup_deleted_container_test()
+        self._setup_deleted_container_test(migration, migrator)
         conn_destination.put_object('test-delete', 'new-object', 'new')
         conn_source.delete_object('test-delete', 'source_object')
         conn_source.delete_container('test-delete')
-
-        def _check_deleted_migrated_objects():
-            hdrs, listing = conn_destination.get_container('test-delete')
-            if len(listing) != 1:
-                return False
-            if listing[0]['name'] != 'new-object':
-                return False
-            return True
 
         with self.assertRaises(swiftclient.exceptions.ClientException) as cm:
             conn_source.head_container('test-delete')
         self.assertEqual(404, cm.exception.http_status)
 
-        with self.migrator_running():
-            wait_for_condition(5, _check_deleted_migrated_objects)
+        # reset the migrator config, as it is now set to a single container
+        migrator.config['container'] = '/*'
+        migrator.config['aws_bucket'] = '/*'
+        migrator.next_pass()
+
+        _, listing = conn_destination.get_container('test-delete')
+        self.assertEqual(1, len(listing))
+        self.assertEqual('new-object', listing[0]['name'])
 
     def test_deleted_container_after_post(self):
         '''Destination container remains if it has been modified'''
         migration = self._find_migration(
             lambda cont: cont['aws_bucket'] == '/*')
+        status = migrator_utils.TempMigratorStatus(migration)
+        migrator = migrator_utils.MigratorFactory().get_migrator(
+            migration, status)
 
         conn_source = self.conn_for_acct(migration['aws_account'])
         conn_destination = self.conn_for_acct(migration['account'])
 
-        self._setup_deleted_container_test()
+        self._setup_deleted_container_test(migration, migrator)
         conn_destination.post_container(
             'test-delete',
             {'x-container-meta-new-meta': 'value'})
         conn_source.delete_object('test-delete', 'source_object')
         conn_source.delete_container('test-delete')
 
-        def _check_deleted_migrated_objects():
-            hdrs, listing = conn_destination.get_container('test-delete')
-            self.assertIn('x-container-meta-new-meta', hdrs)
-            if len(listing) == 0:
-                return True
-            return False
-
         with self.assertRaises(swiftclient.exceptions.ClientException) as cm:
             conn_source.head_container('test-delete')
         self.assertEqual(404, cm.exception.http_status)
 
-        with self.migrator_running():
-            wait_for_condition(5, _check_deleted_migrated_objects)
+        # reset the migrator config, as it is now set to a single container
+        migrator.config['container'] = '/*'
+        migrator.config['aws_bucket'] = '/*'
+        migrator.next_pass()
+
+        hdrs, listing = conn_destination.get_container('test-delete')
+        self.assertIn('x-container-meta-new-meta', hdrs)
+        self.assertEqual(0, len(listing))
 
     def test_deleted_object_pagination(self):
         '''Make sure objects are not removed if they're not yet listed.'''
         migration = self.swift_migration()
+        status = migrator_utils.TempMigratorStatus(migration)
+        migrator = migrator_utils.MigratorFactory().get_migrator(
+            migration, status)
 
         conn_source = self.conn_for_acct(migration['aws_account'])
         conn_destination = self.conn_for_acct(migration['account'])
@@ -1405,26 +1394,24 @@ class TestMigrator(TestCloudSyncBase):
         for i in range(5, 10):
             conn_source.put_object(container, *test_objects[i])
 
-        def _check_migrated_objects(expected_count):
-            _, listing = conn_destination.get_container(container)
-            local = [entry for entry in listing
-                     if 'swift' in entry.get('content_location', [])]
-            if len(local) != expected_count:
-                return False
-            return local
+        migrator.next_pass()
 
-        with self.migrator_running():
-            first_migrated = wait_for_condition(
-                5, partial(_check_migrated_objects, 5))
+        _, listing = conn_destination.get_container(container)
+        first_migrated = [entry for entry in listing
+                          if 'swift' in entry.get('content_location', [])]
+        self.assertEqual(5, len(first_migrated))
 
         # Upload the first 5 objects. The migrator runs with a 5 object limit
         # and we rely on that in this test.
         for i in range(0, 5):
             conn_source.put_object(container, *test_objects[i])
 
-        with self.migrator_running():
-            new_migrated = wait_for_condition(
-                5, partial(_check_migrated_objects, 10))
+        migrator.next_pass()
+
+        _, listing = conn_destination.get_container(container)
+        new_migrated = [entry for entry in listing
+                        if 'swift' in entry.get('content_location', [])]
+        self.assertEqual(10, len(new_migrated))
 
         # The older migrated objects should not have been changed by the
         # migrator
