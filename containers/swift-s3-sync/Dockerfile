@@ -17,26 +17,16 @@ RUN mkdir /swift-s3-sync && mkdir /var/lib/swift-s3-sync
 RUN locale-gen en_US.UTF-8
 ENV LANG='en_US.UTF-8' LANGUAGE='en_US:en' LC_ALL='en_US.UTF-8'
 
-# These patches improve Unicode handling in swiftclient, and swift3
-COPY containers/swift-s3-sync/swiftclient.patch /tmp/
-RUN bash -c "cd /usr/local/src \
-    && patch -p0 < /tmp/swiftclient.patch \
-    && rm -f /tmp/swiftclient.patch"
-COPY containers/swift-s3-sync/swift3-unicode-fix.patch /tmp/
-RUN bash -c "cd /usr/local/src \
-    && patch -p0 < /tmp/swift3-unicode-fix.patch \
-    && rm -f /tmp/swift3-unicode-fix.patch"
-COPY containers/swift-s3-sync/swift3-s3api-auth.patch /tmp/
-RUN bash -c "cd /usr/local/src/swift \
-    && patch -p1 < /tmp/swift3-s3api-auth.patch \
-    && rm -f /tmp/swift3-s3api-auth.patch"
-
 # This patch allows tempauth to use Keystone-provided identities ("groups") for
 # authz decisions.
 COPY containers/swift-s3-sync/tempauth-keystone-groups.patch /tmp/
 RUN bash -c "cd /usr/local/src \
     && patch -p0 < /tmp/tempauth-keystone-groups.patch \
     && rm -f /tmp/tempauth-keystone-groups.patch"
+
+# TODO: remove swift3 once cloud connector is migrated to s3api
+RUN git clone --branch 1.12 --single-branch --depth 1 https://github.com/openstack/swift3.git /usr/local/src/swift3 && \
+    cd /usr/local/src/swift3 && python setup.py develop
 
 # Have rsyslog listen on UDP port 514
 COPY containers/swift-s3-sync/rsyslog.conf /etc/rsyslog.conf

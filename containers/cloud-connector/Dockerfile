@@ -30,11 +30,11 @@ RUN apk --no-cache add \
 # Install non-cloud-builder Python dependencies
 COPY containers/cloud-connector/*.txt requirements.txt ./
 ARG SWIFT_REPO=openstack/swift
-ARG SWIFT_TAG=2.19.0
+ARG SWIFT_TAG=2.20.0
 RUN pip install --no-warn-script-location -I --root /python-root \
     -r ./requirements.txt -r ./cloud-connector-requirements.txt \
     "git+https://github.com/${SWIFT_REPO}@${SWIFT_TAG}#egg=swift"
-COPY containers/swift-s3-sync/swift3-unicode-fix.patch /tmp/
+COPY containers/cloud-connector/swift3-unicode-fix.patch /tmp/
 RUN bash -c "cd /python-root/usr/local/lib/python2.7/site-packages \
     && patch -p1 < /tmp/swift3-unicode-fix.patch"
 # Now install cloud-builder code itself
