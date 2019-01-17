@@ -5,3 +5,5 @@ psutil
 s3cmd
 coverage
 coveralls
+sphinx
+sphinx_rtd_theme

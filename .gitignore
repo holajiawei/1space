@@ -8,3 +8,4 @@ docker-compose.custom.yml
 /.swift-s3-sync
 /port-mapping.env
 *,cover
+docs/build
