@@ -17,7 +17,8 @@
 This enables application portability and freedom to share data between 
 public and on-premises `OpenStack Swift <https://github.com/openstack/swift>`_
 clouds. Additionally, 1space enables data lifecycling, migration and data
-protection capabilities between clouds.
+protection capabilities between clouds. The source code to 1space is hosted
+at: `github.com/swiftstack/1space <https://github.com/swiftstack/1space>`_
 
 Notable features:
 -----------------
