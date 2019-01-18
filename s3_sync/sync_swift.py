@@ -12,17 +12,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from container_crawler.exceptions import RetryError
 import eventlet
 import hashlib
 import json
 import swiftclient
-from swift.common.internal_client import UnexpectedResponse
-from swift.common.utils import FileLikeIter, decode_timestamps
 import sys
 import traceback
 import urllib
 
+from container_crawler.exceptions import RetryError
+from swift.common.internal_client import UnexpectedResponse
+from swift.common.utils import FileLikeIter, decode_timestamps
 from .base_sync import BaseSync, ProviderResponse, match_item
 from .utils import (ClosingResourceIterable, check_slo, DLO_ETAG_FIELD,
                     FileWrapper, get_dlo_prefix, iter_internal_listing,
@@ -49,6 +49,13 @@ class SyncSwift(BaseSync):
         self.remote_delete_after_addition = \
             self.settings.get('remote_delete_after_addition',
                               DEFAULT_SEGMENT_DELAY)
+        # if policy is set to expire remote objects, then don't sync
+        # x-delete-after header, the correct header/value will be set
+        # according to policy set by operator
+        self.propagated_headers = set(['content-type'])
+        if not self.remote_delete_after and self.settings.get(
+                'propagate_expiration'):
+            self.propagated_headers.add('x-delete-at')
 
     @property
     def remote_container(self):
@@ -721,15 +728,17 @@ class SyncSwift(BaseSync):
         return self._call_swiftclient(
             'post_container', self.remote_container, None, headers=metadata)
 
-    @staticmethod
-    def _is_meta_synced(local_metadata, remote_metadata):
+    def _is_meta_synced(self, local_metadata, remote_metadata):
         dlo_etag_header = SWIFT_USER_META_PREFIX + DLO_ETAG_FIELD
-        remote_keys = [key.lower() for key in remote_metadata.keys()
-                       if (key.lower().startswith(SWIFT_USER_META_PREFIX) and
-                           # Remove the reserved DLO user-tag]
-                           not key.lower() == dlo_etag_header)]
+        remote_keys = [
+            key.lower() for key in remote_metadata.keys()
+            if (key.lower().startswith(SWIFT_USER_META_PREFIX) and
+                # Remove the reserved DLO user-tag]
+                not key.lower() == dlo_etag_header) or
+            key.lower() in self.propagated_headers]
         local_keys = [key.lower() for key in local_metadata.keys()
-                      if key.lower().startswith(SWIFT_USER_META_PREFIX)]
+                      if key.lower().startswith(SWIFT_USER_META_PREFIX) or
+                      key.lower() in self.propagated_headers]
         if set(remote_keys) != set(local_keys):
             return False
         for key in local_keys:
@@ -737,8 +746,7 @@ class SyncSwift(BaseSync):
                 return False
         return True
 
-    @staticmethod
-    def _get_user_headers(all_headers):
+    def _get_user_headers(self, all_headers):
         return dict([(key, value) for key, value in all_headers.items()
                      if key.lower().startswith(SWIFT_USER_META_PREFIX) or
-                     key.lower() == 'content-type'])
+                     key.lower() in self.propagated_headers])

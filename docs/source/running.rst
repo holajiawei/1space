@@ -45,6 +45,9 @@ all profiles:
                "protocol": "swift",
                "copy_after": 0,
                "propagate_delete": false,
+               "propagate_expiration": false,
+               "remote_delete_after": 15552000,
+               "remote_delete_after_addition": 86400,
                "retain_local": false,
                "sync_container_metadata": false,
                "sync_container_acl": false
@@ -70,22 +73,32 @@ Sync Profile
   - **aws_secret**: remote object store identity's secret/password.
   - **aws_bucket**: remote bucket where data is synced to.
   - **protocol**: remote object store API protocol: ``swift`` or ``s3``.
-  - **copy_after**: Time in seconds to delay object sync (*Optional*,
+  - **copy_after**: Time in seconds to delay object sync (*Optional*.
     Default: 0).
   - **propagate_delete**: If False, local DELETE requests won't be propagated
-    to remote container (*Optional*, Default: ``True``).
-  - **retain_local**: If False, local object will be deleted after sync is
-    completed (*Optional*, Default: ``True``).
+    to remote container (*Optional*. Default: ``True``).
+  - **propagate_expiration**: If True, expiration headers will propagate when
+    synced to remote cluster. Note: *remote_delete_after* takes precendence
+    over this option (*Optional*. Default: ``False``. This option is only
+    available to Swift protocol)
   - **remote_delete_after**: Delete after setting for remote objects. For Swift
     remote clusters, this is applied to each object. For S3, it is applied as a
     lifecycle policy for the prefix. Note that in both cases, the delete after
     relates to the original object date, not the date it is copied to remote.
-    A value of 0 (zero) means don't apply. (*Optional*, Default: 0)
-  - **sync_container_metadata**: Propagate container metadata. This option
-    applies only for Swift remote clusters (*Optional*, Default: ``False``).
+    A value of 0 (zero) means don't apply. (*Optional*. Default: 0)
+  - **remote_delete_after_addition**: This option is used to set expiration
+    header on SLO segments when *remote_delete_after* is used to set
+    expiration on a manifest. This option will prevent segments from expiring
+    before manifests. (*Optional*. Default: 24 hours. This option is only available
+    for Swift remote clusters).
+    A value of 0 (zero) means don't apply. (*Optional*. Default: 0)
+  - **retain_local**: If False, local object will be deleted after sync is
+    completed (*Optional*. Default: ``True``).
   - **sync_container_acl**: Preserve the container ACL (Read/Write). This
     option applies only for Swift remote clusters, **sync_container_metadata**
-    must also be set to True (*Optional*, Default: ``False``).
+    must also be set to True (*Optional*. Default: ``False``).
+  - **sync_container_metadata**: Propagate container metadata. This option
+    applies only for Swift remote clusters (*Optional*. Default: ``False``).
 
 Global settings
   - **devices**: Directory Swift's container devices are mounted under.

@@ -307,6 +307,7 @@ class TestSyncSwift(unittest.TestCase):
         etag = '1234'
         swift_object_meta = {'x-object-meta-new': '\xf0\x9f\x91\x8d',
                              'x-object-meta-old': 'updated',
+                             'x-delete-at': '12345',
                              'etag': etag,
                              'x-timestamp': str(1e9)}
         mock_ic = mock.Mock()
@@ -327,6 +328,38 @@ class TestSyncSwift(unittest.TestCase):
             self.aws_bucket, key, headers={
                 'x-object-meta-new': '\xf0\x9f\x91\x8d',
                 'x-object-meta-old': 'updated'})
+
+    @mock.patch('s3_sync.sync_swift.swiftclient.client.Connection')
+    def test_propagate_expiration(self, mock_swift):
+        self.mapping['propagate_expiration'] = True
+        self.sync_swift = SyncSwift(self.mapping, max_conns=self.max_conns)
+        key = 'key'
+        storage_policy = 42
+        etag = '1234'
+        swift_object_meta = {'x-object-meta-foo': 'bla',
+                             'x-delete-at': '12345',
+                             'content-type': 'text/plain',
+                             'etag': etag,
+                             'x-timestamp': str(1e9)}
+        mock_ic = mock.Mock()
+        mock_ic.get_object_metadata.return_value = swift_object_meta
+        swift_client = mock.Mock()
+        mock_swift.return_value = swift_client
+        swift_client.head_object.return_value = {
+            'x-object-meta-old': 'old', 'etag': '%s' % etag}
+        swift_client.post_object.return_value = None
+        swift_client.delete_object.return_value = None
+
+        self.sync_swift.upload_object(
+            {'name': key,
+             'storage_policy_index': storage_policy,
+             'created_at': str(1e9)}, mock_ic)
+
+        swift_client.post_object.assert_called_with(
+            self.aws_bucket, key, headers={
+                'x-object-meta-foo': 'bla',
+                'content-type': 'text/plain',
+                'x-delete-at': '12345'})
 
     @mock.patch('s3_sync.sync_swift.swiftclient.client.Connection')
     @mock.patch('s3_sync.sync_swift.FileWrapper')

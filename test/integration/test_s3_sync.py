@@ -342,6 +342,24 @@ class TestCloudSync(TestCloudSyncBase):
         clear_swift_container(self.swift_src, mapping['container'])
         clear_swift_container(self.swift_dst, mapping['aws_bucket'])
 
+    def test_swift_propagate_expiration(self):
+        mapping = dict(self.swift_sync_mapping())
+        mapping['propagate_expiration'] = True
+        obj = 'obj2expire'
+        crawler = utils.get_container_crawler(mapping)
+        etag = self.local_swift('put_object', mapping['container'],
+                                obj, 'body of obj',
+                                headers={'x-delete-after': '30'})
+        self.assertEqual(hashlib.md5('body of obj').hexdigest(), etag)
+        hdrs = self.local_swift('head_object', mapping['container'], obj)
+        self.assertIn('x-delete-at', hdrs.keys())
+        expected_exp = hdrs['x-delete-at']
+        crawler.run_once()
+        remote_hdrs = self.remote_swift('head_object', mapping['aws_bucket'],
+                                        obj)
+        self.assertIn('x-delete-at', remote_hdrs.keys())
+        self.assertEqual(expected_exp, remote_hdrs['x-delete-at'])
+
     def test_keystone_sync_v3(self):
         mapping = self._find_mapping(
             lambda m: m['aws_endpoint'].endswith('v3'))
