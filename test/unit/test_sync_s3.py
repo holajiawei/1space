@@ -27,7 +27,7 @@ import datetime
 import hashlib
 import json
 import mock
-from s3_sync.sync_s3 import SyncS3
+from s3_sync.sync_s3 import SyncS3, prefix_from_rule, is_conflict, same_expiry
 from s3_sync import utils
 from swift.common import swob
 from swift.common.internal_client import UnexpectedResponse
@@ -115,6 +115,295 @@ class TestSyncS3(unittest.TestCase):
                       Key=s3_key, Metadata={'jojo': 'b'},
                       ServerSideEncryption='AES256'),
         ], self.mock_boto3_client.put_object.mock_calls)
+
+    def test_prefix_from_rule(self):
+        tests = [
+            ({}, None),
+            ({'Prefix': 'abc'}, 'abc'),
+            ({'Prefix': 'abc', 'Filter': {'Tag': 'def'}}, 'abc'),
+            ({'Prefix': 'abc', 'Filter': {'Prefix': 'def'}}, 'def'),
+            ({'Filter': {'Filter': 'def'}}, None),
+            ({'Filter': {'Prefix': 'def'}}, 'def'),
+            ({'Filter': {'Tag': 'def'}}, None),
+            ({'Prefix': 'abc', 'Filter': {'Tag': 'xyz', 'Prefix': 'def'}},
+             'def'),
+        ]
+        for test_num, (rule, expected_result) in enumerate(tests):
+            self.assertEqual(expected_result, prefix_from_rule(rule),
+                             'Failed test case: %d' % (test_num,))
+
+    def test_is_conflict(self):
+        tests = [
+            (('abc', {'Prefix': 'abc', 'Status': 'Enabled'}), True),
+            (('xabc', {'Prefix': 'abc'}), False),
+            (('abc', {'Prefix': 'abcx'}), False),
+            (('abc', {'Prefix': 'xabc'}), False),
+            (('abcx', {'Prefix': 'abc', 'Status': 'Enabled'}), True),
+            (('abc', {'Prefix': '', 'Status': 'Enabled'}), True),
+            (('abc', {'Prefix': 'abc', 'Status': 'Disabled'}), False),
+            (('abcx', {'Prefix': 'abc', 'Status': 'Disabled'}), False),
+            (('abc', {'Prefix': '', 'Status': 'Disabled'}), False),
+            (('abc', {}), False),
+        ]
+        for test_num, (test_args, expected_result) in enumerate(tests):
+            self.assertEqual(expected_result, is_conflict(*test_args),
+                             'Failed test case: %d' % (test_num,))
+
+    def test_same_expiry(self):
+        tests = [
+            (({}, 0), False),
+            (({}, 1000), False),
+            (({'Expiration': {}}, 0), False),
+            (({'Expiration': {}}, 1000), False),
+            (({'Expiration': {'Days': 0}}, 0), True),
+            (({'Expiration': {'Days': 1000}}, 1000), True),
+        ]
+        for test_num, (test_args, expected_result) in enumerate(tests):
+            self.assertEqual(expected_result, same_expiry(*test_args),
+                             'Failed test case: %d' % (test_num,))
+
+    def test_update_lifecycle_policy(self):
+        # Simple case: add special to rules==[]
+        self.mock_boto3_client.get_bucket_lifecycle_configuration.\
+            return_value = {
+                'ResponseMetadata': {
+                    'HTTPStatusCode': 200,
+                },
+                'Rules': [],
+            }
+        self.mock_boto3_client.put_bucket_lifecycle_configuration.\
+            return_value = {
+                'ResponseMetadata': {
+                    'HTTPStatusCode': 200,
+                }
+            }
+        # 33 days
+        self.sync_s3.settings['remote_delete_after'] = 33 * 60 * 60 * 24
+        self.sync_s3._update_lifecycle_policy()
+        self.assertEqual([
+            mock.call(Bucket=self.aws_bucket),
+        ], self.mock_boto3_client.get_bucket_lifecycle_configuration.
+            mock_calls)
+        expected_rule = {
+            'Expiration': {'Days': 33},
+            'Filter': {'Prefix': self.sync_s3.get_s3_name('')},
+            'ID': self.sync_s3.get_s3_name(''),
+            'Status': 'Enabled',
+        }
+        self.assertEqual([
+            mock.call(Bucket=self.aws_bucket, LifecycleConfiguration={
+                'Rules': [expected_rule]})
+        ], self.mock_boto3_client.put_bucket_lifecycle_configuration.
+            mock_calls)
+
+    def test_update_lifecycle_policy_non_conflict(self):
+        # Simple case: add special to rules==[<non-conflicting>]
+        orig_rule = {
+            'Expiration': {'Days': 900},
+            'Filter': {'Prefix': 'xxxx/account/container2'},
+            'ID': 'someid',
+            'Status': 'Enabled'}
+        self.mock_boto3_client.get_bucket_lifecycle_configuration.\
+            return_value = {
+                'ResponseMetadata': {
+                    'HTTPStatusCode': 200,
+                },
+                'Rules': [orig_rule],
+            }
+        self.mock_boto3_client.put_bucket_lifecycle_configuration.\
+            return_value = {
+                'ResponseMetadata': {
+                    'HTTPStatusCode': 200,
+                }
+            }
+        # 33 days
+        self.sync_s3.settings['remote_delete_after'] = 33 * 60 * 60 * 24
+        self.sync_s3._update_lifecycle_policy()
+        self.assertEqual([
+            mock.call(Bucket=self.aws_bucket),
+        ], self.mock_boto3_client.get_bucket_lifecycle_configuration.
+            mock_calls)
+        expected_rule = {
+            'Expiration': {'Days': 33},
+            'Filter': {'Prefix': self.sync_s3.get_s3_name('')},
+            'ID': self.sync_s3.get_s3_name(''),
+            'Status': 'Enabled',
+        }
+        self.assertEqual([
+            mock.call(Bucket=self.aws_bucket, LifecycleConfiguration={
+                'Rules': [orig_rule, expected_rule]})
+        ], self.mock_boto3_client.put_bucket_lifecycle_configuration.
+            mock_calls)
+
+    def test_update_lifecycle_policy_same_rule(self):
+        # Simple case: update special (change from controller)
+        prefix = self.sync_s3.get_s3_name('')
+        orig_rule = {
+            'Expiration': {'Days': 900},
+            'Filter': {'Prefix': prefix},
+            'ID': 'someid',
+            'Status': 'Enabled'}
+        self.mock_boto3_client.get_bucket_lifecycle_configuration.\
+            return_value = {
+                'ResponseMetadata': {
+                    'HTTPStatusCode': 200,
+                },
+                'Rules': [orig_rule],
+            }
+        self.mock_boto3_client.put_bucket_lifecycle_configuration.\
+            return_value = {
+                'ResponseMetadata': {
+                    'HTTPStatusCode': 200,
+                }
+            }
+        # 33 days
+        self.sync_s3.settings['remote_delete_after'] = 33 * 60 * 60 * 24
+        self.sync_s3._update_lifecycle_policy()
+        self.assertEqual([
+            mock.call(Bucket=self.aws_bucket),
+        ], self.mock_boto3_client.get_bucket_lifecycle_configuration.
+            mock_calls)
+        expected_rule = {
+            'Expiration': {'Days': 33},
+            'Filter': {'Prefix': prefix},
+            'ID': prefix,
+            'Status': 'Enabled',
+        }
+        self.assertEqual([
+            mock.call(Bucket=self.aws_bucket, LifecycleConfiguration={
+                'Rules': [expected_rule]})
+        ], self.mock_boto3_client.put_bucket_lifecycle_configuration.
+            mock_calls)
+        self.assertEqual(
+            [mock.call('Existing rule on bucket (%s) will be overwritten:'
+                       ' %s' % (self.aws_bucket, orig_rule)),
+             mock.call('Created new lifecycle rule for bucket (%s): %s' %
+                       (self.aws_bucket, expected_rule))],
+            self.logger.info.mock_calls)
+        self.logger.info.reset_mock()
+
+    def test_update_lifecycle_policy_conflict_default(self):
+        # Conflict with default rule for bucket
+        orig_rule = {
+            'Expiration': {'Days': 900},
+            'Filter': {'Prefix': ''},
+            'ID': 'someid',
+            'Status': 'Enabled'}
+        self.mock_boto3_client.get_bucket_lifecycle_configuration.\
+            return_value = {
+                'ResponseMetadata': {
+                    'HTTPStatusCode': 200,
+                },
+                'Rules': [orig_rule],
+            }
+        self.mock_boto3_client.put_bucket_lifecycle_configuration.\
+            return_value = {
+                'ResponseMetadata': {
+                    'HTTPStatusCode': 200,
+                }
+            }
+        # 33 days
+        self.sync_s3.settings['remote_delete_after'] = 33 * 60 * 60 * 24
+        self.sync_s3._update_lifecycle_policy()
+        self.assertEqual([
+            mock.call(Bucket=self.aws_bucket),
+        ], self.mock_boto3_client.get_bucket_lifecycle_configuration.
+            mock_calls)
+        self.assertEqual(
+            [], self.mock_boto3_client.put_bucket_lifecycle_configuration.
+            mock_calls)
+        self.assertEqual(
+            [mock.call('Unable to set expire after due to conflicting rule on'
+                       ' bucket (%s): %s' % (self.aws_bucket, orig_rule))],
+            self.logger.error.mock_calls)
+        self.logger.error.reset_mock()
+
+    def test_update_lifecycle_policy_conflict_other(self):
+        # Conflict with other rule for bucket
+        prefix = self.sync_s3.get_s3_name('')
+        orig_rule = {
+            'Expiration': {'Days': 900},
+            'Filter': {'Prefix': prefix[:8]},
+            'ID': 'someid',
+            'Status': 'Enabled'}
+        self.mock_boto3_client.get_bucket_lifecycle_configuration.\
+            return_value = {
+                'ResponseMetadata': {
+                    'HTTPStatusCode': 200,
+                },
+                'Rules': [orig_rule],
+            }
+        self.mock_boto3_client.put_bucket_lifecycle_configuration.\
+            return_value = {
+                'ResponseMetadata': {
+                    'HTTPStatusCode': 200,
+                }
+            }
+        # 33 days
+        self.sync_s3.settings['remote_delete_after'] = 33 * 60 * 60 * 24
+        self.sync_s3._update_lifecycle_policy()
+        self.assertEqual([
+            mock.call(Bucket=self.aws_bucket),
+        ], self.mock_boto3_client.get_bucket_lifecycle_configuration.
+            mock_calls)
+        self.assertEqual(
+            [], self.mock_boto3_client.put_bucket_lifecycle_configuration.
+            mock_calls)
+        self.assertEqual(
+            [mock.call('Unable to set expire after due to conflicting rule on'
+                       ' bucket (%s): %s' % (self.aws_bucket, orig_rule))],
+            self.logger.error.mock_calls)
+        self.logger.error.reset_mock()
+
+    def test_update_lifecycle_policy_no_initial_rule(self):
+        # Never had lifecycleconfiguration case
+        def kablooey(**kwargs):
+            raise ClientError(
+                dict(Error=dict(
+                    Code='NoSuchLifecycleConfiguration',
+                    Message='An error occurred (NoSuchLifecycleConfiguration) '
+                            'when calling the GetBucketLifecycleConfiguration '
+                            'operation: The lifecycle configuration does not '
+                            'exist'),
+                     ResponseMetadata=dict(HTTPStatusCode=500,
+                                           HTTPHeaders={})),
+                'GET')
+
+        self.mock_boto3_client.get_bucket_lifecycle_configuration.\
+            side_effect = kablooey
+        self.mock_boto3_client.put_bucket_lifecycle_configuration.\
+            return_value = {
+                'ResponseMetadata': {
+                    'HTTPStatusCode': 200,
+                }
+            }
+        # 33 days
+        self.sync_s3.settings['remote_delete_after'] = 33 * 60 * 60 * 24
+        self.sync_s3._update_lifecycle_policy()
+        self.assertEqual([
+            mock.call(Bucket=self.aws_bucket),
+        ], self.mock_boto3_client.get_bucket_lifecycle_configuration.
+            mock_calls)
+        fake_rule = {
+            'Expiration': {'Days': 30000},
+            'Filter': {'Prefix': ''},
+            'ID': 'fakerule',
+            'Status': 'Disabled',
+        }
+
+        expected_rule = {
+            'Expiration': {'Days': 33},
+            'Filter': {'Prefix': self.sync_s3.get_s3_name('')},
+            'ID': self.sync_s3.get_s3_name(''),
+            'Status': 'Enabled',
+        }
+        self.assertEqual([
+            mock.call(Bucket=self.aws_bucket, LifecycleConfiguration={
+                'Rules': [fake_rule]}),
+            mock.call(Bucket=self.aws_bucket, LifecycleConfiguration={
+                'Rules': [expected_rule]})
+        ], self.mock_boto3_client.put_bucket_lifecycle_configuration.
+            mock_calls)
 
     @mock.patch('s3_sync.sync_s3.SeekableFileLikeIter')
     def test_put_object_with_content_length(self, mock_seekable):

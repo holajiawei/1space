@@ -74,6 +74,11 @@ Sync Profile
     to remote container (*Optional*, Default: ``True``).
   - **retain_local**: If False, local object will be deleted after sync is
     completed (*Optional*, Default: 'True').
+  - **remote_delete_after**: Delete after setting for remote objects. For Swift
+    remote clusters, this is applied to each object. For S3, it is applied as a
+    lifecycle policy for the prefix. Note that in both cases, the delete after
+    relates to the original object date, not the date it is copied to remote.
+    A value of 0 (zero) means don't apply. (*Optional*, Default: 0)
 
 Global settings
   - **devices**: Directory Swift's container devices are mounted under.

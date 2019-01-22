@@ -23,7 +23,12 @@ from s3_sync.provider_factory import create_provider
 
 from . import TestCloudSyncBase, clear_swift_container, \
     swift_content_location, s3_key_name, clear_s3_bucket
+import unittest
 import utils
+
+
+DAY = 60 * 60 * 24
+DAY_F = DAY * 1.0
 
 
 class TestCloudSync(TestCloudSyncBase):
@@ -1008,3 +1013,58 @@ class TestCloudSync(TestCloudSyncBase):
 
         clear_swift_container(self.swift_dst, mapping['aws_bucket'])
         clear_swift_container(self.swift_src, mapping['container'])
+
+    def test_s3_set_expire_after(self):
+        if not self.has_aws:
+            raise unittest.SkipTest('AWS Credentials not defined.')
+
+        container = 's3_expire_after_test'
+        mapping = dict(
+            aws_identity=self.aws_identity,
+            aws_secret=self.aws_secret,
+            account='AUTH_test',
+            aws_bucket=self.aws_bucket,
+            container=container,
+            copy_after=0,
+            propagate_delete=False,
+            protocol='s3',
+            retain_local=True,
+            remote_delete_after=2000 * DAY,
+        )
+        conn = self.conn_for_acct(mapping['account'])
+        conn.put_container(mapping['container'])
+        provider = create_provider(mapping, 1)
+        orig_rules = provider._get_lifecycle_configuration_for_bucket()
+        prefix = provider.get_s3_name('')
+
+        match = next((r.get('Filter', {}).get('Prefix') ==
+                      prefix for r in orig_rules), None)
+        if match:
+            old_del_after = match.get('Expiration', {}).get('Days')
+            if old_del_after:
+                mapping['remote_delete_after'] = \
+                    (old_del_after + 1) * DAY
+
+        del_after = mapping['remote_delete_after']
+        exp_days = int(del_after / DAY_F + 0.5)
+        crawler = utils.get_container_crawler(mapping)
+        crawler.run_once()
+
+        rules = provider._get_lifecycle_configuration_for_bucket()
+
+        # clean up before checking if it worked (in case it didn't)
+        conn.delete_container(mapping['container'])
+
+        provider._put_lifecycle_configuration(orig_rules)
+
+        def is_match(r):
+            if r.get('Filter', {}).get('Prefix') != prefix:
+                return False
+            if r.get('Status') != 'Enabled':
+                return False
+            if r.get('Expiration', {}).get('Days') != exp_days:
+                return False
+            return True
+
+        self.assertTrue(any(is_match(r) for r in rules), 'no rules match: %s'
+                        % (rules,))

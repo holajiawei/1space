@@ -20,7 +20,6 @@ import botocore
 import hashlib
 import json
 import mock
-import os
 import StringIO
 from swift.common.middleware.acl import format_acl
 import swiftclient
@@ -37,17 +36,6 @@ from s3_sync.utils import ACCOUNT_ACL_KEY
 
 
 class TestMigrator(TestCloudSyncBase):
-    @classmethod
-    def setUpClass(klass):
-        super(TestMigrator, klass).setUpClass()
-        klass.aws_identity = os.environ.get('AWS_IDENTITY')
-        klass.aws_bucket = os.environ.get('AWS_BUCKET', '1space-test')
-        klass.aws_secret = os.environ.get('AWS_SECRET')
-        if all((klass.aws_identity, klass.aws_bucket, klass.aws_secret)):
-            klass.has_aws = True
-        else:
-            klass.has_aws = False
-
     def tearDown(self):
         def _clear_and_maybe_delete_container(account, container):
             conn = self.conn_for_acct_noshunt(account)
@@ -1657,6 +1645,8 @@ class TestMigrator(TestCloudSyncBase):
     def test_s3_mpu_migration(self):
         if not self.has_aws:
             raise unittest.SkipTest("AWS Credentials not defined.")
+        if not self.run_long_tests:
+            raise unittest.SkipTest("Skipping long test")
         # Create mpu on S3
         key = 'mpu_test_' + str(uuid.uuid4())
         part_size = 5 * 2**20

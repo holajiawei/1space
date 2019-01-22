@@ -380,6 +380,14 @@ class TestCloudSyncBase(unittest.TestCase):
 
         klass.statsd_server = utils.StatsdServer(port=21337)
         klass.statsd_server.serve()
+        klass.aws_identity = os.environ.get('AWS_IDENTITY')
+        klass.aws_bucket = os.environ.get('AWS_BUCKET', '1space-test')
+        klass.aws_secret = os.environ.get('AWS_SECRET')
+        klass.run_long_tests = os.environ.get('RUN_LONG_TESTS')
+        if all((klass.aws_identity, klass.aws_bucket, klass.aws_secret)):
+            klass.has_aws = True
+        else:
+            klass.has_aws = False
 
     @classmethod
     def tearDownClass(klass):

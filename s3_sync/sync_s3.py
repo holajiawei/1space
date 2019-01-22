@@ -21,6 +21,7 @@ from botocore.handlers import (
     conditionally_calculate_md5, set_list_objects_encoding_type_url)
 from container_crawler.exceptions import RetryError
 import eventlet
+from functools import partial
 import hashlib
 import json
 import re
@@ -37,6 +38,34 @@ from .utils import (
     SLOFileWrapper, ClosingResourceIterable, get_slo_etag, check_slo,
     SLO_ETAG_FIELD, SLO_HEADER, SWIFT_USER_META_PREFIX, SWIFT_TIME_FMT,
     SeekableFileLikeIter)
+
+
+DAY = 60 * 60 * 24.0  # seconds in a day as float
+
+
+def prefix_from_rule(rule):
+    # Note: Prefix at Rule level is deprecated, so Filter has
+    # precedence
+    r_prefix = None
+    r_filter = rule.get('Filter')
+    if r_filter:
+        r_prefix = r_filter.get('Prefix')
+    if r_prefix is None:
+        r_prefix = rule.get('Prefix')
+    return r_prefix
+
+
+def is_conflict(prefix, rule):
+    r_prefix = prefix_from_rule(rule)
+    if r_prefix is not None:
+        if not prefix.startswith(r_prefix):
+            return False
+    return rule.get('Status') == 'Enabled'
+
+
+def same_expiry(rule, days):
+    r_days = rule.get('Expiration', {}).get('Days')
+    return r_days == days
 
 
 class SyncS3(BaseSync):
@@ -142,6 +171,84 @@ class SyncS3(BaseSync):
             close = getattr(conn._endpoint.http_session, 'close', None)
             if close:
                 close()
+
+    def _get_lifecycle_configuration_for_bucket(self):
+        # get existing lifecycleconfiguration
+        # if doesn't exist, need to write a whole bucket policy otherwise
+        # we get an XML validation error from S3
+        # TODO (MSD): make this better and/or more standard - other people
+        #             must deal with this issue, also
+        try:
+            with self.client_pool.get_client() as s3_client:
+                s3_status = s3_client.get_bucket_lifecycle_configuration(
+                    Bucket=self.aws_bucket)
+        except botocore.exceptions.ClientError as e:
+            if 'NoSuchLifecycleConfiguration' not in str(e.response):
+                raise e
+            fake_rule = {
+                'Expiration': {'Days': 30000},
+                'Filter': {'Prefix': ''},
+                'ID': 'fakerule',
+                'Status': 'Disabled'}
+            self._put_lifecycle_configuration([fake_rule])
+            rules = []
+        else:
+            rules = s3_status['Rules']
+        return rules
+
+    def _update_lifecycle_policy(self):
+        remote_del_after = self.settings.get('remote_delete_after', 0)
+        if not remote_del_after:
+            return ProviderResponse(True, 200, {}, '')
+        rules = self._get_lifecycle_configuration_for_bucket()
+        prefix = self.get_s3_name('')
+        days = int(remote_del_after / DAY + 0.5)
+
+        conflicts = filter(partial(is_conflict, prefix), rules)
+        replace_rule = -1
+        if conflicts:
+            for i, r in enumerate(conflicts):
+                if prefix_from_rule(r) == prefix:
+                    if same_expiry(r, days):
+                        message = 'Expiry rule already exists for bucket '\
+                            '(%s): %s' % (self.aws_bucket, r)
+                        self.logger.info(message)
+                        return ProviderResponse(True, 200, {}, message)
+                    else:
+                        self.logger.info(
+                            'Existing rule on bucket (%s) will be overwritten:'
+                            ' %s' % (self.aws_bucket, r))
+                        replace_rule = i
+                else:
+                    message = 'Unable to set expire after due to conflicting '\
+                        'rule on bucket (%s): %s' % (self.aws_bucket, r)
+                    self.logger.error(message)
+                    return ProviderResponse(False, 409, {}, message)
+
+        newrule = {
+            'Expiration': {'Days': days},
+            'Filter': {'Prefix': prefix},
+            'ID': prefix,
+            'Status': 'Enabled'}
+        if replace_rule >= 0:
+            rules[replace_rule] = newrule
+        else:
+            rules.append(newrule)
+        self._put_lifecycle_configuration(rules)
+        message = 'Created new lifecycle rule for bucket (%s): %s'\
+            % (self.aws_bucket, newrule)
+        self.logger.info(message)
+        return ProviderResponse(True, 200, {}, message)
+
+    def _put_lifecycle_configuration(self, rules):
+        with self.client_pool.get_client() as s3_client:
+            s3_status = s3_client.put_bucket_lifecycle_configuration(
+                Bucket=self.aws_bucket,
+                LifecycleConfiguration={'Rules': rules})
+            resp = s3_status.get('ResponseMetadata', {})
+            if resp.get('HTTPStatusCode') != 200:
+                raise Exception('Unexpected response to set lifecycle '
+                                'configuration: %s' % (resp,))
 
     def upload_object(self, row, internal_client):
         swift_key = row['name']
@@ -853,7 +960,17 @@ class SyncS3(BaseSync):
             parts.append(error.message)
         return ' '.join(parts)
 
+    def post_container(self, metadata):
+        # NOTE: X-SS-REMOTE-DELETE-AFTER is an artificial key that holds
+        #       the remote_delete_after value. Currently, it is not
+        #       necessary to pass this value to _update_lifecycle_policy as it
+        #       is already available in self.
+        return self._update_lifecycle_policy()
+
     def select_container_metadata(self, metadata_dict):
+        remote_del_after = self.settings.get('remote_delete_after', 0)
+        if remote_del_after:
+            return {'X-SS-REMOTE-DELETE-AFTER': remote_del_after}
         return {}
 
     @staticmethod
