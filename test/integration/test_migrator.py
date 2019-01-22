@@ -1481,6 +1481,7 @@ class TestMigrator(TestCloudSyncBase):
     def test_migrate_many_dlos(self):
         '''Ensure we can migrate many DLOs'''
         migration = self.swift_migration()
+
         conn_source = self.conn_for_acct(migration['aws_account'])
         conn_destination = self.conn_for_acct(migration['account'])
 

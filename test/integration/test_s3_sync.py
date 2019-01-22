@@ -18,11 +18,10 @@ import hashlib
 from itertools import repeat
 import json
 import time
-import urllib
 
 from s3_sync.provider_factory import create_provider
 
-from . import TestCloudSyncBase, clear_swift_container, wait_for_condition, \
+from . import TestCloudSyncBase, clear_swift_container, \
     swift_content_location, s3_key_name, clear_s3_bucket
 import utils
 
@@ -30,35 +29,6 @@ import utils
 class TestCloudSync(TestCloudSyncBase):
     def tearDown(self):
         self.statsd_server.clear()
-
-    def _assert_stats(self, mapping, count, action):
-        parts = ['stats', mapping['aws_endpoint'], mapping['aws_bucket'],
-                 mapping['account'], mapping['container'], action]
-        key = '.'.join([urllib.quote(part.encode('utf-8'), safe='').
-                        replace('.', '%2E')
-                        for part in parts])
-        # NOTE: There may be multiple messages and we need to accumulate all of
-        # the increments from them.
-        observed_count = [0]
-
-        def _assert_stats_helper():
-            # stats format: [key, (timestamp, count)]
-            for messages in self.statsd_server.get_messages():
-                for msg in messages:
-                    if msg[0] != key:
-                        continue
-                    observed_count[0] += msg[1][1]
-
-            try:
-                self.assertEqual(count, observed_count[0])
-                return True
-            except AssertionError:
-                return False
-
-        try:
-            wait_for_condition(2, _assert_stats_helper)
-        except:
-            self.assertEqual(count, observed_count[0])
 
     def _test_archive(
             self, key, content, mapping, get_etag, expected_location,

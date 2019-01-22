@@ -3,11 +3,9 @@ import json
 import logging
 import s3_sync.daemon_utils
 import s3_sync.migrator
-from swift.common.ring import Ring
 from swift.common.utils import whataremyips
+from . import CONTAINER_RING
 
-
-CONTAINER_RING = Ring('/etc/swift', ring_name='container')
 MYIPS = whataremyips('0.0.0.0')
 
 

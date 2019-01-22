@@ -12,6 +12,10 @@ find /var/run/ -name *.pid -delete
 # proxy-server instance on port 8082.
 cp -f /swift-s3-sync/containers/swift-s3-sync/{internal-client,proxy-server,proxy-server-noshunt}.conf /etc/swift/
 
+# TODO: add this to bouncestorage/swift-aio
+printf '\n[container-sharder]\n' >> /etc/swift/container-server/1.conf
+printf '\n[container-updater]\n' >> /etc/swift/container-server/1.conf
+
 # Copied from the docker swift container. Unfortunately, there is no way to
 # plugin an additional invocation to start swift-s3-sync, so we had to do this.
 /usr/sbin/service rsyslog start
