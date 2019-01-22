@@ -1,16 +1,16 @@
 History
 =======
 
-0.1.52
-------
+0.1.52 (2018-12-17)
+-------------------
 
 Bug fixes
   - Fixed the duplicated statsd metrics for uploaded objects (previously,
     the uploaded object count was increased even if the object was found to have
     been already uploaded).
 
-0.1.51
-------
+0.1.51 (2018-11-27)
+-------------------
 
 Bug fixes
   - The migrator will now create destination containers if one of the following
@@ -22,8 +22,8 @@ Bug fixes
     than the migrator segment size, but smaller than `MAX_FILE_SIZE` would also
     be converted to SLOs.
 
-0.1.50
-------
+0.1.50 (2018-11-26)
+-------------------
 
 Features
   - Added the ability to restore multi-part upload objects and objects bigger than
@@ -41,16 +41,16 @@ Features
 Improvements
   - Updated the container-crawler dependency to 0.1.0.
 
-0.1.49.1
---------
+0.1.49.1 (2018-11-07)
+---------------------
 
 Bug fixes
   - Fixed a bug with MIME-decoding S3 headers, which led to 500 errors on object
     GET/HEAD requests through the shunt if they were uploaded with MIME-encoded
     metadata.
 
-0.1.49
-------
+0.1.49 (2018-11-07)
+-------------------
 
 Features
   - Support migrating multipart objects from S3 into Swift.
@@ -67,8 +67,8 @@ Bug fixes
     when removing removing objects to keep containers/buckets in-sync, even though
     the operation was successful.
 
-0.1.48.2
---------
+0.1.48.2 (2018-11-01)
+---------------------
 
 Improvements
   - Opt into using the unsigned-payload option with AWS S3 uploads, as opposed to
@@ -77,8 +77,8 @@ Improvements
     restricts the option to HTTPS and we rely on Boto to use HTTPS by default with
     any AWS bucket/endpoint. Do not configure the HTTP endpoint for AWS manually!
 
-0.1.48.1
---------
+0.1.48.1 (2018-10-31)
+---------------------
 
 Improvements
   - Added support for handling MIME-encoded UTF-8 characters in metadata keys. Now
