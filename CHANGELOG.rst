@@ -1,6 +1,16 @@
 History
 =======
 
+0.1.53 (2019-01-22)
+-------------------
+
+Features
+   - When using sync or lifecycle with Swift as the target blobstore, container
+   metadata can now be propagated if `sync_container_metadata` is set.
+   - The `remote_delete_after` option now applies to the AWS S3 blobstore.
+   1space will attempt to set the lifecycle policy for the required prefixes on
+   the bucket.
+
 0.1.52 (2018-12-17)
 -------------------
 

@@ -10,7 +10,8 @@
             "copy_after": 0,
             "propagate_delete": false,
             "protocol": "swift",
-            "retain_local": false
+            "retain_local": false,
+            "sync_container_metadata": true
         }
     ],
     "migrations": [
