@@ -55,11 +55,17 @@ class TestSyncSharded(TestCloudSyncBase):
         db_file = os.path.join(container_dir, container_hash + '.db')
         return ContainerBroker(db_file)
 
-    def assert_container_object_count(self, conn, cont, expected_obj_count):
+    def assert_container_metadata(self, conn, cont,
+                                  expected_obj_count, expected_user_meta=None):
         headers = conn.head_container(cont)
         self.assertIn('x-container-object-count', headers)
         self.assertEqual(str(expected_obj_count),
                          headers['x-container-object-count'])
+        if expected_user_meta:
+            for key in expected_user_meta.keys():
+                self.assertIn(key, headers)
+                self.assertEqual(str(expected_user_meta[key]),
+                                 headers[key])
 
     def assert_container_delete_fails(self, conn, cont):
         with self.assertRaises(ClientException) as cm:
@@ -106,8 +112,11 @@ class TestSyncSharded(TestCloudSyncBase):
             # sanity test - check PUT success
             self.assertEquals(expected_etag, etag)
 
-    def _verify_target(self):
+    def _verify_target(self, expected_user_meta=None):
         target_conn = self.conn_for_acct_noshunt(self.mapping['aws_account'])
+        self.assert_container_metadata(
+            target_conn, self.mapping['aws_bucket'], len(self.test_args),
+            expected_user_meta)
         for obj, body, etag in self.test_args:
             headers, target_body = target_conn.get_object(
                 self.mapping['aws_bucket'], obj)
@@ -128,8 +137,8 @@ class TestSyncSharded(TestCloudSyncBase):
         self._upload_objects(conn, 0, self.initial_object_count)
 
         # sanity test
-        self.assert_container_object_count(conn, self.cont,
-                                           self.initial_object_count)
+        self.assert_container_metadata(conn, self.cont,
+                                       self.initial_object_count)
 
     def tearDown(self):
         conn = self.conn_for_acct(self.acct)
@@ -139,7 +148,7 @@ class TestSyncSharded(TestCloudSyncBase):
         # after deleting objects, run sharder to shrink back to root
         # then delete
         self.sharders.once()
-        self.assert_container_object_count(conn, self.cont, 0)
+        self.assert_container_metadata(conn, self.cont, 0)
 
         conn.delete_container(self. cont)
 
@@ -162,15 +171,20 @@ class TestSyncSharded(TestCloudSyncBase):
             conn, self.initial_object_count,
             self.initial_object_count + self.additional_object_count)
 
+        # add container metadata
+        cont_hdr = {'x-container-meta-test-sharder': 'doit'}
+        conn.post_container(self.cont, cont_hdr)
+
         # sanity test
         self.sharders.once()  # update container count
-        self.assert_container_object_count(
+        self.assert_container_metadata(
             conn, self.cont,
-            self.initial_object_count + self.additional_object_count)
+            self.initial_object_count + self.additional_object_count,
+            cont_hdr)
 
         # sync to target again
         crawler.run_once()
-        self._verify_target()
+        self._verify_target(cont_hdr)
 
         # test that statsd server got the correct results for root container
         self._assert_stats(self.mapping, len(self.test_args), 'copied_objects')
