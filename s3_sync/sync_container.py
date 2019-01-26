@@ -29,6 +29,7 @@ import pystatsd.statsd
 from swift.common.utils import decode_timestamps, Timestamp
 from swift.common.internal_client import UnexpectedResponse
 import time
+import traceback
 import urllib
 
 from .base_sync import BaseSync
@@ -186,8 +187,11 @@ class SyncContainer(container_crawler.base_sync.BaseSync):
             self._save_status_row(metadata_hash, self.METADATA_HASH_KEY, db_id)
             self.logger.debug(
                 'Container metadata updated for %s' % (self.aws_bucket,))
-        elif post_resp.exc_info:
-            self.logger.info(post_resp.exc_info)
+        else:
+            self.logger.error('Failed to update container metadata -- %s: %s' %
+                              (post_resp.wsgi_status, post_resp.exc_info[1]))
+            self.logger.debug(
+                ''.join(traceback.format_tb(post_resp.exc_info[2])))
 
     def handle(self, row, swift_client):
         if row['deleted']:
