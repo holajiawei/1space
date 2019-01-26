@@ -995,6 +995,7 @@ class TestMigrator(TestCloudSyncBase):
         self.assertTrue(is_where('local'))
 
     def test_propagate_object_meta_to_remote_swift(self):
+        # test shunt post from remote swift
         migration = self.swift_migration()
         key = u'test_object-\u062a'
         content = 'test object'
@@ -1013,6 +1014,7 @@ class TestMigrator(TestCloudSyncBase):
         clear_swift_container(self.swift_dst, migration['aws_bucket'])
 
     def test_propagate_object_meta_to_remote_s3(self):
+        # test shunt post from remote s3
         migration = self.s3_migration()
         key = u'test_object-\u062a'
         content = 'test object'

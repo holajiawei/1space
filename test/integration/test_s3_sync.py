@@ -15,16 +15,17 @@ limitations under the License.
 """
 
 import hashlib
-from itertools import repeat
 import json
 import time
+import unittest
+import utils
 
+from itertools import repeat
+from swiftclient.client import ClientException
 from s3_sync.provider_factory import create_provider
 
 from . import TestCloudSyncBase, clear_swift_container, \
     swift_content_location, s3_key_name, clear_s3_bucket
-import unittest
-import utils
 
 
 DAY = 60 * 60 * 24
@@ -1137,11 +1138,13 @@ class TestCloudSync(TestCloudSyncBase):
         clear_swift_container(self.swift_src, mapping['container'])
         clear_swift_container(self.swift_dst, mapping['aws_bucket'])
 
-    def test_swift_shunt_post(self):
-        content = 'shunt post'
-        key = 'test_swift_shunt_post'
+    def test_swift_dont_shunt_post(self):
+        # shunt middleware only shunts POST request for migration profiles
+        content = 'better not shunt post'
+        key = 'test_swift_dont_shunt_post'
         mapping = self.swift_restore_mapping()
-        self.remote_swift('put_object', mapping['aws_bucket'], key, content)
+        self.remote_swift('put_object', mapping['aws_bucket'], key, content,
+                          headers={'x-object-meta-test-header': 'remote'})
 
         def ensure_remote():
             hdrs, listing = self.local_swift(
@@ -1151,13 +1154,16 @@ class TestCloudSync(TestCloudSyncBase):
                 self.assertIn('content_location', entry)
                 self.assertEqual([swift_content_location(mapping)],
                                  entry['content_location'])
+            obj_hdrs = self.local_swift(
+                'head_object', mapping['container'], key)
+            self.assertIn('x-object-meta-test-header', obj_hdrs)
+            self.assertEqual('remote', obj_hdrs['x-object-meta-test-header'])
 
         ensure_remote()
-        self.local_swift(
-            'post_object', mapping['container'], key,
-            {'x-object-meta-test-header': 'foo'})
-        hdrs = self.local_swift('head_object', mapping['container'], key)
-        self.assertEqual('foo', hdrs.get('x-object-meta-test-header'))
+        with self.assertRaises(ClientException):
+            self.local_swift(
+                'post_object', mapping['container'], key,
+                {'x-object-meta-test-header': 'local'})
         ensure_remote()
 
         clear_swift_container(self.swift_dst, mapping['aws_bucket'])

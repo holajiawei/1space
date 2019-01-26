@@ -1,19 +1,76 @@
+# Copyright 2017 SwiftStack
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """
-Copyright 2017 SwiftStack
+The shunt is a proxy middleware responsible for providing the single namespace
+functionality between an on-premises Swift cluster and a remote cluster
+that is being used for either migrating data from or for syncing data to.
 
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
+The middleware makes uses of the same configuration file loaded by the
+sync and migration daemons, but it is limited to only loading one configuration
+file. Therefore, it is recommended that only one configuration file be
+used for both daemons and this middleware.
 
-    http://www.apache.org/licenses/LICENSE-2.0
+To add the middleware to the proxy pipeline, place it right after the auth
+middleware and on the filter configuration set the ``conf_file`` option with
+the path to the json configuration file.
 
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
+When shunt middleware is enabled, the ``X-Cloud-Sync-Shunt-Bypass`` header
+can be used to bypass the shunt behavior. For ``GET`` and ``HEAD``requests
+the middleware adds a new ``content_location`` header to the response. This
+new header will contain a CSV formatted list of which cluster(s) the
+requested entity(ies) are stored.
+
+Shunt behavior for sync profiles
+--------------------------------
+
+``HEAD`` requests are not shunted for container requests, only for object
+requests.
+
+On Container ``GET`` requests, the shunt middleware will splice the listing
+request from the local and the remote container. On Object ``GET`` requests
+the object is shunted if local cluster responds with ``404``. If
+``restore_object`` option is set on profile configuration, the object is also
+written to local cluster for faster future ``GET`` requests (with the
+exception of range requests).
+
+``PUT``, ``POST`` and ``DELETE`` requests are not shunted.
+
+Shunt behavior for migration profiles
+-------------------------------------
+
+``HEAD`` requests are shunted for container and object requests. When
+a container does not exist locally, the middleware will create it.
+
+On Container ``GET`` requests, the shunt middleware will splice the listing
+request from the local and the remote container. On Object ``GET`` requests
+the object is shunted if local cluster responds with ``404``. If
+``restore_object`` option is set on profile configuration, the object is also
+migrated to local cluster for faster future ``GET`` requests (with the
+exception of range requests).
+
+Object ``PUT`` requests can return a 404 when a container does not exist. In
+this case, the middleware will create the container based on the profile
+configuration.
+
+Container ``POST`` requests are shunted only to remote swift clusters. Object
+``POST`` requests are shunted only if the object does not exist locally
+(i.e., 404).
+
+``DELETE`` requests are shunted for remote swift clusters only.
+
 """
-
 import json
 
 from os.path import getmtime
@@ -213,7 +270,7 @@ class S3SyncShunt(object):
             # TODO: think about what to do for POST, COPY
             return self.handle_object(req, start_response, sync_profile, obj,
                                       per_account)
-        if req.method == 'POST':
+        if req.method == 'POST' and sync_profile.get('migration'):
             return self.handle_post(req, start_response, sync_profile, obj,
                                     per_account)
 
@@ -514,8 +571,20 @@ class S3SyncShunt(object):
 
     def handle_post(
             self, req, start_response, sync_profile, obj, per_account):
+        """
+        Shunt POST request for migration profiles. Object POST request is
+        only shunted when the object has not yet been migrated. Container
+        POST request is only shunted for swift protocol.
 
-        if not obj and sync_profile.get('migration'):
+        :param req: original request
+        :param start_response: WSGI start_response callable
+        :param sync_profile: 1space profile
+        :param obj: object name
+        :param per_account: Boolean on whether the sync is per-account,
+                           where all containers are synced.
+        :return: app_iter
+        """
+        if not obj:
             req.headers[get_sys_migrator_header('container')] =\
                 MigrationContainerStates.MODIFIED
         status, headers, app_iter = req.call_application(self.app)
@@ -527,10 +596,6 @@ class S3SyncShunt(object):
 
         # S3 does not support bucket metadata
         if not obj and sync_profile.get('protocol') != 'swift':
-            start_response(status, headers)
-            return app_iter
-
-        if not obj and not sync_profile.get('migration'):
             start_response(status, headers)
             return app_iter
 
