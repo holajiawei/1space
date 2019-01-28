@@ -295,7 +295,8 @@ class BaseSync(object):
     def upload_object(self, row, internal_client):
         raise NotImplementedError()
 
-    def update_metadata(self, swift_key, swift_meta):
+    def update_metadata(self, swift_key, swift_meta, remote_metadata={},
+                        container={}):
         raise NotImplementedError()
 
     def delete_object(self, swift_key):

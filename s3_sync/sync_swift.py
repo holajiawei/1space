@@ -24,8 +24,9 @@ import traceback
 import urllib
 
 from .base_sync import BaseSync, ProviderResponse, match_item
-from .utils import (FileWrapper, ClosingResourceIterable, check_slo,
-                    SWIFT_USER_META_PREFIX)
+from .utils import (ClosingResourceIterable, check_slo, DLO_ETAG_FIELD,
+                    FileWrapper, get_dlo_prefix, iter_internal_listing,
+                    MANIFEST_HEADER, SWIFT_USER_META_PREFIX)
 
 # We have to import keystone upfront to avoid green threads issue with the lazy
 # importer
@@ -387,14 +388,33 @@ class SyncSwift(BaseSync):
             if remote_meta and self._check_slo_uploaded(
                     key, remote_meta, internal_client, req_hdrs):
                 if not self._is_meta_synced(metadata, remote_meta):
-                    self.update_metadata(key, metadata, dst_container)
+                    self.update_metadata(key, metadata,
+                                         remote_metadata=remote_meta,
+                                         container=dst_container)
                     return self.UploadStatus.POST
                 return self.UploadStatus.NOOP
             return self._upload_slo(key, internal_client, req_hdrs)
 
+        dlo_prefix = get_dlo_prefix(metadata)
+        if not segment and dlo_prefix:
+            # TODO: we should be able to consolidate checking of uploaded
+            # objects before getting into the specifics of uploading large
+            # objects or regular objects.
+            if remote_meta and self._check_dlo_uploaded(metadata, remote_meta,
+                                                        internal_client):
+                if not self._is_meta_synced(metadata, remote_meta):
+                    self.update_metadata(key, metadata,
+                                         remote_metadata=remote_meta,
+                                         container=dst_container)
+                    return self.UploadStatus.POST
+                return self.UploadStatus.NOOP
+            return self._upload_dlo(key, internal_client, metadata, req_hdrs)
+
         if remote_meta and metadata['etag'] == remote_meta['etag']:
             if not self._is_meta_synced(metadata, remote_meta):
-                self.update_metadata(key, metadata, dst_container)
+                self.update_metadata(key, metadata,
+                                     remote_metadata=remote_meta,
+                                     container=dst_container)
                 return self.UploadStatus.POST
             return self.UploadStatus.NOOP
 
@@ -447,31 +467,48 @@ class SyncSwift(BaseSync):
             entry['content_location'] = self._make_content_location(bucket)
         return resp
 
-    def update_metadata(self, swift_key, metadata, container=None):
+    def update_metadata(self, swift_key, metadata, remote_metadata={},
+                        container=None):
         user_headers = self._get_user_headers(metadata)
+        dlo_manifest = metadata.get(MANIFEST_HEADER, '').decode('utf-8')
+        if dlo_manifest:
+            # We have to preserve both our computed DLO ETag *and* the manifest
+            # header.
+            dlo_etag_field = SWIFT_USER_META_PREFIX + DLO_ETAG_FIELD
+            segments_container, prefix = dlo_manifest.split('/', 1)
+            user_headers[MANIFEST_HEADER] = '%s/%s' % (
+                self.remote_segments_container(segments_container),
+                prefix)
+            user_headers[dlo_etag_field] = remote_metadata.get(dlo_etag_field)
         self.post_object(swift_key, user_headers, container)
+
+    def _upload_objects(self, objects_list, internal_client):
+        work_queue = eventlet.queue.Queue(self.SLO_QUEUE_SIZE)
+        worker_pool = eventlet.greenpool.GreenPool(self.SLO_WORKERS)
+        workers = []
+        for _ in range(self.SLO_WORKERS):
+            workers.append(
+                worker_pool.spawn(
+                    self._upload_segment_worker, work_queue, internal_client))
+        # key must be a tuple (container, object)
+        for key in objects_list:
+            work_queue.put(key)
+        work_queue.join()
+        for _ in range(self.SLO_WORKERS):
+            work_queue.put(None)
+        errors = []
+        for thread in workers:
+            errors += thread.wait()
+        return errors
 
     def _upload_slo(self, key, internal_client, swift_req_headers):
         headers, manifest = self._get_internal_manifest(
             key, internal_client, swift_req_headers)
         self.logger.debug("JSON manifest: %s" % str(manifest))
 
-        work_queue = eventlet.queue.Queue(self.SLO_QUEUE_SIZE)
-        worker_pool = eventlet.greenpool.GreenPool(self.SLO_WORKERS)
-        workers = []
-        for _ in range(0, self.SLO_WORKERS):
-            workers.append(
-                worker_pool.spawn(
-                    self._upload_slo_worker, work_queue, internal_client))
-        for segment in manifest:
-            work_queue.put(segment)
-        work_queue.join()
-        for _ in range(0, self.SLO_WORKERS):
-            work_queue.put(None)
-
-        errors = []
-        for thread in workers:
-            errors += thread.wait()
+        errors = self._upload_objects(
+            (segment['name'].split('/', 2)[1:] for segment in manifest),
+            internal_client)
 
         # TODO: errors list contains the failed segments. We should retry
         # them on failure.
@@ -500,6 +537,52 @@ class SyncSwift(BaseSync):
                 query_string='multipart-manifest=put')
         return self.UploadStatus.PUT
 
+    def _upload_dlo(self, key, internal_client, internal_meta, swift_req_hdrs):
+        dlo_container, prefix = internal_meta[MANIFEST_HEADER].decode('utf-8')\
+            .split('/', 1)
+        dlo_etag_hash = hashlib.md5()
+
+        def _keys_generator():
+            internal_iterator = iter_internal_listing(
+                internal_client, self.account, container=dlo_container,
+                prefix=prefix)
+            for entry in internal_iterator:
+                if not entry:
+                    return
+                dlo_etag_hash.update(entry['hash'].strip('"'))
+                yield (dlo_container, entry['name'])
+
+        errors = self._upload_objects(_keys_generator(), internal_client)
+        if errors:
+            raise RuntimeError('Failed to upload a DLO %s' % key)
+        dlo_etag = dlo_etag_hash.hexdigest()
+        dlo_etag_header = SWIFT_USER_META_PREFIX + DLO_ETAG_FIELD
+
+        # NOTE: if we can check whether any object has been uploaded, then we
+        # could decide whether a new manifest needs to be PUT. For now, we PUT
+        # it unconditionally.
+
+        # Upload the manifest
+        with self.client_pool.get_client() as swift_client:
+            # The DLO manifest might be non-zero sized
+            wrapper_stream = FileWrapper(internal_client,
+                                         self.account,
+                                         self.container,
+                                         key, swift_req_hdrs)
+            put_headers = self._get_user_headers(wrapper_stream.get_headers())
+            put_headers[MANIFEST_HEADER] = '%s/%s' % (
+                self.remote_segments_container(dlo_container), prefix)
+            put_headers[dlo_etag_header] = dlo_etag
+            try:
+                swift_client.put_object(
+                    self.remote_container, key, wrapper_stream,
+                    etag=wrapper_stream.get_headers()['etag'],
+                    headers=self._client_headers(put_headers),
+                    content_length=len(wrapper_stream))
+            finally:
+                wrapper_stream.close()
+        return self.UploadStatus.PUT
+
     def get_manifest(self, key, bucket=None):
         if bucket is None:
             bucket = self.remote_container
@@ -526,43 +609,44 @@ class SyncSwift(BaseSync):
         body.close()
         return headers, manifest
 
-    def _upload_slo_worker(self, work_queue, internal_client):
+    def _upload_segment_worker(self, work_queue, internal_client):
         errors = []
         while True:
-            segment = work_queue.get()
-            if not segment:
+            work = work_queue.get()
+            if not work:
                 work_queue.task_done()
                 return errors
 
+            container, obj = work
+            dst_container = self.remote_segments_container(container)
             try:
-                self._upload_segment(segment, internal_client)
+                self._upload_object(container, dst_container, {'name': obj},
+                                    internal_client, segment=True)
+            except swiftclient.exceptions.ClientException as e:
+                # The segments may not exist, so we need to create it
+                if e.http_status == 404:
+                    self.logger.debug('Creating a segments container %s' %
+                                      dst_container)
+                    # Creating a container may take some (small) amount of time
+                    # and we should attempt to re-upload in the following
+                    # iteration
+                    resp = self._call_swiftclient(
+                        'put_container', dst_container)
+                    if not resp.success:
+                        self.logger.error(
+                            'Failed to create segments container %s: %s' %
+                            (dst_container, resp.to_wsgi()))
+                    errors.append(work)
+                else:
+                    self.logger.error('Failed to upload segment %s/%s/%s: %s' %
+                                      (self.account, container, obj,
+                                       traceback.format_exc()))
             except:
-                errors.append(segment)
-                self.logger.error('Failed to upload segment %s: %s' % (
-                    self.account + segment['name'], traceback.format_exc()))
+                errors.append(work)
+                self.logger.error('Failed to upload segment %s/%s/%s: %s' % (
+                    self.account, container, obj, traceback.format_exc()))
             finally:
                 work_queue.task_done()
-
-    def _upload_segment(self, segment, internal_client):
-        container, obj = segment['name'].split('/', 2)[1:]
-        dst_container = self.remote_segments_container(container)
-
-        try:
-            self._upload_object(
-                container, dst_container, {'name': obj},
-                internal_client, segment=True)
-        except swiftclient.exceptions.ClientException as e:
-            # The segments may not exist, so we need to create it
-            if e.http_status == 404:
-                self.logger.debug('Creating a segments container %s' %
-                                  dst_container)
-                # Creating a container may take some (small) amount of time
-                # and we should attempt to re-upload in the following
-                # iteration
-                with self.client_pool.get_client() as swift_client:
-                    swift_client.put_container(dst_container,
-                                               headers=self._client_headers())
-                raise RuntimeError('Missing segments container')
 
     def _check_slo_uploaded(self, key, remote_meta, internal_client,
                             swift_req_hdrs):
@@ -580,14 +664,38 @@ class SyncSwift(BaseSync):
                          % key)
         return True
 
+    def _check_dlo_uploaded(self, source_metadata, remote_metadata,
+                            internal_client):
+        # NOTE: DLOs do not have a stored ETag and no ETag returned at all if
+        # the number of objects exceeds the first page of the response. We
+        # compute and store our own ETag, which is the concatenation of all of
+        # the ETags in the listing.
+        digest = hashlib.md5()
+        container, prefix = source_metadata[MANIFEST_HEADER].split('/', 1)
+        iterator = iter_internal_listing(internal_client, self.account,
+                                         container=container, prefix=prefix)
+        for entry in iterator:
+            if not entry:
+                break
+            digest.update(entry['hash'].strip('"'))
+        dlo_etag = digest.hexdigest()
+
+        remote_dlo_header = SWIFT_USER_META_PREFIX + DLO_ETAG_FIELD
+        self.logger.debug('DLO ETags: %s %s' %
+                          (remote_metadata.get(remote_dlo_header), dlo_etag))
+        return remote_metadata.get(remote_dlo_header) == dlo_etag
+
     def post_container(self, metadata):
         return self._call_swiftclient(
             'post_container', self.remote_container, None, headers=metadata)
 
     @staticmethod
     def _is_meta_synced(local_metadata, remote_metadata):
+        dlo_etag_header = SWIFT_USER_META_PREFIX + DLO_ETAG_FIELD
         remote_keys = [key.lower() for key in remote_metadata.keys()
-                       if key.lower().startswith(SWIFT_USER_META_PREFIX)]
+                       if (key.lower().startswith(SWIFT_USER_META_PREFIX) and
+                           # Remove the reserved DLO user-tag]
+                           not key.lower() == dlo_etag_header)]
         local_keys = [key.lower() for key in local_metadata.keys()
                       if key.lower().startswith(SWIFT_USER_META_PREFIX)]
         if set(remote_keys) != set(local_keys):
