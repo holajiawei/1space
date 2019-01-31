@@ -132,7 +132,7 @@ def main(args=None):
     conf = {
         'protocol': args.protocol,
         'account': 'verify-auth',
-        'container': u'testing-\U0001f44d',
+        'container': u'testing-\u00ef',
         'aws_endpoint': args.endpoint,
         'aws_identity': args.username.decode('utf8'),
         'aws_secret': args.password.decode('utf8'),
@@ -146,7 +146,7 @@ def main(args=None):
     if args.account and args.protocol != 'swift':
         return 'Invalid argument: account is only valid with swift protocol'
     if args.bucket == '/*':
-        conf['aws_bucket'] = u'.cloudsync_test_container-\U0001f44d'
+        conf['aws_bucket'] = u'.cloudsync_test_container-\u00ef'
     if urlparse.urlparse(args.endpoint).hostname.endswith('.amazonaws.com'):
         conf['aws_endpoint'] = None  # let Boto sort it out
 

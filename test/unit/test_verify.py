@@ -276,7 +276,7 @@ class TestMainTrackProvider(unittest.TestCase):
             'aws_endpoint': 'https://saio:8080/auth/v1.0',
             'aws_identity': 'access id',
             'aws_secret': 'secret key',
-            'aws_bucket': u'.cloudsync_test_container-\U0001f44d',
+            'aws_bucket': u'.cloudsync_test_container-\u00ef',
         })
         self.assertEqual(swift_key, 'cloud_sync_test_object')
         self.assertTrue(create_bucket)
@@ -299,9 +299,9 @@ class TestMainTrackProvider(unittest.TestCase):
             'aws_endpoint': 'http://1space-keystone:5000/v3',
             'aws_identity': 'access id',
             'aws_secret': 'secret key',
-            'aws_bucket': u'.cloudsync_test_container-\U0001f44d',
+            'aws_bucket': u'.cloudsync_test_container-\u00ef',
             'account': 'verify-auth',
-            'container': u'testing-\U0001f44d',
+            'container': u'testing-\u00ef',
             'custom_prefix': None,
             'remote_account': None,
             'auth_type': 'keystone_v2',
@@ -330,9 +330,9 @@ class TestMainTrackProvider(unittest.TestCase):
             'aws_endpoint': 'http://1space-keystone:5000/v3',
             'aws_identity': 'access id',
             'aws_secret': 'secret key',
-            'aws_bucket': u'.cloudsync_test_container-\U0001f44d',
+            'aws_bucket': u'.cloudsync_test_container-\u00ef',
             'account': 'verify-auth',
-            'container': u'testing-\U0001f44d',
+            'container': u'testing-\u00ef',
             'custom_prefix': None,
             'remote_account': None,
             'auth_type': 'keystone_v3',
@@ -420,7 +420,7 @@ class TestMainTrackClientCalls(unittest.TestCase):
             '--bucket', 'some-bucket',
         ])
         self.assertEqual(exit_arg, 0)
-        key = u'9f9835/verify-auth/testing-\U0001f44d/fabcab/cloud_sync_test'
+        key = u'4dbbd/verify-auth/testing-\u00ef/fabcab/cloud_sync_test'
         self.assert_calls(mock_client, [
             mock.call.put_object(
                 Body='1space-test',
@@ -444,7 +444,7 @@ class TestMainTrackClientCalls(unittest.TestCase):
             mock.call.list_objects(
                 Bucket='some-bucket',
                 MaxKeys=1,
-                Prefix=u'9f9835/verify-auth/testing-\U0001f44d/'),
+                Prefix=u'4dbbd/verify-auth/testing-\u00ef/'),
             mock.call.delete_object(
                 Bucket='some-bucket',
                 Key=key),
@@ -587,7 +587,7 @@ class TestMainTrackClientCalls(unittest.TestCase):
             '--bucket', 'some-bucket',
         ])
         self.assertEqual(exit_arg, 0)
-        key = u'9f9835/verify-auth/testing-\U0001f44d/fabcab/cloud_sync_test'
+        key = u'4dbbd/verify-auth/testing-\u00ef/fabcab/cloud_sync_test'
         self.assert_calls(mock_client, [
             mock.call.put_object(
                 Body='1space-test',
@@ -609,7 +609,7 @@ class TestMainTrackClientCalls(unittest.TestCase):
             mock.call.list_objects(
                 Bucket='some-bucket',
                 MaxKeys=1,
-                Prefix=u'9f9835/verify-auth/testing-\U0001f44d/'),
+                Prefix=u'4dbbd/verify-auth/testing-\u00ef/'),
             mock.call.delete_object(
                 Bucket='some-bucket',
                 Key=key),
