@@ -1,18 +1,16 @@
-"""
-Copyright 2018 SwiftStack
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-"""
+# Copyright 2018 SwiftStack
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
 import os
 import pwd
@@ -30,6 +28,9 @@ class ConfigReloaderMixin(object):
     change.
 
     Using classes can define these properties:
+
+    .. code-block:: python
+
         CHECK_PERIOD = X  # check for new config every X seconds
         CONF_FILES = [{
            'key': '...',
@@ -91,26 +92,30 @@ def get_aws_ecs_creds():
 def get_env_options():
     """
     Reads various environment variables to determine how to load configuration
-    from a S3 API endpoint:
+    from a S3 API endpoint::
+
         CONF_BUCKET: required; bucket where config(s) live
         CONF_ENDPOINT: optional; S3 API endpoint; defaults to Amazon S3
         CONF_NAME: optional; object name of main config file residing in
-            the CONF_BUCKET; defaults to `cloud-connector.conf`
+                   the CONF_BUCKET; defaults to `cloud-connector.conf`
 
     For authentication/authorization into S3, one set of the following is
-    required:
-        AWS_CONTAINER_CREDENTIALS_RELATIVE_URI: Amazon ECS can set this env var
-        to allow the container to load temporary session S3 credentials
-    or:
+    required::
+
+        AWS_CONTAINER_CREDENTIALS_RELATIVE_URI: Amazon ECS can set this
+        env var to allow the container to load temporary session S3 credentials
+
+    or::
+
         AWS_ACCESS_KEY_ID: S3 API key ID to use
         AWS_SECRET_ACCESS_KEY: S3 API secret access key to use
 
-    If AWS_CONTAINER_CREDENTIALS_RELATIVE_URI is present as well as
-    AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY, then the latter values will be
-    used, NOT the temporary credentials from
-    AWS_CONTAINER_CREDENTIALS_RELATIVE_URI.
+    If ``AWS_CONTAINER_CREDENTIALS_RELATIVE_URI`` is present as well as
+    ``AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY``, then the latter values
+    will be used, NOT the temporary credentials from
+    ``AWS_CONTAINER_CREDENTIALS_RELATIVE_URI``.
 
-    Returns a dictionary of key/values read from the environment.
+    :returns: a dictionary of key/values read from the environment.
     """
     opts = {}
 

@@ -1,18 +1,16 @@
-"""
-Copyright 2017 SwiftStack
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-"""
+# Copyright 2017 SwiftStack
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
 import datetime
 import eventlet
@@ -156,21 +154,22 @@ class SeekableFileLikeIter(FileLikeIter):
     """
     Like Swift's FileLikeIter, with the following changes in/additions of
     behavior:
-        * You can give it an existing file-like object (like Swift's
-          InputProxy) and iteration will just successively call that object's
-          read() method with some reasonable chunk size.
-        * You can optionally specify a length, and reads past that length will
-          return data only up to that length, and EOF after that.
-        * If a length is specified, len() will work on this object, otherwise
-          it will raise a TypeError.
-        * If you specify a `seek_zero_cb`, it will be called when a seek to
-          position zero (regardless of args), if any data has already been
-          read.  The callback must return a new iterator, which will be
-          used for subsequent reads.  In other words, the callback must
-          actually take some action that allows the data coming out to be
-          correct for an actual offset of zero.  Also, without a callback
-          specified, any attempt to seek after any data has been read will
-          result in a RuntimeError.
+
+    * You can give it an existing file-like object (like Swift's
+      InputProxy) and iteration will just successively call that object's
+      read() method with some reasonable chunk size.
+    * You can optionally specify a length, and reads past that length will
+      return data only up to that length, and EOF after that.
+    * If a length is specified, len() will work on this object, otherwise
+      it will raise a TypeError.
+    * If you specify a `seek_zero_cb`, it will be called when a seek to
+      position zero (regardless of args), if any data has already been
+      read.  The callback must return a new iterator, which will be
+      used for subsequent reads.  In other words, the callback must
+      actually take some action that allows the data coming out to be
+      correct for an actual offset of zero.  Also, without a callback
+      specified, any attempt to seek after any data has been read will
+      result in a RuntimeError.
     """
     def __init__(self, iterable_or_filelike, length=None, seek_zero_cb=None):
         try:
