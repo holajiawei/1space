@@ -38,7 +38,7 @@ from utils import FakeStream
 class TestSyncS3(unittest.TestCase):
     boto_not_found = ClientError(
         dict(Error=dict(Code='NotFound', Message='Not found'),
-             ResponseMetadata=dict(HTTPStatusCode=404, HTTPReaders={})),
+             ResponseMetadata=dict(HTTPStatusCode=404, HTTPHeaders={})),
         'HEAD')
 
     @mock.patch('s3_sync.sync_s3.boto3.session.Session')
@@ -2020,7 +2020,7 @@ class TestSyncS3(unittest.TestCase):
         tests = [{'method': 'GET',
                   'exception': RequestException,
                   'status': 502,
-                  'headers': [],
+                  'headers': [('Content-Length', '11')],
                   'message': 'Bad Gateway',
                   'conns_start': self.max_conns - 1,
                   'conns_end': self.max_conns},
@@ -2033,15 +2033,41 @@ class TestSyncS3(unittest.TestCase):
                       'GET'),
                   'status': 500,
                   'message': 'failure occurred',
-                  'headers': [],
+                  'headers': [('Content-Length', '16')],
                   'conns_start': self.max_conns - 1,
                   'conns_end': self.max_conns},
                  {'method': 'HEAD',
                   'exception': RequestException,
                   'status': 502,
-                  'headers': [],
+                  'headers': [('Content-Length', '11')],
                   'message': b'',
                   'conns_start': self.max_conns - 1,
+                  'conns_end': self.max_conns},
+                 {'method': 'GET',
+                  'exception': ClientError(
+                      dict(Error=dict(
+                           Code='NotFound', Message='Specified key not found'),
+                           ResponseMetadata=dict(
+                               HTTPStatusCode=404,
+                               HTTPHeaders={'Content-Length': 1024})),
+                      'GET'),
+                  'status': 404,
+                  'headers': [('Content-Length', '23')],
+                  'message': 'Specified key not found',
+                  'conns_start': self.max_conns - 1,
+                  'conns_end': self.max_conns},
+                 {'method': 'HEAD',
+                  'exception': ClientError(
+                      dict(Error=dict(
+                           Code='NotFound', Message='Specified key not found'),
+                           ResponseMetadata=dict(
+                               HTTPStatusCode=404,
+                               HTTPHeaders={'Content-Length': 1024})),
+                      'GET'),
+                  'status': 404,
+                  'headers': [('Content-Length', '23')],
+                  'message': b'',
+                  'conns_start': self.max_conns,
                   'conns_end': self.max_conns}]
 
         for test in tests:

@@ -503,12 +503,24 @@ class SyncS3(BaseSync):
                     headers = convert_to_swift_headers(
                         e.response['ResponseMetadata'].get('HTTPHeaders', {}))
                     message = e.response.get('Error', {}).get('Message', '')
-                return ProviderResponse(False, status, headers, iter(message),
-                                        exc_info=sys.exc_info())
+
+                headers['Content-Length'] = str(len(message))
+                if op.startswith('head_'):
+                    return ProviderResponse(False, status, headers, iter(['']),
+                                            exc_info=sys.exc_info())
+                return ProviderResponse(
+                    False, status, headers, iter([message]),
+                    exc_info=sys.exc_info())
             except Exception as e:
                 self.logger.exception(self._get_error_message(e, op, args))
-                return ProviderResponse(False, 502, {}, iter(['Bad Gateway']),
-                                        exc_info=sys.exc_info())
+                message = 'Bad Gateway'
+                headers = {'Content-Length': str(len(message))}
+                if op.startswith('head_'):
+                    return ProviderResponse(False, 502, headers, iter(['']),
+                                            exc_info=sys.exc_info())
+                return ProviderResponse(
+                    False, 502, headers, iter([message]),
+                    exc_info=sys.exc_info())
 
         if op == 'get_object':
             entry = self.client_pool.get_client()
