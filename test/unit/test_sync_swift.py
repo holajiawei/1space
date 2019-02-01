@@ -827,7 +827,6 @@ class TestSyncSwift(unittest.TestCase):
                 'etag': hashlib.md5(body).hexdigest()}
             return 200, headers, StringIO.StringIO(body)
 
-        swift_client.head_object.return_value
         mock_ic.get_object.side_effect = _get_object
 
         self.sync_swift.upload_object(
@@ -873,7 +872,6 @@ class TestSyncSwift(unittest.TestCase):
                 'etag': hashlib.md5(body).hexdigest()}
             return 200, headers, StringIO.StringIO(body)
 
-        swift_client.head_object.return_value
         mock_ic.get_object.side_effect = _get_object
 
         self.sync_swift.upload_object(
@@ -884,6 +882,43 @@ class TestSyncSwift(unittest.TestCase):
         swift_client.post_object.assert_called_once_with(
             self.sync_swift.remote_container, key,
             headers={'x-object-meta-new': 'new'})
+
+    @mock.patch('s3_sync.sync_swift.swiftclient.client.Connection')
+    def test_nested_slo_upload(self, mock_swift):
+        slo_key = 'key'
+        storage_policy = 42
+        meta = {'x-static-large-object': 'True',
+                'etag': 'foobar',
+                'x-timestamp': str(1e9)}
+
+        manifest = [
+            {'name': '/%s_segments/part1' % (self.sync_swift.container),
+             'hash': 'deadbeef',
+             'bytes': 1024}]
+
+        def fake_internal_head(_, __, key, headers={}):
+            if key == slo_key:
+                return meta
+            if key == manifest[0]['name'].split('/', 2)[-1]:
+                return {'x-static-large-object': 'True'}
+            raise NotImplementedError
+
+        mock_ic = mock.Mock()
+        mock_ic.get_object_metadata.side_effect = fake_internal_head
+
+        mock_swift.return_value.head_object.side_effect = self.not_found
+
+        mock_ic.get_object.return_value = (
+            200,
+            {'etag': hashlib.md5(json.dumps(manifest)).hexdigest()},
+            StringIO.StringIO(json.dumps(manifest)))
+
+        self.assertEqual(
+            SyncSwift.UploadStatus.SKIPPED_NESTED_SLO,
+            self.sync_swift.upload_object(
+                {'name': slo_key,
+                 'storage_policy_index': storage_policy,
+                 'created_at': str(1e9)}, mock_ic))
 
     @mock.patch('s3_sync.sync_swift.swiftclient.client.Connection')
     def test_upload_dlo(self, mock_swift):

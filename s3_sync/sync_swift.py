@@ -497,18 +497,27 @@ class SyncSwift(BaseSync):
         for _ in range(self.SLO_WORKERS):
             work_queue.put(None)
         errors = []
+        failures = []
         for thread in workers:
-            errors += thread.wait()
-        return errors
+            worker_errors, worker_failures = thread.wait()
+            errors.extend(worker_errors)
+            failures.extend(worker_failures)
+        return errors, failures
 
     def _upload_slo(self, key, internal_client, swift_req_headers):
         headers, manifest = self._get_internal_manifest(
             key, internal_client, swift_req_headers)
         self.logger.debug("JSON manifest: %s" % str(manifest))
 
-        errors = self._upload_objects(
+        errors, failures = self._upload_objects(
             (segment['name'].split('/', 2)[1:] for segment in manifest),
             internal_client)
+
+        # Check failures first, as it may mean we want to skip this SLO
+        if failures:
+            # There may be multiple reasons why we can't upload an SLO, but it
+            # doesn't matter which one we pick here
+            return failures[0][0]
 
         # TODO: errors list contains the failed segments. We should retry
         # them on failure.
@@ -552,7 +561,13 @@ class SyncSwift(BaseSync):
                 dlo_etag_hash.update(entry['hash'].strip('"'))
                 yield (dlo_container, entry['name'])
 
-        errors = self._upload_objects(_keys_generator(), internal_client)
+        errors, failures = self._upload_objects(
+            _keys_generator(), internal_client)
+        # Check the failures first, in case we need to skip this DLO
+        # altogether. We can return the first failing status, as we don't need
+        # to exhaust all the reasons the upload failed.
+        if failures:
+            return failures[0][0]
         if errors:
             raise RuntimeError('Failed to upload a DLO %s' % key)
         dlo_etag = dlo_etag_hash.hexdigest()
@@ -611,17 +626,26 @@ class SyncSwift(BaseSync):
 
     def _upload_segment_worker(self, work_queue, internal_client):
         errors = []
+        failed = []
         while True:
             work = work_queue.get()
             if not work:
                 work_queue.task_done()
-                return errors
+                return (errors, failed)
 
             container, obj = work
             dst_container = self.remote_segments_container(container)
             try:
-                self._upload_object(container, dst_container, {'name': obj},
-                                    internal_client, segment=True)
+                status = self._upload_object(
+                    container, dst_container, {'name': obj},
+                    internal_client, segment=True)
+                if status not in [self.UploadStatus.PUT,
+                                  self.UploadStatus.POST,
+                                  self.UploadStatus.NOOP]:
+                    failed.append((status, work))
+                    # TODO: provide a description of the status
+                    self.logger.warning('Cannot upload segment %s/%s: %d' %
+                                        (container, obj, status))
             except swiftclient.exceptions.ClientException as e:
                 # The segments may not exist, so we need to create it
                 if e.http_status == 404:
