@@ -1625,6 +1625,38 @@ class TestSyncSwift(unittest.TestCase):
                 user_domain_name=settings['user_domain_name']))
 
     @mock.patch('s3_sync.sync_swift.swiftclient.client.Connection')
+    def test_remote_account(self, mock_swift):
+        def mock_auth():
+            mock_swift.return_value.os_options = dict()
+            mock_swift.return_value.url = returned_storage_url
+
+        returned_storage_url = 'http://foobar:1234/v1/AUTH_account'
+        mock_swift.return_value = mock.Mock(
+            get_auth=mock.Mock(side_effect=mock_auth))
+
+        aws_bucket = 'sync_'
+        settings = {
+            'aws_bucket': aws_bucket,
+            'aws_identity': 'identity',
+            'aws_secret': 'credential',
+            'account': 'account',
+            'container': 'container',
+            'aws_endpoint': 'http://swift.url/auth/v1.0',
+            'remote_account': 'remote'}
+        sync_swift = SyncSwift(settings)
+        conn = sync_swift._get_client_factory()()
+        mock_swift.assert_called_once_with(
+            authurl=settings['aws_endpoint'],
+            user=settings['aws_identity'],
+            key=settings['aws_secret'],
+            retries=3,
+            os_options={})
+        conn.get_auth.assert_called_once_with()
+        self.assertEqual('http://foobar:1234/v1/remote',
+                         conn.os_options['object_storage_url'])
+        self.assertEqual('http://foobar:1234/v1/remote', conn.url)
+
+    @mock.patch('s3_sync.sync_swift.swiftclient.client.Connection')
     def test_retry_error_stale_object(self, mock_swift):
         swift_object_meta = {'x-timestamp': str(1e9)}
         mock_swift.return_value.head_object.return_value = {}

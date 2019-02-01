@@ -114,7 +114,7 @@ class SyncSwift(BaseSync):
                 host = urllib.splithost(rest)[0]
                 path = '/v1/%s' % urllib.quote(
                     self.settings['remote_account'].encode('utf8'))
-                storage_url = '%s:%s%s' % (scheme, host, path)
+                storage_url = '%s://%s%s' % (scheme, host, path)
                 _conn.url = storage_url
                 _conn.os_options['object_storage_url'] = storage_url
             return _conn
