@@ -47,10 +47,11 @@ except ImportError:
     # compat for swift < 2.16
     from swift.common.request_helpers import get_listing_content_type  # noqa
 
+from swift.common.http import HTTP_NOT_FOUND
 from swift.common.request_helpers import (
     get_sys_meta_prefix, get_object_transient_sysmeta)
 from swift.common.swob import Request
-from swift.common.utils import FileLikeIter, close_if_possible
+from swift.common.utils import FileLikeIter, close_if_possible, quote
 
 
 SWIFT_USER_META_PREFIX = 'x-object-meta-'
@@ -1219,6 +1220,55 @@ def splice_listing(local_iter, remote_iter, limit):
         spliced_response.append(remote_item)
         remote_item, _junk = next(remote_iter)
     return spliced_response
+
+
+def iter_internal_listing(
+        client, account, container=None, marker='', prefix=None):
+    '''Calls GET on the specified path to list items.
+
+    Useful in case we cannot use the InternalClient.iter_{containers,
+    objects}(). The InternalClient generators make multiple calls to the
+    object store and require holding the client out of the InternalClient
+    pool.
+
+    :param client: Swift InternalClient or context manager that produces one.
+    :param account: Swift account for the listing.
+    :param container: Optional container parameter. Omit if listing the
+                      acccount.
+    :param marker: Optional marker parameter -- specifies the object name from
+                   which to resume the listing.
+    :param prefix: Optional prefix parameter for listing.
+    :returns: Iterator that produces listing entries (dictionary).
+    '''
+    while True:
+        def _make_internal_request(ic):
+            path = ic.make_path(account, container)
+            query_string = 'format=json&marker=%s' % quote(marker)
+            if prefix:
+                query_string += '&prefix=%s' % quote(prefix)
+            return ic.make_request(
+                'GET', '%s?%s' % (path, query_string), {},
+                (2, HTTP_NOT_FOUND))
+
+        if callable(client):
+            with client() as ic:
+                resp = _make_internal_request(ic)
+        else:
+            resp = _make_internal_request(client)
+
+        if resp.status_int != 200:
+            break
+        if not resp.body:
+            break
+
+        listing = json.loads(resp.body)
+        if not listing:
+            break
+        for entry in listing:
+            yield entry
+        marker = listing[-1]['name'].encode('utf-8')
+    # Simplifies the bookkeeping
+    yield None
 
 
 def format_xml_listing(

@@ -38,16 +38,17 @@ from .stats import MigratorPassStats
 from .utils import (convert_to_local_headers, convert_to_swift_headers,
                     create_x_timestamp_from_hdrs, diff_container_headers,
                     diff_account_headers, get_container_headers,
-                    get_slo_etag, get_sys_migrator_header, iter_listing,
-                    MigrationContainerStates, RemoteHTTPError,
-                    SeekableFileLikeIter, SWIFT_TIME_FMT, REMOTE_ETAG)
+                    get_slo_etag, get_sys_migrator_header,
+                    iter_internal_listing, iter_listing, MANIFEST_HEADER,
+                    MigrationContainerStates, REMOTE_ETAG, RemoteHTTPError,
+                    SeekableFileLikeIter, SWIFT_TIME_FMT)
 import swift.common.constraints
 from swift.common.http import HTTP_NOT_FOUND, HTTP_CONFLICT
 from swift.common.internal_client import UnexpectedResponse
 from swift.common import swob
 from swift.common.ring import Ring
 from swift.common.ring.utils import is_local_device
-from swift.common.utils import FileLikeIter, Timestamp, quote, whataremyips
+from swift.common.utils import FileLikeIter, Timestamp, whataremyips
 
 EQUAL = 0
 ETAG_DIFF = 1
@@ -602,28 +603,9 @@ class Migrator(object):
         object store and require holding the client out of the InternalClient
         pool.
         '''
-        while True:
-            with self.ic_pool.item() as ic:
-                path = ic.make_path(self.config['account'], container)
-                query_string = 'format=json&marker=%s' % quote(marker)
-                if prefix:
-                    query_string += '&prefix=%s' % quote(prefix)
-                resp = ic.make_request(
-                    'GET', '%s?%s' % (path, query_string), {},
-                    (2, HTTP_NOT_FOUND))
-            if resp.status_int != 200:
-                break
-            if not resp.body:
-                break
-
-            listing = json.loads(resp.body)
-            if not listing:
-                break
-            for entry in listing:
-                yield entry
-            marker = listing[-1]['name'].encode('utf-8')
-        # Simplifies the bookkeeping
-        yield None
+        return iter_internal_listing(
+            self.ic_pool.item, self.config['account'], container, marker,
+            prefix)
 
     def _reconcile_deleted_objects(self, container, key):
         # NOTE: to handle the case of objects being deleted from the source
@@ -750,15 +732,15 @@ class Migrator(object):
             self.config['account'], container, key)
         remote_resp = self.provider.head_object(key)
 
-        if 'x-object-manifest' in remote_resp.headers and\
-                'x-object-manifest' in local_meta:
-            if remote_resp.headers['x-object-manifest'] !=\
-                    local_meta['x-object-manifest']:
+        if MANIFEST_HEADER in remote_resp.headers and\
+                MANIFEST_HEADER in local_meta:
+            if remote_resp.headers[MANIFEST_HEADER] !=\
+                    local_meta[MANIFEST_HEADER]:
                 self.errors.put((
                     container, key,
                     'Dynamic Large objects with differing manifests: '
-                    '%s %s' % (remote_resp.headers['x-object-manifest'],
-                               local_meta['x-object-manifest'])))
+                    '%s %s' % (remote_resp.headers[MANIFEST_HEADER],
+                               local_meta[MANIFEST_HEADER])))
             # TODO: once swiftclient supports query_string on HEAD requests, we
             # would be able to compare the ETag of the manifest object itself.
             return
@@ -967,7 +949,7 @@ class Migrator(object):
 
         if (aws_bucket, container, key) in self._manifests:
             # Special handling for the DLO manifests
-            if 'x-object-manifest' not in resp.headers:
+            if MANIFEST_HEADER not in resp.headers:
                 self.logger.warning('DLO object changed before upload: %s/%s' %
                                     (aws_bucket, key))
                 resp.body.close()
@@ -979,7 +961,7 @@ class Migrator(object):
                 aws_bucket))
             return
 
-        if 'x-object-manifest' in resp.headers:
+        if MANIFEST_HEADER in resp.headers:
             if (aws_bucket, container, key) in self._manifests:
                 # This means the DLO has already been handled
                 return
@@ -1115,7 +1097,7 @@ class Migrator(object):
     def _migrate_dlo(self, aws_bucket, container, key, resp):
         put_headers = convert_to_local_headers(
             resp.headers.items(), remove_timestamp=False)
-        dlo_container, prefix = put_headers['x-object-manifest'].split('/', 1)
+        dlo_container, prefix = put_headers[MANIFEST_HEADER].split('/', 1)
         if (aws_bucket, container, key) not in self._manifests:
             # The DLO prefix can include the manifest object, which doesn't
             # have to be 0-sized. We have to be careful not to end up recursing
