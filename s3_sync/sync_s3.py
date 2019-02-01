@@ -676,12 +676,14 @@ class SyncS3(BaseSync):
     def _upload_google_slo(self, manifest, metadata, s3_key, internal_client):
         with self.client_pool.get_client() as s3_client:
             slo_wrapper = SLOFileWrapper(
-                internal_client, self.account, manifest, metadata)
+                internal_client, self.account, manifest)
+            upload_headers = convert_to_s3_headers(metadata)
+            upload_headers[SLO_ETAG_FIELD] = metadata['etag']
             try:
                 s3_client.put_object(Bucket=self.aws_bucket,
                                      Key=s3_key,
                                      Body=slo_wrapper,
-                                     Metadata=slo_wrapper.get_s3_headers(),
+                                     Metadata=upload_headers,
                                      ContentLength=len(slo_wrapper),
                                      ContentType=metadata['content-type'])
             finally:

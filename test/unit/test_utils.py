@@ -613,14 +613,6 @@ class TestSLOFileWrapper(unittest.TestCase):
                                    {'etag': 'deadbeef'})
         self.assertEqual(1500, len(slo))
 
-    def test_slo_headers(self):
-        slo = utils.SLOFileWrapper(self.swift, 'account', self.manifest,
-                                   {'etag': 'deadbeef'})
-
-        self.assertEqual(1500, len(slo))
-        self.assertEqual(
-            'deadbeef', slo.get_s3_headers()['swift-slo-etag'])
-
     def test_seek_after_read(self):
         fake_segment = FakeStream(content='A' * 500)
         self.assertEqual(False, fake_segment.closed)
@@ -637,13 +629,13 @@ class TestSLOFileWrapper(unittest.TestCase):
 
         self.swift.get_object.side_effect = get_object
         slo = utils.SLOFileWrapper(self.swift, 'account', self.manifest,
-                                   {'etag': 'deadbeef'})
+                                   headers={'etag': 'deadbeef'})
         data = slo.read()
         slo.seek(0)
         self.assertEqual(True, fake_segment.closed)
         self.assertEqual('A' * 500, data)
         self.swift.get_object.assert_called_once_with(
-            'account', 'foo', 'part1', headers={})
+            'account', 'foo', 'part1', headers={'etag': 'deadbeef'})
 
     def test_read_manifest(self):
         part1_content = FakeStream(content='A' * 500)

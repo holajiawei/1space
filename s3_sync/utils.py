@@ -352,27 +352,33 @@ class FileWrapper(SeekableFileLikeIter):
         return super(FileWrapper, self).close()
 
 
-class SLOFileWrapper(object):
+class CombinedFileWrapper(object):
+    '''Upload multiple objects as one concatenated object.
 
-    # For Google Cloud Storage, we convert SLO to a single object. We can't do
-    # that easily with InternalClient, as it does not allow query parameters.
-    # This means that if we turn on SLO in the pipeline, we will not be able to
-    # retrieve the manifest object itself. In the future, this may be converted
-    # to a resumable upload or we may resort to using compose.
-    #
-    # For the headers, we must also attach the Swift manifest ETag, as we have
-    # no way of verifying the object has been uploaded otherwise.
-    def __init__(self, swift_client, account, manifest, manifest_meta,
-                 headers={}):
+    Given a list of objects, the account, internal client, target object
+    metadata, and total size, returns a file-like object that can be passed to
+    boto3 or swiftclient to upload the objects as a single blob.
+
+    :param swift_client: InternalClient instance.
+    :param account: Swift account for the originating objects.
+    :param metadata: Metadata headers to be supplied with the request to upload
+                     the object.
+    :param source_objects: A list of tuples to specify the contents of the
+                           object. The tuples are (container, key).
+    :param total_size: The total size of the uploaded object.
+    :param internal_headers: Optional headers to be used with InternalClient
+                             reqeusts.
+    :returns: A CombinedFileWrapper instance.
+    '''
+    def __init__(self, swift_client, account, source_objects, total_size,
+                 internal_headers={}):
         self._swift = swift_client
-        self._manifest = manifest
+        self._source_objects = source_objects
         self._account = account
-        self._swift_req_headers = headers
-        self._s3_headers = convert_to_s3_headers(manifest_meta)
-        self._s3_headers[SLO_ETAG_FIELD] = manifest_meta['etag']
+        self._internal_headers = internal_headers
         self._segment = None
         self._segment_index = 0
-        self._size = sum([int(segment['bytes']) for segment in self._manifest])
+        self._size = total_size
 
     def seek(self, pos, flag=0):
         if pos != 0:
@@ -387,10 +393,9 @@ class SLOFileWrapper(object):
         self.seek(0)
 
     def _open_next_segment(self):
-        segment = self._manifest[self._segment_index]
-        container, key = segment['name'].split('/', 2)[1:]
+        container, key = self._source_objects[self._segment_index]
         self._segment = FileWrapper(self._swift, self._account, container,
-                                    key, self._swift_req_headers)
+                                    key, self._internal_headers)
         self._segment_index += 1
 
     def read(self, size=-1):
@@ -399,7 +404,7 @@ class SLOFileWrapper(object):
         data = self._segment.read(size)
         if not data:
             self._segment.close()
-            if self._segment_index < len(self._manifest):
+            if self._segment_index < len(self._source_objects):
                 self._open_next_segment()
                 data = self._segment.read(size)
         return data
@@ -416,12 +421,22 @@ class SLOFileWrapper(object):
     def __len__(self):
         return self._size
 
-    def get_s3_headers(self):
-        return self._s3_headers
-
     def close(self):
         if self._segment:
             self._segment.close()
+
+
+class SLOFileWrapper(CombinedFileWrapper):
+    # For Google Cloud Storage, we convert SLO to a single object. We can't do
+    # that easily with InternalClient, as it does not allow query parameters.
+    # This means that if we turn on SLO in the pipeline, we will not be able to
+    # retrieve the manifest object itself. In the future, this may be converted
+    # to a resumable upload or we may resort to using compose.
+    def __init__(self, swift_client, account, manifest, headers={}):
+        size = sum([int(segment['bytes']) for segment in manifest])
+        segments = [segment['name'].split('/', 2)[1:] for segment in manifest]
+        super(SLOFileWrapper, self).__init__(
+            swift_client, account, segments, size, headers)
 
 
 class BlobstorePutWrapper(object):
