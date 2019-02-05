@@ -937,8 +937,7 @@ class SyncS3(BaseSync):
         self._complete_multipart_upload(s3_key, multipart_resp['UploadId'],
                                         parts)
 
-    def update_metadata(self, swift_key, swift_meta, remote_metadata={},
-                        container={}):
+    def update_metadata(self, swift_key, swift_meta):
         if not check_slo(swift_meta) or self._google():
             meta = swift_meta.copy()
             if self._google() and check_slo(swift_meta):

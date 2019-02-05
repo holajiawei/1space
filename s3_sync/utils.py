@@ -57,7 +57,6 @@ from swift.common.utils import FileLikeIter, close_if_possible, quote
 SWIFT_USER_META_PREFIX = 'x-object-meta-'
 S3_USER_META_PREFIX = 'x-amz-meta-'
 MANIFEST_HEADER = 'x-object-manifest'
-DLO_ETAG_FIELD = 'swift-source-dlo-etag'
 SLO_HEADER = 'x-static-large-object'
 SLO_ETAG_FIELD = 'swift-slo-etag'
 EPOCH = datetime.datetime.utcfromtimestamp(0)
@@ -1123,12 +1122,6 @@ def check_slo(swift_meta):
     if SLO_HEADER not in swift_meta:
         return False
     return swift_meta[SLO_HEADER].lower() == 'true'
-
-
-def get_dlo_prefix(swift_meta):
-    if MANIFEST_HEADER not in swift_meta:
-        return ''
-    return swift_meta[MANIFEST_HEADER]
 
 
 def response_is_complete(status_code, headers):
