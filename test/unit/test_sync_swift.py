@@ -827,7 +827,6 @@ class TestSyncSwift(unittest.TestCase):
                 'etag': hashlib.md5(body).hexdigest()}
             return 200, headers, StringIO.StringIO(body)
 
-        swift_client.head_object.return_value
         mock_ic.get_object.side_effect = _get_object
 
         self.sync_swift.upload_object(
@@ -873,7 +872,6 @@ class TestSyncSwift(unittest.TestCase):
                 'etag': hashlib.md5(body).hexdigest()}
             return 200, headers, StringIO.StringIO(body)
 
-        swift_client.head_object.return_value
         mock_ic.get_object.side_effect = _get_object
 
         self.sync_swift.upload_object(
@@ -884,6 +882,331 @@ class TestSyncSwift(unittest.TestCase):
         swift_client.post_object.assert_called_once_with(
             self.sync_swift.remote_container, key,
             headers={'x-object-meta-new': 'new'})
+
+    @mock.patch('s3_sync.sync_swift.swiftclient.client.Connection')
+    def test_nested_slo_upload(self, mock_swift):
+        slo_key = 'key'
+        storage_policy = 42
+        meta = {'x-static-large-object': 'True',
+                'etag': 'foobar',
+                'x-timestamp': str(1e9)}
+
+        manifest = [
+            {'name': '/%s_segments/part1' % (self.sync_swift.container),
+             'hash': 'deadbeef',
+             'bytes': 1024}]
+
+        def fake_internal_head(_, __, key, headers={}):
+            if key == slo_key:
+                return meta
+            if key == manifest[0]['name'].split('/', 2)[-1]:
+                return {'x-static-large-object': 'True'}
+            raise NotImplementedError
+
+        mock_ic = mock.Mock()
+        mock_ic.get_object_metadata.side_effect = fake_internal_head
+
+        mock_swift.return_value.head_object.side_effect = self.not_found
+
+        mock_ic.get_object.return_value = (
+            200,
+            {'etag': hashlib.md5(json.dumps(manifest)).hexdigest()},
+            StringIO.StringIO(json.dumps(manifest)))
+
+        self.assertEqual(
+            SyncSwift.UploadStatus.SKIPPED_NESTED_SLO,
+            self.sync_swift.upload_object(
+                {'name': slo_key,
+                 'storage_policy_index': storage_policy,
+                 'created_at': str(1e9)}, mock_ic))
+
+    @mock.patch('s3_sync.sync_swift.swiftclient.client.Connection')
+    def test_upload_dlo(self, mock_swift):
+        dlo_key = 'dlo'
+        storage_policy = 42
+        meta = {'x-object-manifest': 'segments_container/segments-',
+                'etag': 'foobar',
+                'x-timestamp': str(1e9),
+                'Content-Length': 0}
+
+        segments = [chr(ord('A') + i) * 1024 for i in range(1, 4)]
+
+        def fake_internal_head(_, container, key, headers={}):
+            if key == dlo_key and container == self.mapping['container']:
+                return meta
+            if container == 'segments_container' and\
+                    key.startswith('segments-'):
+                return {}
+            raise NotImplementedError
+
+        def fake_internal_get(_, container, key, headers={}):
+            if container == 'segments_container' and\
+                    key.startswith('segments-'):
+                body = segments[int(key.split('-')[1]) - 1]
+                etag = hashlib.md5(body).hexdigest()
+                return (200, {'etag': etag, 'Content-Length': len(body)},
+                        StringIO.StringIO(body))
+            if container == 'container' and key == dlo_key:
+                return 200, meta, ''
+            raise NotImplementedError
+
+        mock_ic = mock.NonCallableMock()
+        mock_ic.get_object_metadata.side_effect = fake_internal_head
+        mock_ic.make_request.side_effect = (
+            mock.Mock(
+                body=json.dumps([
+                    {'name': 'segments-%d' % (i + 1),
+                     'hash': hashlib.md5(segments[i]).hexdigest()}
+                    for i in range(len(segments))]),
+                status_int=200),
+            mock.Mock(body='[]', status_int=200))
+        mock_ic.get_object.side_effect = fake_internal_get
+        mock_swift.return_value.head_object.side_effect = self.not_found
+
+        self.assertEqual(
+            SyncSwift.UploadStatus.PUT,
+            self.sync_swift.upload_object(
+                {'name': dlo_key,
+                 'storage_policy_index': storage_policy,
+                 'created_at': str(1e9)}, mock_ic))
+
+        dlo_etag = hashlib.md5(''.join([hashlib.md5(segments[i]).hexdigest()
+                                        for i in range(len(segments))]))\
+            .hexdigest()
+        self.assertEqual(
+            [mock.call('%s_segments' % self.aws_bucket, 'segments-%d' % i,
+                       mock.ANY, content_length=len(segments[i - 1]),
+                       etag=hashlib.md5(segments[i - 1]).hexdigest(),
+                       headers={})
+             for i in range(1, 4)] +
+            [mock.call(
+                self.aws_bucket, dlo_key, mock.ANY, content_length=0,
+                etag='foobar',
+                headers={
+                    'x-object-manifest': '%s_segments/segments-' %
+                    self.aws_bucket,
+                    'x-object-meta-swift-source-dlo-etag': dlo_etag
+                })],
+            mock_swift.return_value.put_object.mock_calls)
+
+    @mock.patch('s3_sync.sync_swift.swiftclient.client.Connection')
+    def test_update_dlo_metadata(self, mock_swift):
+        dlo_key = 'dlo'
+        storage_policy = 42
+        meta = {'x-object-manifest': 'segments_container/segments-',
+                'etag': 'foobar',
+                'x-timestamp': str(1e9),
+                'Content-Length': 0,
+                'x-object-meta-new-key': 'value'}
+
+        segments = [chr(ord('A') + i) * 1024 for i in range(1, 4)]
+        dlo_etag = hashlib.md5(''.join([hashlib.md5(segments[i]).hexdigest()
+                                        for i in range(len(segments))]))\
+            .hexdigest()
+
+        def fake_internal_head(_, container, key, headers={}):
+            if key == dlo_key and container == self.mapping['container']:
+                return meta
+            raise NotImplementedError
+
+        def fake_internal_get(_, container, key, headers={}):
+            if container == 'segments_container' and\
+                    key.startswith('segments-'):
+                body = segments[int(key.split('-')[1]) - 1]
+                etag = hashlib.md5(body).hexdigest()
+                return (200, {'etag': etag, 'Content-Length': len(body)},
+                        StringIO.StringIO(body))
+            raise NotImplementedError
+
+        def fake_swift_head(container, key, **kwargs):
+            if container == self.aws_bucket and key == dlo_key:
+                return {
+                    'etag': 'foobar',
+                    'x-object-meta-swift-source-dlo-etag': dlo_etag,
+                    'x-object-manifest': '%s_segments/segments-' %
+                    self.aws_bucket}
+            raise NotImplementedError
+
+        mock_ic = mock.NonCallableMock()
+        mock_ic.get_object_metadata.side_effect = fake_internal_head
+        mock_ic.make_request.side_effect = (
+            mock.Mock(
+                body=json.dumps([
+                    {'name': 'segments-%d' % (i + 1),
+                     'hash': hashlib.md5(segments[i]).hexdigest()}
+                    for i in range(len(segments))]),
+                status_int=200),
+            mock.Mock(body='[]', status_int=200))
+        mock_ic.get_object.side_effect = fake_internal_get
+        mock_swift.return_value.head_object.side_effect = fake_swift_head
+
+        self.assertEqual(
+            SyncSwift.UploadStatus.POST,
+            self.sync_swift.upload_object(
+                {'name': dlo_key,
+                 'storage_policy_index': storage_policy,
+                 'created_at': str(1e9)}, mock_ic))
+
+        mock_swift.return_value.post_object.assert_called_once_with(
+            self.aws_bucket, dlo_key,
+            headers={
+                'x-object-manifest': '%s_segments/segments-' % self.aws_bucket,
+                'x-object-meta-swift-source-dlo-etag': dlo_etag,
+                'x-object-meta-new-key': 'value'})
+
+    @mock.patch('s3_sync.sync_swift.swiftclient.client.Connection')
+    def test_upload_same_dlo(self, mock_swift):
+        dlo_key = 'dlo'
+        storage_policy = 42
+        meta = {'x-object-manifest': 'segments_container/segments-',
+                'etag': 'foobar',
+                'x-timestamp': str(1e9),
+                'Content-Length': 0}
+
+        segments = [chr(ord('A') + i) * 1024 for i in range(1, 4)]
+        dlo_etag = hashlib.md5(''.join([hashlib.md5(segments[i]).hexdigest()
+                                        for i in range(len(segments))]))\
+            .hexdigest()
+
+        def fake_internal_head(_, container, key, headers={}):
+            if key == dlo_key and container == self.mapping['container']:
+                return meta
+            raise NotImplementedError
+
+        def fake_internal_get(_, container, key, headers={}):
+            if container == 'segments_container' and\
+                    key.startswith('segments-'):
+                body = segments[int(key.split('-')[1]) - 1]
+                etag = hashlib.md5(body).hexdigest()
+                return (200, {'etag': etag, 'Content-Length': len(body)},
+                        StringIO.StringIO(body))
+            raise NotImplementedError
+
+        def fake_swift_head(container, key, **kwargs):
+            if container == self.aws_bucket and key == dlo_key:
+                return {
+                    'etag': 'foobar',
+                    'x-object-meta-swift-source-dlo-etag': dlo_etag,
+                    'x-object-manifest': '%s_segments/segments-' %
+                    self.aws_bucket}
+            raise NotImplementedError
+
+        mock_ic = mock.NonCallableMock()
+        mock_ic.get_object_metadata.side_effect = fake_internal_head
+        mock_ic.make_request.side_effect = (
+            mock.Mock(
+                body=json.dumps([
+                    {'name': 'segments-%d' % (i + 1),
+                     'hash': hashlib.md5(segments[i]).hexdigest()}
+                    for i in range(len(segments))]),
+                status_int=200),
+            mock.Mock(body='[]', status_int=200))
+        mock_ic.get_object.side_effect = fake_internal_get
+        mock_swift.return_value.head_object.side_effect = fake_swift_head
+
+        self.assertEqual(
+            SyncSwift.UploadStatus.NOOP,
+            self.sync_swift.upload_object(
+                {'name': dlo_key,
+                 'storage_policy_index': storage_policy,
+                 'created_at': str(1e9)}, mock_ic))
+
+        self.assertEqual(
+            [mock.call.head_object(self.mapping['container'], dlo_key,
+                                   headers={})],
+            mock_swift.return_value.mock_calls)
+
+    @mock.patch('s3_sync.sync_swift.swiftclient.client.Connection')
+    def test_changed_dlo(self, mock_swift):
+        dlo_key = 'dlo'
+        storage_policy = 42
+        meta = {'x-object-manifest': 'segments_container/segments-',
+                'etag': 'foobar',
+                'x-timestamp': str(1e9),
+                'Content-Length': 0}
+
+        segments = [chr(ord('A') + i) * 1024 for i in range(1, 4)]
+        dlo_etag = hashlib.md5(''.join([hashlib.md5(segments[i]).hexdigest()
+                                        for i in range(len(segments))]))\
+            .hexdigest()
+        local_segments = [segment for segment in segments]
+        local_segments.append('X' * 1024)
+        new_dlo_etag = hashlib.md5(''.join(
+            [hashlib.md5(local_segments[i]).hexdigest()
+             for i in range(len(local_segments))])).hexdigest()
+
+        def fake_internal_head(_, container, key, headers={}):
+            if key == dlo_key and container == self.mapping['container']:
+                return meta
+            if container == 'segments_container':
+                index = int(key.split('-')[1]) - 1
+                body = local_segments[index]
+                return {'etag': hashlib.md5(body).hexdigest(),
+                        'Content-Length': len(body)}
+            raise NotImplementedError
+
+        def fake_internal_get(_, container, key, headers={}):
+            if container == 'segments_container' and\
+                    key.startswith('segments-'):
+                body = local_segments[int(key.split('-')[1]) - 1]
+                etag = hashlib.md5(body).hexdigest()
+                return (200, {'etag': etag, 'Content-Length': len(body)},
+                        StringIO.StringIO(body))
+            if key == dlo_key:
+                return (200, meta, '')
+            raise NotImplementedError
+
+        def fake_swift_head(container, key, **kwargs):
+            if container == self.aws_bucket and key == dlo_key:
+                return {
+                    'etag': 'foobar',
+                    'x-object-meta-swift-source-dlo-etag': dlo_etag,
+                    'x-object-manifest': '%s_segments/segments-' %
+                    self.aws_bucket,
+                    'Content-Length': 0}
+            if container == '%s_segments' % self.aws_bucket:
+                index = int(key.split('-')[1]) - 1
+                if index >= len(segments):
+                    raise self.not_found
+                body = segments[index]
+                return {'etag': hashlib.md5(body).hexdigest(),
+                        'Content-Length': len(body)}
+            raise NotImplementedError
+
+        mock_ic = mock.NonCallableMock()
+        mock_ic.get_object_metadata.side_effect = fake_internal_head
+        listing = json.dumps([
+            {'name': 'segments-%d' % (i + 1),
+             'hash': hashlib.md5(local_segments[i]).hexdigest()}
+            for i in range(len(local_segments))])
+        mock_ic.make_request.side_effect = (
+            mock.Mock(body=listing, status_int=200),
+            mock.Mock(body='[]', status_int=200),
+            # we list twice -- to check the remote DLO ETag and then again to
+            # upload
+            mock.Mock(body=listing, status_int=200),
+            mock.Mock(body='[]', status_int=200))
+        mock_ic.get_object.side_effect = fake_internal_get
+        mock_swift.return_value.head_object.side_effect = fake_swift_head
+
+        self.assertEqual(
+            SyncSwift.UploadStatus.PUT,
+            self.sync_swift.upload_object(
+                {'name': dlo_key,
+                 'storage_policy_index': storage_policy,
+                 'created_at': str(1e9)}, mock_ic))
+
+        self.assertEqual([
+            mock.call('%s_segments' % self.aws_bucket, 'segments-4', mock.ANY,
+                      etag=hashlib.md5(local_segments[-1]).hexdigest(),
+                      content_length=len(local_segments[-1]), headers={}),
+            mock.call(
+                self.aws_bucket, dlo_key, mock.ANY, etag='foobar',
+                content_length=0,
+                headers={'x-object-manifest': '%s_segments/segments-' %
+                         self.aws_bucket,
+                         'x-object-meta-swift-source-dlo-etag': new_dlo_etag})
+        ], mock_swift.return_value.put_object.mock_calls)
 
     @mock.patch('s3_sync.sync_swift.swiftclient.client.Connection')
     def test_delete_object(self, mock_swift):
@@ -1300,6 +1623,38 @@ class TestSyncSwift(unittest.TestCase):
                 project_name=settings['project_name'],
                 project_domain_name=settings['project_domain_name'],
                 user_domain_name=settings['user_domain_name']))
+
+    @mock.patch('s3_sync.sync_swift.swiftclient.client.Connection')
+    def test_remote_account(self, mock_swift):
+        def mock_auth():
+            mock_swift.return_value.os_options = dict()
+            mock_swift.return_value.url = returned_storage_url
+
+        returned_storage_url = 'http://foobar:1234/v1/AUTH_account'
+        mock_swift.return_value = mock.Mock(
+            get_auth=mock.Mock(side_effect=mock_auth))
+
+        aws_bucket = 'sync_'
+        settings = {
+            'aws_bucket': aws_bucket,
+            'aws_identity': 'identity',
+            'aws_secret': 'credential',
+            'account': 'account',
+            'container': 'container',
+            'aws_endpoint': 'http://swift.url/auth/v1.0',
+            'remote_account': 'remote'}
+        sync_swift = SyncSwift(settings)
+        conn = sync_swift._get_client_factory()()
+        mock_swift.assert_called_once_with(
+            authurl=settings['aws_endpoint'],
+            user=settings['aws_identity'],
+            key=settings['aws_secret'],
+            retries=3,
+            os_options={})
+        conn.get_auth.assert_called_once_with()
+        self.assertEqual('http://foobar:1234/v1/remote',
+                         conn.os_options['object_storage_url'])
+        self.assertEqual('http://foobar:1234/v1/remote', conn.url)
 
     @mock.patch('s3_sync.sync_swift.swiftclient.client.Connection')
     def test_retry_error_stale_object(self, mock_swift):
