@@ -655,7 +655,7 @@ class SyncSwift(BaseSync):
                     # and we should attempt to re-upload in the following
                     # iteration
                     resp = self._call_swiftclient(
-                        'put_container', dst_container)
+                        'put_container', dst_container, None)
                     if not resp.success:
                         self.logger.error(
                             'Failed to create segments container %s: %s' %
