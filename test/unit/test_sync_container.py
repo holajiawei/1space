@@ -450,7 +450,7 @@ class TestSyncContainer(unittest.TestCase):
                    'storage_policy_index': 99}
             sync.handle(row, None)
             sync.provider.upload_object.assert_called_once_with(
-                row, None)
+                row, None, mock.ANY)
 
     @mock.patch('s3_sync.sync_s3.boto3.session.Session')
     def test_retain_copy(self, session_mock):
@@ -476,7 +476,7 @@ class TestSyncContainer(unittest.TestCase):
         swift_ts.offset += 1
 
         sync.provider.upload_object.assert_called_once_with(
-            row, swift_client)
+            row, swift_client, mock.ANY)
         swift_client.delete_object.assert_called_once_with(
             settings['account'], settings['container'], row['name'],
             headers={'X-Timestamp': Timestamp(swift_ts).internal})

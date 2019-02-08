@@ -289,12 +289,14 @@ class SeekableFileLikeIter(FileLikeIter):
 
 
 class FileWrapper(SeekableFileLikeIter):
-    def __init__(self, swift_client, account, container, key, headers={}):
+    def __init__(self, swift_client, account, container, key, headers={},
+                 stats_cb=None):
         self._swift = swift_client
         self._account = account
         self._container = container
         self._key = key
         self.swift_req_hdrs = headers
+        self._stats_cb = stats_cb
 
         self.iterator = None
         self._swift_stream = None
@@ -338,6 +340,8 @@ class FileWrapper(SeekableFileLikeIter):
                 next(self.iterator)
             except StopIteration:
                 pass
+        if self._stats_cb:
+            self._stats_cb(len(the_data))
         return the_data
 
     def get_s3_headers(self):
@@ -372,7 +376,7 @@ class CombinedFileWrapper(object):
     :returns: A CombinedFileWrapper instance.
     '''
     def __init__(self, swift_client, account, source_objects, total_size,
-                 internal_headers={}):
+                 internal_headers={}, stats_cb=None):
         self._swift = swift_client
         self._source_objects = source_objects
         self._account = account
@@ -380,6 +384,7 @@ class CombinedFileWrapper(object):
         self._segment = None
         self._segment_index = 0
         self._size = total_size
+        self._stats_cb = stats_cb
 
     def seek(self, pos, flag=0):
         if pos != 0:
@@ -395,8 +400,9 @@ class CombinedFileWrapper(object):
 
     def _open_next_segment(self):
         container, key = self._source_objects[self._segment_index]
-        self._segment = FileWrapper(self._swift, self._account, container,
-                                    key, self._internal_headers)
+        self._segment = FileWrapper(
+            self._swift, self._account, container, key, self._internal_headers,
+            self._stats_cb)
         self._segment_index += 1
 
     def read(self, size=-1):
@@ -433,11 +439,13 @@ class SLOFileWrapper(CombinedFileWrapper):
     # This means that if we turn on SLO in the pipeline, we will not be able to
     # retrieve the manifest object itself. In the future, this may be converted
     # to a resumable upload or we may resort to using compose.
-    def __init__(self, swift_client, account, manifest, headers={}):
+    def __init__(self, swift_client, account, manifest, headers={},
+                 stats_cb=None):
         size = sum([int(segment['bytes']) for segment in manifest])
         segments = [segment['name'].split('/', 2)[1:] for segment in manifest]
         super(SLOFileWrapper, self).__init__(
-            swift_client, account, segments, size, headers)
+            swift_client, account, segments, size, internal_headers=headers,
+            stats_cb=stats_cb)
 
 
 class BlobstorePutWrapper(object):

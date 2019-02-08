@@ -187,5 +187,8 @@ class TestSyncSharded(TestCloudSyncBase):
         self._verify_target(cont_hdr)
 
         # test that statsd server got the correct results for root container
-        self._assert_stats(self.mapping, len(self.test_args), 'copied_objects')
+        self._assert_stats(
+            self.mapping,
+            {'copied_objects': len(self.test_args),
+             'bytes': len(self.test_args) * (len('obj body ') + 32)})
         clear_swift_container(self.swift_dst, self.mapping['aws_bucket'])

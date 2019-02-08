@@ -145,7 +145,7 @@ class SyncSwift(BaseSync):
             'put_object', self.remote_container, swift_key, contents=body_iter,
             headers=headers, query_string=query_string)
 
-    def upload_object(self, row, internal_client):
+    def upload_object(self, row, internal_client, upload_stats_cb=None):
         if self._per_account and not self.verified_container:
             with self.client_pool.get_client() as swift_client:
                 try:
@@ -160,7 +160,8 @@ class SyncSwift(BaseSync):
 
         return self._upload_object(
             self.container, self.remote_container, row, internal_client,
-            segment=False)
+            segment=False,
+            stats_cb=upload_stats_cb)
 
     def delete_object(self, swift_key):
         """Delete an object from the remote cluster.
@@ -341,7 +342,7 @@ class SyncSwift(BaseSync):
                 return _perform_op(swift_client)
 
     def _upload_object(self, src_container, dst_container, row,
-                       internal_client, segment=False):
+                       internal_client, segment=False, stats_cb=None):
         key = row['name']
         req_hdrs = {}
         if 'storage_policy_index' in row:
@@ -393,7 +394,8 @@ class SyncSwift(BaseSync):
                                          container=dst_container)
                     return self.UploadStatus.POST
                 return self.UploadStatus.NOOP
-            return self._upload_slo(key, internal_client, req_hdrs)
+            return self._upload_slo(key, internal_client, req_hdrs,
+                                    stats_cb=stats_cb)
 
         dlo_prefix = get_dlo_prefix(metadata)
         if not segment and dlo_prefix:
@@ -408,7 +410,8 @@ class SyncSwift(BaseSync):
                                          container=dst_container)
                     return self.UploadStatus.POST
                 return self.UploadStatus.NOOP
-            return self._upload_dlo(key, internal_client, metadata, req_hdrs)
+            return self._upload_dlo(key, internal_client, metadata, req_hdrs,
+                                    stats_cb=stats_cb)
 
         if remote_meta and metadata['etag'] == remote_meta['etag']:
             if not self._is_meta_synced(metadata, remote_meta):
@@ -423,7 +426,8 @@ class SyncSwift(BaseSync):
                                          self.account,
                                          src_container,
                                          key,
-                                         req_hdrs)
+                                         req_hdrs,
+                                         stats_cb=stats_cb)
             headers = self._get_user_headers(wrapper_stream.get_headers())
             if self.remote_delete_after:
                 del_after = self.remote_delete_after
@@ -482,14 +486,15 @@ class SyncSwift(BaseSync):
             user_headers[dlo_etag_field] = remote_metadata.get(dlo_etag_field)
         self.post_object(swift_key, user_headers, container)
 
-    def _upload_objects(self, objects_list, internal_client):
+    def _upload_objects(self, objects_list, internal_client, stats_cb):
         work_queue = eventlet.queue.Queue(self.SLO_QUEUE_SIZE)
         worker_pool = eventlet.greenpool.GreenPool(self.SLO_WORKERS)
         workers = []
         for _ in range(self.SLO_WORKERS):
             workers.append(
                 worker_pool.spawn(
-                    self._upload_segment_worker, work_queue, internal_client))
+                    self._upload_segment_worker, work_queue, internal_client,
+                    stats_cb))
         # key must be a tuple (container, object)
         for key in objects_list:
             work_queue.put(key)
@@ -504,14 +509,15 @@ class SyncSwift(BaseSync):
             failures.extend(worker_failures)
         return errors, failures
 
-    def _upload_slo(self, key, internal_client, swift_req_headers):
+    def _upload_slo(self, key, internal_client, swift_req_headers,
+                    stats_cb=None):
         headers, manifest = self._get_internal_manifest(
             key, internal_client, swift_req_headers)
         self.logger.debug("JSON manifest: %s" % str(manifest))
 
         errors, failures = self._upload_objects(
             (segment['name'].split('/', 2)[1:] for segment in manifest),
-            internal_client)
+            internal_client, stats_cb)
 
         # Check failures first, as it may mean we want to skip this SLO
         if failures:
@@ -546,7 +552,8 @@ class SyncSwift(BaseSync):
                 query_string='multipart-manifest=put')
         return self.UploadStatus.PUT
 
-    def _upload_dlo(self, key, internal_client, internal_meta, swift_req_hdrs):
+    def _upload_dlo(self, key, internal_client, internal_meta, swift_req_hdrs,
+                    stats_cb=None):
         dlo_container, prefix = internal_meta[MANIFEST_HEADER].decode('utf-8')\
             .split('/', 1)
         dlo_etag_hash = hashlib.md5()
@@ -562,7 +569,7 @@ class SyncSwift(BaseSync):
                 yield (dlo_container, entry['name'])
 
         errors, failures = self._upload_objects(
-            _keys_generator(), internal_client)
+            _keys_generator(), internal_client, stats_cb)
         # Check the failures first, in case we need to skip this DLO
         # altogether. We can return the first failing status, as we don't need
         # to exhaust all the reasons the upload failed.
@@ -624,7 +631,8 @@ class SyncSwift(BaseSync):
         body.close()
         return headers, manifest
 
-    def _upload_segment_worker(self, work_queue, internal_client):
+    def _upload_segment_worker(self, work_queue, internal_client,
+                               stats_cb=None):
         errors = []
         failed = []
         while True:
@@ -638,7 +646,7 @@ class SyncSwift(BaseSync):
             try:
                 status = self._upload_object(
                     container, dst_container, {'name': obj},
-                    internal_client, segment=True)
+                    internal_client, segment=True, stats_cb=stats_cb)
                 if status not in [self.UploadStatus.PUT,
                                   self.UploadStatus.POST,
                                   self.UploadStatus.NOOP]:

@@ -190,7 +190,8 @@ class TestSyncSwift(unittest.TestCase):
         mock_file_wrapper.assert_called_with(mock_ic,
                                              self.sync_swift.account,
                                              self.sync_swift.container,
-                                             key, swift_req_headers)
+                                             key, swift_req_headers,
+                                             stats_cb=None)
 
         swift_client.put_object.assert_called_with(
             self.aws_bucket, key, wrapper,
@@ -227,7 +228,8 @@ class TestSyncSwift(unittest.TestCase):
         mock_file_wrapper.assert_called_with(mock_ic,
                                              self.sync_swift.account,
                                              self.sync_swift.container,
-                                             key, swift_req_headers)
+                                             key, swift_req_headers,
+                                             stats_cb=None)
 
         swift_client.put_object.assert_called_with(
             self.aws_bucket, key, wrapper, headers={},

@@ -201,7 +201,10 @@ class SyncContainer(container_crawler.base_sync.BaseSync):
             _, _, meta_ts = decode_timestamps(row['created_at'])
             if time.time() <= self.copy_after + meta_ts.timestamp:
                 raise RetryError('Object is not yet eligible for archive')
-            status = self.provider.upload_object(row, swift_client)
+            status = self.provider.upload_object(
+                row, swift_client,
+                lambda bytes_uploaded: self.statsd_increment(
+                    'bytes', bytes_uploaded))
             if status == BaseSync.UploadStatus.PUT:
                 self.statsd_increment('copied_objects', 1)
 

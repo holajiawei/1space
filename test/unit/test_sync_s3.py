@@ -589,7 +589,8 @@ class TestSyncS3(unittest.TestCase):
         mock_file_wrapper.assert_called_with(mock_ic,
                                              self.sync_s3.account,
                                              self.sync_s3.container,
-                                             key, swift_req_headers)
+                                             key, swift_req_headers,
+                                             stats_cb=None)
 
         self.mock_boto3_client.put_object.assert_called_with(
             Bucket=self.aws_bucket,
@@ -630,7 +631,8 @@ class TestSyncS3(unittest.TestCase):
         mock_file_wrapper.assert_called_with(mock_ic,
                                              self.sync_s3.account,
                                              self.sync_s3.container,
-                                             key, swift_req_headers)
+                                             key, swift_req_headers,
+                                             stats_cb=None)
 
         self.mock_boto3_client.put_object.assert_called_with(
             Bucket=self.aws_bucket,
@@ -670,7 +672,8 @@ class TestSyncS3(unittest.TestCase):
         mock_file_wrapper.assert_called_with(mock_ic,
                                              self.sync_s3.account,
                                              self.sync_s3.container,
-                                             key, swift_req_headers)
+                                             key, swift_req_headers,
+                                             stats_cb=None)
 
         self.mock_boto3_client.put_object.assert_called_with(
             Bucket=self.aws_bucket,
@@ -718,7 +721,8 @@ class TestSyncS3(unittest.TestCase):
         mock_file_wrapper.assert_called_with(mock_ic,
                                              self.sync_s3.account,
                                              self.sync_s3.container,
-                                             key, swift_req_headers)
+                                             key, swift_req_headers,
+                                             stats_cb=None)
 
         self.mock_boto3_client.put_object.assert_called_with(
             Bucket=self.aws_bucket,
@@ -866,7 +870,8 @@ class TestSyncS3(unittest.TestCase):
         mock_file_wrapper.assert_called_with(mock_ic,
                                              self.sync_s3.account,
                                              self.sync_s3.container,
-                                             key, swift_req_headers)
+                                             key, swift_req_headers,
+                                             stats_cb=None)
 
         self.mock_boto3_client.put_object.assert_called_with(
             Bucket=self.aws_bucket,
@@ -1618,7 +1623,8 @@ class TestSyncS3(unittest.TestCase):
 
         self.assertEqual(0, self.sync_s3.update_slo_metadata.call_count)
         self.sync_s3._upload_slo.assert_called_once_with(
-            manifest, slo_meta, self.sync_s3.get_s3_name(slo_key), mock_ic)
+            manifest, slo_meta, self.sync_s3.get_s3_name(slo_key), mock_ic,
+            None)
         mock_ic.get_object_metadata.assert_called_once_with(
             'account', 'container', slo_key, headers=swift_req_headers)
         mock_ic.get_object.assert_called_once_with(
