@@ -110,7 +110,6 @@ class BaseSync(object):
     SLO_QUEUE_SIZE = 100
     MB = 1024 * 1024
     GB = 1024 * MB
-    RELEVANT_CONTAINER_METADATA = {}
 
     # Possible results of upload_object
     class UploadStatus(object):
@@ -214,6 +213,7 @@ class BaseSync(object):
         if '/' in self.container:
             raise ValueError('Invalid container name %r' % self.container)
         self.extra_headers = extra_headers or {}
+        self.relevant_container_metadata = set()
 
         # Due to the genesis of this project, the endpoint and bucket have the
         # "aws_" prefix, even though the endpoint may actually be a Swift
@@ -224,6 +224,11 @@ class BaseSync(object):
         self.selection_criteria = settings.get('selection_criteria', {})
         self.sync_container_metadata = settings.get(
             'sync_container_metadata', False)
+        self.sync_container_acl = settings.get(
+            'sync_container_acl', False)
+        if self.sync_container_acl:
+            self.relevant_container_metadata.add('X-Container-Write')
+            self.relevant_container_metadata.add('X-Container-Read')
 
         # custom prefix can potentially cause conflicts/data over write,
         # be VERY CAREFUL with this.
@@ -261,7 +266,7 @@ class BaseSync(object):
         result = {}
         if not self.sync_container_metadata:
             return result
-        for key in self.RELEVANT_CONTAINER_METADATA:
+        for key in self.relevant_container_metadata:
             if key in metadata:
                 result[key] = metadata[key][0]
         for key in metadata:

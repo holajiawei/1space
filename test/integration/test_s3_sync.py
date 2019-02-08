@@ -431,9 +431,12 @@ class TestCloudSync(TestCloudSyncBase):
     def test_swift_sync_container_metadata(self):
         mapping = self._find_mapping(
             lambda m: m.get('sync_container_metadata'))
+        mapping['sync_container_acl'] = True
         crawler = utils.get_container_crawler(mapping)
         conn = self.conn_for_acct(mapping['account'])
         test_metadata = {
+            'x-container-write': 'test2:tester2',
+            'x-container-read': 'test2',
             'x-container-meta-test1': 'test1value',
             'x-container-meta-test2': 'test2value',
             u'x-container-meta-tes\u00e9t': u'test\u262f metadata',

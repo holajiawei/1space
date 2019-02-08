@@ -218,15 +218,18 @@ class TestBaseSync(unittest.TestCase):
             'X-Versions-Location': (
                 'test_versions_location', '1545179217.201453'),
             'X-Container-Meta-bar': ('bar', '1545179217.201453'),
+            'X-Container-Read': ('test2:tester2', '1545179217.201453'),
         }
         expected_result = {
             'X-Container-Meta-foo': 'foo',
             'X-Container-Meta-bar': 'bar',
+            'X-Container-Read': 'test2:tester2',
         }
         base = base_sync.BaseSync(self.settings, max_conns=1)
         self.assertFalse(base.sync_container_metadata)
         self.assertEqual({}, base.select_container_metadata(test_headers))
         self.settings['sync_container_metadata'] = True
+        self.settings['sync_container_acl'] = True
         base = base_sync.BaseSync(self.settings, max_conns=1)
         self.assertTrue(base.sync_container_metadata)
         self.assertEqual(expected_result,

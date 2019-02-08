@@ -45,7 +45,9 @@ all profiles:
                "protocol": "swift",
                "copy_after": 0,
                "propagate_delete": false,
-               "retain_local": false
+               "retain_local": false,
+               "sync_container_metadata": false,
+               "sync_container_acl": false
            }
        ]  
        "devices": "/swift/nodes/1/node",
@@ -73,12 +75,17 @@ Sync Profile
   - **propagate_delete**: If False, local DELETE requests won't be propagated
     to remote container (*Optional*, Default: ``True``).
   - **retain_local**: If False, local object will be deleted after sync is
-    completed (*Optional*, Default: 'True').
+    completed (*Optional*, Default: ``True``).
   - **remote_delete_after**: Delete after setting for remote objects. For Swift
     remote clusters, this is applied to each object. For S3, it is applied as a
     lifecycle policy for the prefix. Note that in both cases, the delete after
     relates to the original object date, not the date it is copied to remote.
     A value of 0 (zero) means don't apply. (*Optional*, Default: 0)
+  - **sync_container_metadata**: Propagate container metadata. This option
+    applies only for Swift remote clusters (*Optional*, Default: ``False``).
+  - **sync_container_acl**: Preserve the container ACL (Read/Write). This
+    option applies only for Swift remote clusters, **sync_container_metadata**
+    must also be set to True (*Optional*, Default: ``False``).
 
 Global settings
   - **devices**: Directory Swift's container devices are mounted under.
