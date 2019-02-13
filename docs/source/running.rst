@@ -43,6 +43,7 @@ all profiles:
                "aws_secret": "swift",
                "aws_bucket": "remote",
                "protocol": "swift",
+               "convert_dlo": false,
                "copy_after": 0,
                "propagate_delete": false,
                "propagate_expiration": false,
@@ -73,12 +74,15 @@ Sync Profile
   - **aws_secret**: remote object store identity's secret/password.
   - **aws_bucket**: remote bucket where data is synced to.
   - **protocol**: remote object store API protocol: ``swift`` or ``s3``.
+  - **convert_dlo**: convert dynamic large objects to static large objects. If
+    the dynamic large object manifest itself contains data, it will not be
+    migrated (*Optional*. Default: ``False``).
   - **copy_after**: Time in seconds to delay object sync (*Optional*.
     Default: 0).
   - **propagate_delete**: If False, local DELETE requests won't be propagated
     to remote container (*Optional*. Default: ``True``).
   - **propagate_expiration**: If True, expiration headers will propagate when
-    synced to remote cluster. Note: *remote_delete_after* takes precendence
+    synced to remote cluster. Note: *remote_delete_after* takes precedence
     over this option (*Optional*. Default: ``False``. This option is only
     available to Swift protocol)
   - **remote_delete_after**: Delete after setting for remote objects. For Swift
@@ -113,7 +117,7 @@ Global settings
 
 swift-s3-migrator configuration 
 -------------------------------
-Below is a sample of both a migration profile setting and the migratoin global
+Below is a sample of both a migration profile setting and the migration global
 settings. A profile is a mapping between one (or all for a given account)
 remote container and a local account or container. The migrator process
 can handle multiple profiles, the global settings apply to all profiles:

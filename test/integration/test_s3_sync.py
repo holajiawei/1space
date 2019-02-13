@@ -1138,10 +1138,147 @@ class TestCloudSync(TestCloudSyncBase):
         clear_swift_container(self.swift_src, mapping['container'])
         clear_swift_container(self.swift_dst, mapping['aws_bucket'])
 
+    def test_dlo_slo_conversion(self):
+        content = [chr(ord('A') + i) * 1024 for i in range(10)]
+        key = u'test_dl\xf3'
+        mapping = dict(self.swift_sync_mapping())
+        mapping['convert_dlo'] = True
+        crawler = utils.get_container_crawler(mapping)
+        prefix = u'test-dlo-slo-p\xe0rts-'
+        manifest = u'segments/%s' % prefix
+        segments_container = 'segments'
+        self.local_swift('put_container', segments_container)
+        for i in range(len(content)):
+            self.local_swift(
+                'put_object', segments_container,
+                u'%s-%d' % (prefix, i), content[i])
+        self.local_swift(
+            'put_object', mapping['container'], key, '',
+            headers={'x-object-manifest': manifest})
+        self.remote_swift('put_container',
+                          '%s_segments' % mapping['aws_bucket'])
+
+        crawler.run_once()
+
+        headers, body = self.remote_swift(
+            'get_object', mapping['aws_bucket'], key)
+        self.assertEqual(''.join(content), body)
+        dlo_etag = hashlib.md5(''.join(
+            [hashlib.md5(content[i]).hexdigest() for i in range(len(content))]
+        )).hexdigest()
+        self.assertEqual('"%s"' % dlo_etag, headers['etag'])
+        self.assertEqual(dlo_etag,
+                         headers.get('x-object-meta-swift-source-dlo-etag'))
+        self.assertTrue(headers.get('x-static-large-object'))
+
+        self._assert_stats(mapping, {'copied_objects': 1,
+                                     'bytes': sum(map(len, content))})
+
+        clear_swift_container(self.swift_src, mapping['container'])
+        clear_swift_container(self.swift_dst, mapping['aws_bucket'])
+        clear_swift_container(self.swift_src, segments_container)
+        clear_swift_container(self.swift_dst,
+                              '%s_segments' % mapping['aws_bucket'])
+
+    def test_dlo_slo_conversion_meta_update(self):
+        content = [chr(ord('A') + i) * 1024 for i in range(10)]
+        key = u'test_dl\xf3-to-sl\xf3'
+        mapping = dict(self.swift_sync_mapping())
+        mapping['convert_dlo'] = True
+        crawler = utils.get_container_crawler(mapping)
+        prefix = u'test-dlo-slo-p\xe0rts-'
+        manifest = u'segments/%s' % prefix
+        segments_container = 'segments'
+        self.local_swift('put_container', segments_container)
+        for i in range(len(content)):
+            self.local_swift(
+                'put_object', segments_container,
+                u'%s-%d' % (prefix, i), content[i])
+        self.local_swift(
+            'put_object', mapping['container'], key, '',
+            headers={'x-object-manifest': manifest})
+        self.remote_swift('put_container',
+                          '%s_segments' % mapping['aws_bucket'])
+
+        crawler.run_once()
+
+        self._assert_stats(mapping, {'copied_objects': 1,
+                                     'bytes': sum(map(len, content))})
+        self.local_swift('post_object', mapping['container'], key,
+                         {u'x-object-meta-new-valu\xe3': u'valu\xe3',
+                          u'x-object-manifest': manifest})
+
+        # Re-processing the object should be a POST (which does not count as
+        # copied).
+        crawler.run_once()
+
+        headers = self.remote_swift('head_object', mapping['aws_bucket'], key)
+        self.assertEqual(u'valu\xe3',
+                         headers.get(u'x-object-meta-new-valu\xe3'))
+        self.assertTrue(headers.get('x-static-large-object'))
+
+        self._assert_stats(mapping, {'copied_objects': 0})
+
+        clear_swift_container(self.swift_src, mapping['container'])
+        clear_swift_container(self.swift_dst, mapping['aws_bucket'])
+        clear_swift_container(self.swift_src, segments_container)
+        clear_swift_container(self.swift_dst,
+                              '%s_segments' % mapping['aws_bucket'])
+
+    def test_dlo_slo_conversion_reupload(self):
+        content = [chr(ord('A') + i) * 1024 for i in range(10)]
+        key = u'test_dl\xf3'
+        mapping = dict(self.swift_sync_mapping())
+        mapping['convert_dlo'] = True
+        crawler = utils.get_container_crawler(mapping)
+        prefix = u'test-dlo-slo-p\xe0rts-'
+        manifest = u'segments/%s' % prefix
+        segments_container = 'segments'
+        self.local_swift('put_container', segments_container)
+        for i in range(len(content)):
+            self.local_swift(
+                'put_object', segments_container,
+                u'%s-%d' % (prefix, i), content[i])
+        self.local_swift(
+            'put_object', mapping['container'], key, '',
+            headers={'x-object-manifest': manifest})
+        self.remote_swift('put_container',
+                          '%s_segments' % mapping['aws_bucket'])
+
+        crawler.run_once()
+
+        headers, body = self.remote_swift(
+            'get_object', mapping['aws_bucket'], key)
+        self.assertEqual(''.join(content), body)
+        dlo_etag = hashlib.md5(''.join(
+            [hashlib.md5(content[i]).hexdigest() for i in range(len(content))]
+        )).hexdigest()
+        self.assertEqual('"%s"' % dlo_etag, headers['etag'])
+        self.assertEqual(dlo_etag,
+                         headers.get('x-object-meta-swift-source-dlo-etag'))
+        self.assertTrue(headers.get('x-static-large-object'))
+
+        self._assert_stats(mapping, {'copied_objects': 1,
+                                     'bytes': sum(map(len, content))})
+
+        # Re-processing the object should be a NOOP
+        # NOTE: crawler is recreated so that we can reset the status and the
+        # object gets re-processed.
+        crawler = utils.get_container_crawler(mapping)
+        crawler.run_once()
+        self._assert_stats(mapping, {'copied_objects': 0})
+
+        clear_swift_container(self.swift_src, mapping['container'])
+        clear_swift_container(self.swift_dst, mapping['aws_bucket'])
+        clear_swift_container(self.swift_src, segments_container)
+        clear_swift_container(self.swift_dst,
+                              '%s_segments' % mapping['aws_bucket'])
+
     def test_swift_dont_shunt_post(self):
         # shunt middleware only shunts POST request for migration profiles
         content = 'better not shunt post'
         key = 'test_swift_dont_shunt_post'
+
         mapping = self.swift_restore_mapping()
         self.remote_swift('put_object', mapping['aws_bucket'], key, content,
                           headers={'x-object-meta-test-header': 'remote'})

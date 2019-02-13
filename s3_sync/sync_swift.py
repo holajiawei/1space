@@ -56,6 +56,7 @@ class SyncSwift(BaseSync):
         if not self.remote_delete_after and self.settings.get(
                 'propagate_expiration'):
             self.propagated_headers.add('x-delete-at')
+        self.convert_dlo = self.settings.get('convert_dlo', False)
 
     @property
     def remote_container(self):
@@ -486,11 +487,12 @@ class SyncSwift(BaseSync):
             # We have to preserve both our computed DLO ETag *and* the manifest
             # header.
             dlo_etag_field = SWIFT_USER_META_PREFIX + DLO_ETAG_FIELD
-            segments_container, prefix = dlo_manifest.split('/', 1)
-            user_headers[MANIFEST_HEADER] = '%s/%s' % (
-                self.remote_segments_container(segments_container),
-                prefix)
             user_headers[dlo_etag_field] = remote_metadata.get(dlo_etag_field)
+            if not self.convert_dlo:
+                segments_container, prefix = dlo_manifest.split('/', 1)
+                user_headers[MANIFEST_HEADER] = '%s/%s' % (
+                    self.remote_segments_container(segments_container),
+                    prefix)
         self.post_object(swift_key, user_headers, container)
 
     def _upload_objects(self, objects_list, internal_client, stats_cb):
@@ -563,7 +565,10 @@ class SyncSwift(BaseSync):
                     stats_cb=None):
         dlo_container, prefix = internal_meta[MANIFEST_HEADER].decode('utf-8')\
             .split('/', 1)
+        segments_container = self.remote_segments_container(dlo_container)
         dlo_etag_hash = hashlib.md5()
+        if self.convert_dlo:
+            manifest = []
 
         def _keys_generator():
             internal_iterator = iter_internal_listing(
@@ -573,6 +578,12 @@ class SyncSwift(BaseSync):
                 if not entry:
                     return
                 dlo_etag_hash.update(entry['hash'].strip('"'))
+                if self.convert_dlo:
+                    manifest.append(
+                        {'path': (
+                            u'/%s/%s' % (segments_container, entry['name'])),
+                         'etag': entry['hash'],
+                         'size_bytes': entry['bytes']})
                 yield (dlo_container, entry['name'])
 
         errors, failures = self._upload_objects(
@@ -592,24 +603,37 @@ class SyncSwift(BaseSync):
         # it unconditionally.
 
         # Upload the manifest
-        with self.client_pool.get_client() as swift_client:
-            # The DLO manifest might be non-zero sized
-            wrapper_stream = FileWrapper(internal_client,
-                                         self.account,
-                                         self.container,
-                                         key, swift_req_hdrs)
-            put_headers = self._get_user_headers(wrapper_stream.get_headers())
+        if self.convert_dlo:
+            manifest_body = json.dumps(manifest)
+            etag = None
+            put_headers = self._get_user_headers(internal_meta)
+            query_string = 'multipart-manifest=put'
+        else:
+            # The DLO manifest might be non-zero sized, so we retrieve the
+            # original Swift object.
+            manifest_body = FileWrapper(
+                internal_client, self.account, self.container, key,
+                swift_req_hdrs)
+            etag = manifest_body.get_headers()['etag']
+            put_headers = self._get_user_headers(manifest_body.get_headers())
             put_headers[MANIFEST_HEADER] = '%s/%s' % (
-                self.remote_segments_container(dlo_container), prefix)
-            put_headers[dlo_etag_header] = dlo_etag
+                segments_container, prefix)
+            query_string = None
+
+        put_headers[dlo_etag_header] = dlo_etag
+        if self.remote_delete_after:
+            put_headers({'x-delete-after': self.remote_delete_after})
+
+        with self.client_pool.get_client() as swift_client:
             try:
                 swift_client.put_object(
-                    self.remote_container, key, wrapper_stream,
-                    etag=wrapper_stream.get_headers()['etag'],
+                    self.remote_container, key, manifest_body, etag=etag,
                     headers=self._client_headers(put_headers),
-                    content_length=len(wrapper_stream))
+                    content_length=len(manifest_body),
+                    query_string=query_string)
             finally:
-                wrapper_stream.close()
+                if isinstance(manifest_body, FileWrapper):
+                    manifest_body.close()
         return self.UploadStatus.PUT
 
     def get_manifest(self, key, bucket=None):
