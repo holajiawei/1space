@@ -274,52 +274,51 @@ class BaseSync(object):
                 result[key] = metadata[key][0]
         return result
 
-    def post_object(self, swift_key, headers):
+    def post_object(self, key, headers, bucket=None):
         raise NotImplementedError()
 
     def head_account(self):
         raise NotImplementedError()
 
-    def put_object(self, swift_key, headers, body, query_string=None):
+    def put_object(self, key, headers, body, bucket=None, **options):
         """
         Uploads a single object to the provider's object store, as configured
         (container name, object name namespacing/prefixing, etc.).
 
-        The headers provided are assumed to be in Swift parlance, and will be
-        converted to S3-style headers if necessary.
-
-        The `body` argument can be a string or unicode instance, a file-like
-        object (like a wsgi.input stream wrapped by an InputProxy instance), or
-        an iterable.
-
-        The optional query_string is used only for the Swift provider and is
-        sent on, verbatim, to the underlying swiftclient put_object() call.
+        :key: object key.
+        :param headers: request headers; assumed to be in Swift parlance,
+        and converted to S3-style headers if necessary.
+        :param body: a string or unicode instance, a file-like object (like a
+        wsgi.input stream wrapped by an InputProxy instance), or an iterable.
+        :param bucket: Bucket/container for the PUT call, if overriding the
+        current default.
+        :param **options: See individual providers for additional options.
+        :returns: an instance of ProviderResponse.
         """
         raise NotImplementedError()
 
     def upload_object(self, row, internal_client, upload_stats_cb=None):
         raise NotImplementedError()
 
-    def update_metadata(self, swift_key, swift_meta, remote_metadata={},
-                        container={}):
+    def update_metadata(self, key, metadata, remote_metadata={}, bucket=None):
         raise NotImplementedError()
 
-    def delete_object(self, swift_key):
+    def delete_object(self, key, bucket=None):
         raise NotImplementedError()
 
-    def shunt_object(self, request, swift_key):
+    def shunt_object(self, request, key):
         raise NotImplementedError()
 
-    def shunt_post(self, request, swift_key):
+    def shunt_post(self, request, key):
         raise NotImplementedError()
 
-    def shunt_delete(self, request, swift_key):
+    def shunt_delete(self, request, key):
         raise NotImplementedError()
 
-    def head_object(self, swift_key, bucket=None, **options):
+    def head_object(self, key, bucket=None, **options):
         raise NotImplementedError()
 
-    def get_object(self, swift_key, bucket=None, **options):
+    def get_object(self, key, bucket=None, **options):
         raise NotImplementedError()
 
     def head_bucket(self, bucket, **options):

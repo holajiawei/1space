@@ -54,7 +54,7 @@ class FakeBody(object):
 
 class TestSyncSwift(unittest.TestCase):
     not_found = swiftclient.exceptions.ClientException(
-        'not found', http_status=404)
+        'not found', http_status=404, http_response_headers={})
 
     def setUp(self):
         self.aws_bucket = 'container'

@@ -322,27 +322,27 @@ class SyncS3(BaseSync):
                 wrapper_stream.close()
         return self.UploadStatus.PUT
 
-    def delete_object(self, swift_key):
-        s3_key = self.get_s3_name(swift_key)
+    def delete_object(self, key, bucket=None):
+        if not bucket:
+            bucket = self.aws_bucket
+        s3_key = self.get_s3_name(key)
         self.logger.debug('Deleting object %s' % s3_key)
-        resp = self._call_boto('delete_object', Bucket=self.aws_bucket,
-                               Key=s3_key)
+        resp = self._call_boto('delete_object', Bucket=bucket, Key=s3_key)
         if not resp.success:
             if resp.status == 404:
                 self.logger.warning('%s already removed from %s', s3_key,
-                                    self.aws_bucket)
+                                    bucket)
             else:
                 resp.reraise()
         # If there is a manifest uploaded for this object, remove it as well
-        resp_manifest = self._call_boto('delete_object',
-                                        Bucket=self.aws_bucket,
-                                        Key=self.get_manifest_name(s3_key))
+        resp_manifest = self._call_boto(
+            'delete_object', Bucket=bucket, Key=self.get_manifest_name(s3_key))
         if not resp_manifest.success and resp_manifest.status != 404:
             resp_manifest.reraise()
 
         return resp
 
-    def shunt_object(self, req, swift_key):
+    def shunt_object(self, req, key):
         """Fetch an object from the remote cluster to stream back to a client.
 
         :returns: (status, headers, body_iter) tuple
@@ -358,9 +358,9 @@ class SyncS3(BaseSync):
             header.replace('-', ''): req.headers[header]
             for header in headers_to_copy if header in req.headers})
         if req.method == 'GET':
-            response = self.get_object(swift_key, **kwargs)
+            response = self.get_object(key, **kwargs)
         else:
-            response = self.head_object(swift_key, **kwargs)
+            response = self.head_object(key, **kwargs)
 
         if not response.success:
             return response.to_wsgi()
@@ -374,8 +374,8 @@ class SyncS3(BaseSync):
 
         return response.to_wsgi()
 
-    def head_object(self, swift_key, bucket=None, **options):
-        key = self.get_s3_name(swift_key)
+    def head_object(self, key, bucket=None, **options):
+        key = self.get_s3_name(key)
         if bucket is None:
             bucket = self.aws_bucket
         response = self._call_boto(
@@ -383,8 +383,8 @@ class SyncS3(BaseSync):
         response.body = ['']
         return response
 
-    def get_object(self, swift_key, bucket=None, **options):
-        key = self.get_s3_name(swift_key)
+    def get_object(self, key, bucket=None, **options):
+        key = self.get_s3_name(key)
         if bucket is None:
             bucket = self.aws_bucket
         return self._call_boto(
@@ -395,23 +395,25 @@ class SyncS3(BaseSync):
             bucket = self.aws_bucket
         return self._call_boto('head_bucket', Bucket=bucket, **options)
 
-    def shunt_post(self, req, swift_key):
+    def shunt_post(self, req, key):
         """Propagate metadata to the remote store
 
          :returns: (status, headers, body_iter) tuple
         """
         headers = dict([(k, req.headers[k]) for k in req.headers.keys()
                         if req.headers[k]])
-        return self.post_object(swift_key, headers).to_wsgi()
+        return self.post_object(key, headers).to_wsgi()
 
-    def post_object(self, swift_key, headers):
-        s3_key = self.get_s3_name(swift_key)
+    def post_object(self, key, headers, bucket=None):
+        if not bucket:
+            bucket = self.aws_bucket
+        s3_key = self.get_s3_name(key)
         content_type = headers.get('content-type', 'application/octet-stream')
         meta = convert_to_s3_headers(headers)
         self.logger.debug('Updating metadata for %s to %r', s3_key, meta)
         params = dict(
-            Bucket=self.aws_bucket, Key=s3_key,
-            CopySource={'Bucket': self.aws_bucket, 'Key': s3_key},
+            Bucket=bucket, Key=s3_key,
+            CopySource={'Bucket': bucket, 'Key': s3_key},
             Metadata=meta,
             MetadataDirective='REPLACE',
             ContentType=content_type,
@@ -420,8 +422,11 @@ class SyncS3(BaseSync):
             params['ServerSideEncryption'] = 'AES256'
         return self._call_boto('copy_object', **params)
 
-    def put_object(self, swift_key, headers, body, query_string=None):
-        s3_key = self.get_s3_name(swift_key)
+    def put_object(self, key, headers, body, bucket=None, **options):
+        if not bucket:
+            bucket = self.aws_bucket
+
+        s3_key = self.get_s3_name(key)
         content_length = None
         if isinstance(body, (unicode, str)):
             if isinstance(body, unicode):
@@ -436,7 +441,7 @@ class SyncS3(BaseSync):
         else:
             body = SeekableFileLikeIter(body)
         params = dict(
-            Bucket=self.aws_bucket,
+            Bucket=bucket,
             Key=s3_key,
             Body=body,
             Metadata=convert_to_s3_headers(headers),
@@ -946,16 +951,15 @@ class SyncS3(BaseSync):
         self._complete_multipart_upload(s3_key, multipart_resp['UploadId'],
                                         parts)
 
-    def update_metadata(self, swift_key, swift_meta, remote_metadata={},
-                        container={}):
-        if not check_slo(swift_meta) or self._google():
-            meta = swift_meta.copy()
-            if self._google() and check_slo(swift_meta):
+    def update_metadata(self, key, metadata, remote_metadata={}, bucket=None):
+        if not check_slo(metadata) or self._google():
+            meta = metadata.copy()
+            if self._google() and check_slo(metadata):
                 # metadata still in canonical Swift format, so stick Swift
                 # object metadata header in front
                 meta[SWIFT_USER_META_PREFIX + SLO_ETAG_FIELD] = \
-                    swift_meta['etag']
-            resp = self.post_object(swift_key, meta)
+                    metadata['etag']
+            resp = self.post_object(key, meta)
             if not resp.success:
                 resp.reraise()
 

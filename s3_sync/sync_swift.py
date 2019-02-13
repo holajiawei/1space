@@ -139,19 +139,22 @@ class SyncSwift(BaseSync):
         headers.update(self.extra_headers)
         return headers
 
-    def post_object(self, swift_key, headers, container=None):
-        if not container:
-            container = self.remote_container
+    def post_object(self, key, headers, bucket=None):
+        if not bucket:
+            bucket = self.remote_container
         return self._call_swiftclient(
-            'post_object', container, swift_key, headers=headers)
+            'post_object', bucket, key, headers=headers)
 
     def head_account(self):
         return self._call_swiftclient('head_account', None, None)
 
-    def put_object(self, swift_key, headers, body_iter, query_string=None):
+    def put_object(self, key, headers, body, bucket=None, **options):
+        if not bucket:
+            bucket = self.remote_container
+
         return self._call_swiftclient(
-            'put_object', self.remote_container, swift_key, contents=body_iter,
-            headers=headers, query_string=query_string)
+            'put_object', bucket, key, contents=body, headers=headers,
+            **options)
 
     def upload_object(self, row, internal_client, upload_stats_cb=None):
         if self._per_account and not self.verified_container:
@@ -171,34 +174,32 @@ class SyncSwift(BaseSync):
             segment=False,
             stats_cb=upload_stats_cb)
 
-    def delete_object(self, swift_key):
+    def delete_object(self, key, bucket=None):
         """Delete an object from the remote cluster.
 
         This is slightly more complex than when we deal with S3/GCS, as the
         remote store may have SLO manifests, as well. Because of that, this
         turns into HEAD+DELETE.
         """
-        with self.client_pool.get_client() as swift_client:
-            try:
-                headers = swift_client.head_object(
-                    self.remote_container, swift_key,
-                    headers=self._client_headers())
-            except swiftclient.exceptions.ClientException as e:
-                if e.http_status == 404:
-                    return
-                raise
+        if not bucket:
+            bucket = self.remote_container
+        resp = self.head_object(key, bucket=bucket)
+        if not resp.success:
+            if resp.status == 404:
+                return resp
+            resp.reraise()
 
         delete_kwargs = {'headers': self._client_headers()}
-        if check_slo(headers):
+        if check_slo(resp.headers):
             delete_kwargs['query_string'] = 'multipart-manifest=delete'
         resp = self._call_swiftclient('delete_object',
-                                      self.remote_container, swift_key,
+                                      self.remote_container, key,
                                       **delete_kwargs)
         if not resp.success and resp.status != 404:
             resp.reraise()
         return resp
 
-    def shunt_object(self, req, swift_key):
+    def shunt_object(self, req, key):
         """Fetch an object from the remote cluster to stream back to a client.
 
         :returns: (status, headers, body_iter) tuple
@@ -212,60 +213,60 @@ class SyncSwift(BaseSync):
 
         if req.method == 'GET':
             resp = self.get_object(
-                swift_key, resp_chunk_size=65536, headers=headers)
+                key, resp_chunk_size=65536, headers=headers)
         elif req.method == 'HEAD':
-            resp = self.head_object(swift_key, headers=headers)
+            resp = self.head_object(key, headers=headers)
         else:
             raise ValueError('Expected GET or HEAD, not %s' %
                              req.method)
         return resp.to_wsgi()
 
-    def shunt_post(self, req, swift_key):
+    def shunt_post(self, req, key):
         """Propagate metadata to the remote store
 
          :returns: (status, headers, body_iter) tuple
         """
         headers = dict([(k, req.headers[k]) for k in req.headers.keys()
                         if req.headers[k]])
-        if swift_key:
+        if key:
             resp = self._call_swiftclient(
-                'post_object', self.remote_container, swift_key,
+                'post_object', self.remote_container, key,
                 headers=headers)
         else:
             resp = self._call_swiftclient(
                 'post_container', self.remote_container, None, headers=headers)
         return resp.to_wsgi()
 
-    def shunt_delete(self, req, swift_key):
+    def shunt_delete(self, req, key):
         """Propagate delete to the remote store
 
          :returns: (status, headers, body_iter) tuple
         """
         headers = dict([(k, req.headers[k]) for k in req.headers.keys()
                         if req.headers[k]])
-        if not swift_key:
+        if not key:
             resp = self._call_swiftclient(
                 'delete_container', self.remote_container, None,
                 headers=headers)
         else:
             resp = self._call_swiftclient(
-                'delete_object', self.remote_container, swift_key,
+                'delete_object', self.remote_container, key,
                 headers=headers)
         return resp.to_wsgi()
 
-    def head_object(self, swift_key, bucket=None, **options):
+    def head_object(self, key, bucket=None, **options):
         if bucket is None:
             bucket = self.remote_container
-        resp = self._call_swiftclient('head_object', bucket, swift_key,
+        resp = self._call_swiftclient('head_object', bucket, key,
                                       **options)
         resp.body = ['']
         return resp
 
-    def get_object(self, swift_key, bucket=None, **options):
+    def get_object(self, key, bucket=None, **options):
         if bucket is None:
             bucket = self.remote_container
         return self._call_swiftclient(
-            'get_object', bucket, swift_key, **options)
+            'get_object', bucket, key, **options)
 
     def head_bucket(self, bucket=None, **options):
         if bucket is None:
@@ -399,7 +400,7 @@ class SyncSwift(BaseSync):
                 if not self._is_meta_synced(metadata, remote_meta):
                     self.update_metadata(key, metadata,
                                          remote_metadata=remote_meta,
-                                         container=dst_container)
+                                         bucket=dst_container)
                     return self.UploadStatus.POST
                 return self.UploadStatus.NOOP
             return self._upload_slo(key, internal_client, req_hdrs,
@@ -415,7 +416,7 @@ class SyncSwift(BaseSync):
                 if not self._is_meta_synced(metadata, remote_meta):
                     self.update_metadata(key, metadata,
                                          remote_metadata=remote_meta,
-                                         container=dst_container)
+                                         bucket=dst_container)
                     return self.UploadStatus.POST
                 return self.UploadStatus.NOOP
             return self._upload_dlo(key, internal_client, metadata, req_hdrs,
@@ -425,7 +426,7 @@ class SyncSwift(BaseSync):
             if not self._is_meta_synced(metadata, remote_meta):
                 self.update_metadata(key, metadata,
                                      remote_metadata=remote_meta,
-                                     container=dst_container)
+                                     bucket=dst_container)
                 return self.UploadStatus.POST
             return self.UploadStatus.NOOP
 
@@ -479,8 +480,7 @@ class SyncSwift(BaseSync):
             entry['content_location'] = self._make_content_location(bucket)
         return resp
 
-    def update_metadata(self, swift_key, metadata, remote_metadata={},
-                        container=None):
+    def update_metadata(self, key, metadata, remote_metadata={}, bucket=None):
         user_headers = self._get_user_headers(metadata)
         dlo_manifest = metadata.get(MANIFEST_HEADER, '').decode('utf-8')
         if dlo_manifest:
@@ -489,11 +489,11 @@ class SyncSwift(BaseSync):
             dlo_etag_field = SWIFT_USER_META_PREFIX + DLO_ETAG_FIELD
             user_headers[dlo_etag_field] = remote_metadata.get(dlo_etag_field)
             if not self.convert_dlo:
-                segments_container, prefix = dlo_manifest.split('/', 1)
+                segments_bucket, prefix = dlo_manifest.split('/', 1)
                 user_headers[MANIFEST_HEADER] = '%s/%s' % (
-                    self.remote_segments_container(segments_container),
+                    self.remote_segments_container(segments_bucket),
                     prefix)
-        self.post_object(swift_key, user_headers, container)
+        self.post_object(key, user_headers, bucket)
 
     def _upload_objects(self, objects_list, internal_client, stats_cb):
         work_queue = eventlet.queue.Queue(self.SLO_QUEUE_SIZE)

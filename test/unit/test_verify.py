@@ -661,7 +661,7 @@ class TestMainTrackClientCalls(unittest.TestCase):
                 'some-bucket', 'cloud_sync_test_object',
                 contents='1space-test',
                 headers={'content-type': 'text/plain'},
-                response_dict=mock.ANY, query_string=None),
+                response_dict=mock.ANY),
             mock.call.post_object(
                 'some-bucket', 'cloud_sync_test_object', headers={
                     'content-type': 'text/plain',
@@ -707,8 +707,7 @@ class TestMainTrackClientCalls(unittest.TestCase):
                 'some-bucket', 'cloud_sync_test_object',
                 contents='1space-test',
                 headers={'content-type': 'text/plain'},
-                response_dict=mock.ANY,
-                query_string=None),
+                response_dict=mock.ANY),
             mock.call.post_object(
                 'some-bucket', 'cloud_sync_test_object', headers={
                     'content-type': 'text/plain',
