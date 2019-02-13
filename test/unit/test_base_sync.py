@@ -14,11 +14,18 @@ See the License for the specific language governing permissions and
 limitations under the License.
 """
 
+import hashlib
+import json
 import mock
+import StringIO
+import sys
+import time
+import unittest
+
 from s3_sync import base_sync
 from swift.common import swob
-import sys
-import unittest
+from swift.common.internal_client import UnexpectedResponse
+from swift.common.utils import decode_timestamps, Timestamp
 
 
 class TestMatchers(unittest.TestCase):
@@ -281,3 +288,145 @@ class TestBaseSync(unittest.TestCase):
                 "{'Content-Length': '88', 'Foo': 'bar'}",
                 ("A" * 70) + '...'),
             cm.exception.message)
+
+    @mock.patch('s3_sync.base_sync.BaseSync._get_client_factory')
+    def test_retain_copy(self, factory_mock):
+        factory_mock.return_value = mock.Mock()
+        base = base_sync.BaseSync(self.settings, max_conns=1)
+        swift_client = mock.Mock()
+        swift_client.get_object_metadata.return_value = {}
+
+        row = {'deleted': 0,
+               'created_at': str(time.time() - 5),
+               'name': 'foo',
+               'storage_policy_index': 99}
+
+        _, _, swift_ts = decode_timestamps(row['created_at'])
+        base.delete_local_object(swift_client, row, swift_ts, False)
+        swift_ts.offset += 1
+
+        swift_client.delete_object.assert_called_once_with(
+            self.settings['account'], self.settings['container'],
+            row['name'], acceptable_statuses=(2, 404, 409),
+            headers={'X-Timestamp': Timestamp(swift_ts).internal})
+
+    @mock.patch('s3_sync.base_sync.BaseSync._get_client_factory')
+    def test_retain_copy_slo(self, factory_mock):
+        factory_mock.return_value = mock.Mock()
+        base = base_sync.BaseSync(self.settings, max_conns=1)
+        swift_client = mock.Mock()
+        swift_client.get_object_metadata.return_value = {
+            'x-static-large-object': 'true'}
+
+        def _get_object(account, container, key, **kwargs):
+            manifest = [
+                {'name': '/container_segments/part1',
+                 'hash': 'deadbeef'},
+                {'name': '/container_segments/part2',
+                 'hash': 'deadbeef2'}]
+            body = json.dumps(manifest)
+            headers = {
+                'etag': hashlib.md5(body).hexdigest()}
+            return 200, headers, StringIO.StringIO(body)
+
+        swift_client.get_object.side_effect = _get_object
+        row = {'deleted': 0,
+               'created_at': str(time.time() - 5),
+               'name': 'foo',
+               'storage_policy_index': 99}
+
+        _, _, swift_ts = decode_timestamps(row['created_at'])
+        base.delete_local_object(swift_client, row, swift_ts, False)
+        swift_ts.offset += 1
+
+        swift_client.delete_object.assert_has_calls([
+            mock.call(self.settings['account'], 'container_segments', 'part1',
+                      acceptable_statuses=(2, 404, 409)),
+            mock.call(self.settings['account'], 'container_segments', 'part2',
+                      acceptable_statuses=(2, 404, 409)),
+            mock.call(self.settings['account'], self.settings['container'],
+                      row['name'], acceptable_statuses=(2, 404, 409),
+                      headers={'X-Timestamp': Timestamp(swift_ts).internal})])
+
+    @mock.patch('s3_sync.base_sync.BaseSync._get_client_factory')
+    def test_retain_copy_dlo(self, factory_mock):
+        factory_mock.return_value = mock.Mock()
+        base = base_sync.BaseSync(self.settings, max_conns=1)
+        swift_client = mock.NonCallableMock()
+        swift_client.get_object_metadata.return_value = {
+            'x-object-manifest': 'container_segments/segment_'}
+
+        swift_client.make_request.side_effect = (
+            mock.Mock(
+                body=json.dumps([
+                    {'name': 'segments_%d' % (i + 1),
+                     'hash': 'deadbeef'}
+                    for i in range(2)]),
+                status_int=200),
+            mock.Mock(body='[]', status_int=200))
+
+        row = {'deleted': 0,
+               'created_at': str(time.time() - 5),
+               'name': 'foo',
+               'storage_policy_index': 99}
+
+        _, _, swift_ts = decode_timestamps(row['created_at'])
+        base.delete_local_object(swift_client, row, swift_ts, False)
+        swift_ts.offset += 1
+
+        swift_client.delete_object.assert_has_calls([
+            mock.call(self.settings['account'], 'container_segments',
+                      'segments_1', acceptable_statuses=(2, 404, 409)),
+            mock.call(self.settings['account'], 'container_segments',
+                      'segments_2', acceptable_statuses=(2, 404, 409)),
+            mock.call(self.settings['account'], self.settings['container'],
+                      row['name'], acceptable_statuses=(2, 404, 409),
+                      headers={'X-Timestamp': Timestamp(swift_ts).internal})])
+
+    @mock.patch('s3_sync.base_sync.BaseSync._get_client_factory')
+    def test_fail_upload_segment(self, factory_mock):
+        factory_mock.return_value = mock.Mock()
+        base = base_sync.BaseSync(self.settings, max_conns=1)
+        base.logger = mock.Mock()
+        swift_client = mock.Mock()
+        swift_client.get_object_metadata.return_value = {
+            'x-static-large-object': 'true'}
+
+        def _get_object(account, container, key, **kwargs):
+            manifest = [
+                {'name': '/container_segments/part1',
+                 'hash': 'deadbeef'},
+                {'name': '/container_segments/part2',
+                 'hash': 'deadbeef2'}]
+            body = json.dumps(manifest)
+            headers = {
+                'etag': hashlib.md5(body).hexdigest()}
+            return 200, headers, StringIO.StringIO(body)
+
+        def _delete_object(acc, cont, obj, acceptable_statuses):
+            if obj == 'part1':
+                raise UnexpectedResponse('foo', None)
+
+        swift_client.get_object.side_effect = _get_object
+        swift_client.delete_object.side_effect = _delete_object
+
+        row = {'deleted': 0,
+               'created_at': str(time.time() - 5),
+               'name': 'foo',
+               'storage_policy_index': 99}
+
+        _, _, swift_ts = decode_timestamps(row['created_at'])
+        base.delete_local_object(swift_client, row, swift_ts, False)
+
+        # manifest should not be deleted
+        swift_client.delete_object.assert_has_calls([
+            mock.call(self.settings['account'], 'container_segments', 'part1',
+                      acceptable_statuses=(2, 404, 409)),
+            mock.call(self.settings['account'], 'container_segments', 'part2',
+                      acceptable_statuses=(2, 404, 409))])
+
+        base.logger.warning.assert_called_once_with(
+            'Failed to delete segment %s/%s/%s: %s', 'account',
+            'container_segments', 'part1', 'foo')
+        base.logger.error.assert_called_once_with(
+            'Failed to delete %s segments of %s/%s', 1, 'container', 'foo')

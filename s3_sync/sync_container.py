@@ -24,16 +24,13 @@ import md5
 import os
 import os.path
 import pystatsd.statsd
-from swift.common.utils import decode_timestamps, Timestamp
-from swift.common.internal_client import UnexpectedResponse
+from swift.common.utils import decode_timestamps
 import time
 import traceback
 import urllib
 
-from .base_sync import BaseSync
+from .base_sync import BaseSync, LOGGER_NAME
 from .provider_factory import create_provider
-
-from .base_sync import LOGGER_NAME
 
 
 def hash_dict(data):
@@ -60,6 +57,8 @@ class SyncContainer(container_crawler.base_sync.BaseSync):
         self.aws_bucket = sync_settings['aws_bucket']
         self.copy_after = int(sync_settings.get('copy_after', 0))
         self.retain_local = sync_settings.get('retain_local', True)
+        self.retain_local_segments = sync_settings.get('retain_local_segments',
+                                                       True)
         self.propagate_delete = sync_settings.get('propagate_delete', True)
         self._settings = sync_settings
         self.provider = create_provider(sync_settings, max_conns,
@@ -214,20 +213,8 @@ class SyncContainer(container_crawler.base_sync.BaseSync):
                 # NOOP means the object already exists
                 BaseSync.UploadStatus.NOOP]
             if not self.retain_local and status in uploaded_statuses:
-                # NOTE: We rely on the DELETE object X-Timestamp header to
-                # mitigate races where the object may be overwritten. We
-                # increment the offset to ensure that we never remove new
-                # customer data.
-                self.logger.debug("Creating a new TS: %f %f" % (
-                    meta_ts.offset, meta_ts.timestamp))
-                delete_ts = Timestamp(meta_ts, offset=meta_ts.offset + 1)
-                try:
-                    swift_client.delete_object(
-                        self._account, self._container, row['name'],
-                        headers={'X-Timestamp': delete_ts.internal})
-                except UnexpectedResponse as e:
-                    if '409 Conflict' in e.message:
-                        pass
+                self.provider.delete_local_object(
+                    swift_client, row, meta_ts, self.retain_local_segments)
 
 
 class SyncContainerFactory(object):

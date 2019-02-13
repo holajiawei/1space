@@ -22,11 +22,12 @@ import urllib
 
 from container_crawler.exceptions import RetryError
 from swift.common.internal_client import UnexpectedResponse
-from swift.common.utils import FileLikeIter, decode_timestamps
+from swift.common.utils import decode_timestamps
 from .base_sync import BaseSync, ProviderResponse, match_item
 from .utils import (ClosingResourceIterable, check_slo, DLO_ETAG_FIELD,
-                    FileWrapper, get_dlo_prefix, iter_internal_listing,
-                    MANIFEST_HEADER, SWIFT_USER_META_PREFIX)
+                    FileWrapper, get_dlo_prefix, get_internal_manifest,
+                    iter_internal_listing, MANIFEST_HEADER,
+                    SWIFT_USER_META_PREFIX)
 
 # We have to import keystone upfront to avoid green threads issue with the lazy
 # importer
@@ -520,8 +521,9 @@ class SyncSwift(BaseSync):
 
     def _upload_slo(self, key, internal_client, swift_req_headers,
                     stats_cb=None):
-        headers, manifest = self._get_internal_manifest(
-            key, internal_client, swift_req_headers)
+        headers, manifest = get_internal_manifest(
+            self.account, self.container, key, internal_client,
+            swift_req_headers)
         self.logger.debug("JSON manifest: %s" % str(manifest))
 
         errors, failures = self._upload_objects(
@@ -622,7 +624,7 @@ class SyncSwift(BaseSync):
 
         put_headers[dlo_etag_header] = dlo_etag
         if self.remote_delete_after:
-            put_headers({'x-delete-after': self.remote_delete_after})
+            put_headers['x-delete-after'] = self.remote_delete_after
 
         with self.client_pool.get_client() as swift_client:
             try:
@@ -651,16 +653,6 @@ class SyncSwift(BaseSync):
             except Exception as e:
                 self.logger.warning('Failed to fetch the manifest: %s' % e)
                 return None
-
-    def _get_internal_manifest(self, key, internal_client, swift_headers={}):
-        status, headers, body = internal_client.get_object(
-            self.account, self.container, key, headers=swift_headers)
-        if status != 200:
-            body.close()
-            raise RuntimeError('Failed to get the manifest')
-        manifest = json.load(FileLikeIter(body))
-        body.close()
-        return headers, manifest
 
     def _upload_segment_worker(self, work_queue, internal_client,
                                stats_cb=None):
@@ -702,19 +694,20 @@ class SyncSwift(BaseSync):
                     errors.append(work)
                 else:
                     self.logger.error('Failed to upload segment %s/%s/%s: %s' %
-                                      (self.account, container, obj,
-                                       traceback.format_exc()))
-            except:
+                                      (self.account, container, obj, e.msg))
+                    self.logger.debug('%s' % traceback.format_exc())
+            except Exception as e:
                 errors.append(work)
                 self.logger.error('Failed to upload segment %s/%s/%s: %s' % (
-                    self.account, container, obj, traceback.format_exc()))
+                    self.account, container, obj, str(e)))
+                self.logger.debug('%s' % traceback.format_exc())
             finally:
                 work_queue.task_done()
 
     def _check_slo_uploaded(self, key, remote_meta, internal_client,
                             swift_req_hdrs):
-        _, manifest = self._get_internal_manifest(
-            key, internal_client, swift_req_hdrs)
+        _, manifest = get_internal_manifest(
+            self.account, self.container, key, internal_client, swift_req_hdrs)
 
         expected_etag = '"%s"' % hashlib.md5(
             ''.join([segment['hash'] for segment in manifest])).hexdigest()

@@ -16,6 +16,7 @@ limitations under the License.
 
 import hashlib
 import json
+import swiftclient
 import time
 import unittest
 import utils
@@ -23,7 +24,6 @@ import utils
 from itertools import repeat
 from swiftclient.client import ClientException
 from s3_sync.provider_factory import create_provider
-
 from . import TestCloudSyncBase, clear_swift_container, \
     swift_content_location, s3_key_name, clear_s3_bucket
 
@@ -853,6 +853,166 @@ class TestCloudSync(TestCloudSyncBase):
         self.assertTrue(int(hdrs['x-delete-at']) >= early_seg_target_time)
         # NOTE: we only record the SLO as being uploaded, not the segments
         self._assert_stats(mapping, {'copied_objects': 1, 'bytes': 2048})
+
+    def test_s3_archive_slo_w_delete_segments(self):
+        s3_mapping = dict(self.s3_archive_mapping())
+        s3_mapping['retain_local_segments'] = False
+        crawler = utils.get_container_crawler(s3_mapping)
+        segments_container = 's3_slo_segments'
+        key = 'test_s3_slo_del_segments'
+        s3_key = s3_key_name(s3_mapping, key)
+
+        segments = [
+            'A' * (5 * 2 ** 20),
+            'B' * (5 * 2 ** 20),
+            'C' * 1024
+        ]
+        manifest = [{'size_bytes': len(segments[i]),
+                     'path': u'/%s/p\u00e1rt%d' % (segments_container, i)}
+                    for i in range(len(segments))]
+
+        self.local_swift('put_container', segments_container)
+        for i in range(len(segments)):
+            self.local_swift('put_object', segments_container,
+                             u'p\u00e1rt%d' % i, segments[i])
+        self.local_swift('put_object', s3_mapping['container'], key,
+                         json.dumps(manifest),
+                         query_string='multipart-manifest=put')
+        crawler.run_once()
+
+        # sanity, object should be synced to S3
+        head_resp = self.s3(
+            'head_object', Bucket=s3_mapping['aws_bucket'], Key=s3_key)
+        self.assertEqual(sum(map(len, segments)), head_resp['ContentLength'])
+        expected_etag = '"%s-%d"' % (
+            hashlib.md5(reduce(lambda x, y: x + hashlib.md5(y).digest(),
+                               segments, '')).hexdigest(), len(segments))
+        self.assertEqual(expected_etag, head_resp['ETag'])
+
+        # manifest and segments should have been deleted locally
+        conn_noshunt = self.conn_for_acct_noshunt(s3_mapping['account'])
+        with self.assertRaises(swiftclient.exceptions.ClientException) as ctx:
+            conn_noshunt.head_object(s3_mapping['container'], key)
+        self.assertEqual(404, ctx.exception.http_status)
+
+        for i in range(len(segments)):
+            with self.assertRaises(
+                    swiftclient.exceptions.ClientException) as ctx:
+                conn_noshunt.head_object(segments_container,
+                                         u'p\u00e1rt%d' % i)
+            self.assertEqual(404, ctx.exception.http_status)
+
+        self._assert_stats(
+            s3_mapping,
+            {'copied_objects': 1,
+             'bytes': sum([len(segment) for segment in segments])})
+        clear_s3_bucket(self.s3_client, s3_mapping['aws_bucket'])
+        clear_swift_container(self.swift_src, s3_mapping['container'])
+        clear_swift_container(self.swift_src, segments_container)
+
+    def test_swift_archive_slo_w_delete_segments(self):
+        content = 'A' * 2048
+        key = 'test_swift_slo_del_segments'
+        mapping = self._find_mapping(
+            lambda m: m['aws_bucket'] == 'bit-bucket')
+        mapping['retain_local_segments'] = False
+
+        crawler = utils.get_container_crawler(mapping)
+        manifest = [
+            {'size_bytes': 1024, 'path': '/segments/part1'},
+            {'size_bytes': 1024, 'path': '/segments/part2'}]
+
+        conn = self.conn_for_acct(mapping['account'])
+        conn.put_container('segments')
+        conn.put_object('segments', 'part1', content[:1024])
+        conn.put_object('segments', 'part2', content[1024:])
+        conn.put_object(mapping['container'], key,
+                        json.dumps(manifest),
+                        query_string='multipart-manifest=put')
+        self.remote_swift(
+            'put_container', '%s_segments' % mapping['aws_bucket'])
+
+        crawler.run_once()
+
+        # sanity, manifest + segments should be synced to remote
+        self.remote_swift('head_object', mapping['aws_bucket'], key)
+        seg_container = mapping['aws_bucket'] + '_segments'
+        self.remote_swift('head_object', seg_container, 'part1')
+        self.remote_swift('head_object', seg_container, 'part2')
+
+        # manifest and segments should have been deleted locally
+        conn_noshunt = self.conn_for_acct_noshunt(mapping['account'])
+        with self.assertRaises(swiftclient.exceptions.ClientException) as ctx:
+            conn_noshunt.head_object(mapping['container'], key)
+        self.assertEqual(404, ctx.exception.http_status)
+
+        with self.assertRaises(swiftclient.exceptions.ClientException) as ctx:
+            conn_noshunt.head_object('segments', 'part1')
+        self.assertEqual(404, ctx.exception.http_status)
+
+        with self.assertRaises(swiftclient.exceptions.ClientException) as ctx:
+            conn_noshunt.head_object('segments', 'part2')
+        self.assertEqual(404, ctx.exception.http_status)
+
+        # NOTE: we only record the SLO as being uploaded, not the segments
+        self._assert_stats(mapping, {'copied_objects': 1, 'bytes': 2048})
+        mapping['retain_local_segments'] = True
+        clear_swift_container(self.swift_src, mapping['container'])
+        clear_swift_container(self.swift_dst, mapping['aws_bucket'])
+        clear_swift_container(self.swift_src, 'segments')
+        clear_swift_container(self.swift_dst,
+                              '%s_segments' % mapping['aws_bucket'])
+
+    def test_swift_archive_dlo_w_delete_segments(self):
+        content = [chr(ord('A') + i) * 1024 for i in range(10)]
+        key = 'test_swift_dlo_del_segments'
+        mapping = self._find_mapping(
+            lambda m: m['aws_bucket'] == 'bit-bucket')
+        mapping['retain_local_segments'] = False
+        crawler = utils.get_container_crawler(mapping)
+        manifest = 'segments/test-dlo-parts-'
+        self.local_swift('put_container', 'segments')
+        for i in range(len(content)):
+            self.local_swift(
+                'put_object', 'segments', 'test-dlo-parts-%d' % i, content[i])
+        self.local_swift(
+            'put_object', mapping['container'], key, '',
+            headers={'x-object-manifest': manifest})
+        self.remote_swift('put_container',
+                          '%s_segments' % mapping['aws_bucket'])
+
+        crawler.run_once()
+
+        headers, body = self.remote_swift(
+            'get_object', mapping['aws_bucket'], key)
+        self.assertEqual(''.join(content), body)
+        dlo_etag = hashlib.md5(''.join(
+            [hashlib.md5(content[i]).hexdigest() for i in range(len(content))]
+        )).hexdigest()
+        self.assertEqual('"%s"' % dlo_etag, headers['etag'])
+        self.assertEqual(dlo_etag,
+                         headers.get('x-object-meta-swift-source-dlo-etag'))
+
+        self._assert_stats(mapping, {'copied_objects': 1, 'bytes': 10240})
+
+        # manifest and segments should have been deleted locally
+        conn_noshunt = self.conn_for_acct_noshunt(mapping['account'])
+        with self.assertRaises(swiftclient.exceptions.ClientException) as ctx:
+            conn_noshunt.head_object(mapping['container'], key)
+        self.assertEqual(404, ctx.exception.http_status)
+
+        for i in range(len(content)):
+            with self.assertRaises(
+                    swiftclient.exceptions.ClientException) as ctx:
+                conn_noshunt.head_object('segments', 'test-dlo-parts-%d' % i)
+            self.assertEqual(404, ctx.exception.http_status)
+
+        mapping['retain_local_segments'] = True
+        clear_swift_container(self.swift_src, mapping['container'])
+        clear_swift_container(self.swift_dst, mapping['aws_bucket'])
+        clear_swift_container(self.swift_src, 'segments')
+        clear_swift_container(self.swift_dst,
+                              '%s_segments' % mapping['aws_bucket'])
 
     def test_swift_archive_slo_restore(self):
         content = 'A' * 2048

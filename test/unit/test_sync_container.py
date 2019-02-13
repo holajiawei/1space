@@ -24,7 +24,7 @@ from s3_sync.sync_container import (SyncContainer, SyncContainerFactory,
                                     hash_dict)
 from s3_sync.sync_s3 import SyncS3
 from s3_sync.sync_swift import SyncSwift
-from swift.common.utils import decode_timestamps, Timestamp
+from swift.common.utils import decode_timestamps
 
 
 class TestSyncContainer(unittest.TestCase):
@@ -466,6 +466,7 @@ class TestSyncContainer(unittest.TestCase):
         sync.provider = mock.Mock()
         sync.provider.upload_object.return_value = SyncS3.UploadStatus.PUT
         swift_client = mock.Mock()
+        swift_client.get_object_metadata.return_value = {}
         row = {'deleted': 0,
                'created_at': str(time.time() - 5),
                'name': 'foo',
@@ -473,13 +474,11 @@ class TestSyncContainer(unittest.TestCase):
         sync.handle(row, swift_client)
 
         _, _, swift_ts = decode_timestamps(row['created_at'])
-        swift_ts.offset += 1
 
         sync.provider.upload_object.assert_called_once_with(
             row, swift_client, mock.ANY)
-        swift_client.delete_object.assert_called_once_with(
-            settings['account'], settings['container'], row['name'],
-            headers={'X-Timestamp': Timestamp(swift_ts).internal})
+        sync.provider.delete_local_object.assert_called_once_with(
+            swift_client, row, swift_ts, True)
 
     @mock.patch('s3_sync.sync_s3.boto3.session.Session')
     def test_no_propagate_delete(self, session_mock):

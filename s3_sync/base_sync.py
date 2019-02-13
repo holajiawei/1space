@@ -18,6 +18,9 @@ import logging
 from s3_sync.utils import filter_hop_by_hop_headers
 
 from swift.common import swob
+from swift.common.utils import Timestamp
+from .utils import (get_dlo_prefix, check_slo, get_internal_manifest,
+                    iter_internal_listing)
 
 LOGGER_NAME = 's3-sync'
 
@@ -343,3 +346,122 @@ class BaseSync(object):
         return u'%s/%s/%s' % (self.account, self.container,
                               key if isinstance(key, unicode)
                               else key.decode('utf-8'))
+
+    def _delete_objects(self, objects_list, swift_client):
+        '''
+        Initialize a task queue to delete objects in parallel
+        '''
+        work_queue = eventlet.queue.Queue(self.SLO_QUEUE_SIZE)
+        worker_pool = eventlet.greenpool.GreenPool(self.SLO_WORKERS)
+        workers = []
+        for _ in range(self.SLO_WORKERS):
+            workers.append(
+                worker_pool.spawn(
+                    self._delete_object_worker, work_queue, swift_client))
+
+        # key must be a tuple (container, object)
+        for key in objects_list:
+            work_queue.put(key)
+        work_queue.join()
+        for _ in range(self.SLO_WORKERS):
+            work_queue.put(None)
+        errors = []
+        for thread in workers:
+            worker_errors = thread.wait()
+            errors.extend(worker_errors)
+        return errors
+
+    def _delete_object_worker(self, work_queue, swift_client):
+        failed_segs = []
+        while True:
+            work = work_queue.get()
+            if not work:
+                work_queue.task_done()
+                return failed_segs
+
+            container, obj = work
+            try:
+                swift_client.delete_object(self.account, container, obj,
+                                           acceptable_statuses=(2, 404, 409))
+            except Exception as e:
+                failed_segs.append(work)
+                self.logger.warning('Failed to delete segment %s/%s/%s: %s',
+                                    self.account, container, obj, str(e))
+            finally:
+                work_queue.task_done()
+
+    def _delete_dlo_segments(self, swift_client, obj, dlo_prefix):
+        s_container, s_prefix = dlo_prefix.split('/', 1)
+        s_prefix = s_prefix.rstrip('/')
+
+        def _keys_generator():
+            internal_iterator = iter_internal_listing(
+                swift_client, self.account, container=s_container,
+                prefix=s_prefix)
+            for entry in internal_iterator:
+                if not entry:
+                    return
+                yield (s_container, entry['name'])
+
+        failed_segs = self._delete_objects(_keys_generator(), swift_client)
+
+        return failed_segs
+
+    def _delete_slo_segments(self, swift_client, obj):
+        _, manifest = get_internal_manifest(
+            self.account, self.container, obj, swift_client, {})
+        self.logger.debug("JSON manifest: %s", str(manifest))
+        failed_segs = self._delete_objects(
+            (segment['name'].split('/', 2)[1:] for segment in manifest),
+            swift_client)
+
+        return failed_segs
+
+    def _delete_object_segments(self, swift_client, obj):
+        metadata = swift_client.get_object_metadata(
+            self.account, self.container, obj,
+            acceptable_statuses=(2, 404))
+
+        dlo_prefix = get_dlo_prefix(metadata)
+        if dlo_prefix:
+            return self._delete_dlo_segments(swift_client, obj, dlo_prefix)
+        elif check_slo(metadata):
+            return self._delete_slo_segments(swift_client, obj)
+        else:
+            # not a large object, do nothing
+            return None
+
+    def delete_local_object(self, swift_client, row, meta_ts,
+                            retain_local_segments):
+        '''
+        On archive policy, the local objects are deleted after being
+        succesfuly uploaded to remote cluster.
+
+        NOTE: We rely on the DELETE object X-Timestamp header to
+        mitigate races where the object may be overwritten. We
+        increment the offset to ensure that we never remove new
+        customer data.
+        '''
+
+        # Delete large object segments before deleting manifest
+        failed_segs = []
+        if not retain_local_segments:
+            failed_segs = self._delete_object_segments(swift_client,
+                                                       row['name'])
+
+        if failed_segs:
+            # if failed to delete all segments, don't delete manifest
+            # sync will attempt to delete again on a later iteration
+            self.logger.error("Failed to delete %s segments of %s/%s",
+                              len(failed_segs), self.container, row['name'])
+        else:
+            self.logger.debug(
+                "Creating a new TS before deleting %s/%s: %f %f" % (
+                    self.container.decode('utf-8'),
+                    row['name'].decode('utf-8'),
+                    meta_ts.offset, meta_ts.timestamp))
+            delete_ts = Timestamp(meta_ts, offset=meta_ts.offset + 1)
+            headers = {'X-Timestamp': delete_ts.internal}
+            swift_client.delete_object(
+                self.account, self.container, row['name'],
+                acceptable_statuses=(2, 404, 409), headers=headers)

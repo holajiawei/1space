@@ -1139,6 +1139,23 @@ def get_dlo_prefix(swift_meta):
     return swift_meta[MANIFEST_HEADER]
 
 
+def get_internal_manifest(acc, cont, obj, internal_client, swift_headers={}):
+    """
+    Return SLO manifest. multipart-manifest=get is not used here because slo
+    middleware is not in internal_client pipeline. Only use with a real
+    internal_client object, do not use for getting slo manifests in remote
+    clusters.
+    """
+    status, headers, body = internal_client.get_object(
+        acc, cont, obj, headers=swift_headers)
+    if status != 200:
+        body.close()
+        raise RuntimeError('Failed to get the manifest')
+    manifest = json.load(FileLikeIter(body))
+    body.close()
+    return headers, manifest
+
+
 def response_is_complete(status_code, headers):
     if status_code == 200:
         return True
