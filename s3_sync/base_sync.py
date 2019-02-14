@@ -289,14 +289,14 @@ class BaseSync(object):
         Uploads a single object to the provider's object store, as configured
         (container name, object name namespacing/prefixing, etc.).
 
-        :key: object key.
+        :param key: object key.
         :param headers: request headers; assumed to be in Swift parlance,
-        and converted to S3-style headers if necessary.
+         and converted to S3-style headers if necessary.
         :param body: a string or unicode instance, a file-like object (like a
-        wsgi.input stream wrapped by an InputProxy instance), or an iterable.
+         wsgi.input stream wrapped by an InputProxy instance), or an iterable.
         :param bucket: Bucket/container for the PUT call, if overriding the
-        current default.
-        :param **options: See individual providers for additional options.
+         current default.
+        :param \**options: See individual providers for additional options.
         :returns: an instance of ProviderResponse.
         """
         raise NotImplementedError()

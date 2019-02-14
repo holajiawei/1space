@@ -104,6 +104,9 @@ Sync Profile
     A value of 0 (zero) means don't apply. (*Optional*. Default: 0)
   - **retain_local**: If False, local object will be deleted after sync is
     completed (*Optional*. Default: ``True``).
+  - **retain_local_segments**: If False, local large object segments will be deleted
+    after sync is completed. *retain_local* must also be set to ``False`` for
+    segments to be deleted. (*Optional*. Default: ``False``)
   - **sync_container_acl**: Preserve the container ACL (Read/Write). This
     option applies only for Swift remote clusters, **sync_container_metadata**
     must also be set to True (*Optional*. Default: ``False``).
