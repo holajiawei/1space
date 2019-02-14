@@ -45,6 +45,7 @@ all profiles:
                "protocol": "swift",
                "convert_dlo": false,
                "copy_after": 0,
+               "exclude_pattern": "",
                "propagate_delete": false,
                "propagate_expiration": false,
                "remote_delete_after": 15552000,
@@ -79,6 +80,11 @@ Sync Profile
     migrated (*Optional*. Default: ``False``).
   - **copy_after**: Time in seconds to delay object sync (*Optional*.
     Default: 0).
+  - **exclude_pattern**: Regular expression to be applied to object names to
+    skip them instead of copying to the remote cluster. This is useful if you
+    need to ignore segments for the large objects when they are in the same
+    container as the manifest, for example. Python regular expression format is
+    required (*Optional*, Default: '').
   - **propagate_delete**: If False, local DELETE requests won't be propagated
     to remote container (*Optional*. Default: ``True``).
   - **propagate_expiration**: If True, expiration headers will propagate when

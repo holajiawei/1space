@@ -16,6 +16,9 @@ limitations under the License.
 
 import json
 import mock
+import os
+import shutil
+import tempfile
 import time
 import unittest
 
@@ -437,7 +440,9 @@ class TestSyncContainer(unittest.TestCase):
             'copy_after': 3600}
         with self.assertRaises(RetryError):
             sync = SyncContainer(self.scratch_space, settings)
-            sync.handle({'deleted': 0, 'created_at': str(time.time())}, None)
+            sync.handle({'deleted': 0,
+                         'created_at': str(time.time()),
+                         'name': 'foo'}, None)
 
         current = time.time()
         with mock.patch('s3_sync.sync_container.time') as time_mock:
@@ -529,26 +534,130 @@ class TestSyncContainer(unittest.TestCase):
 
     @mock.patch('__builtin__.open')
     @mock.patch('s3_sync.sync_container.os.path.exists')
-    @mock.patch('s3_sync.sync_s3.boto3.session.Session')
-    def test_handle_container_metadata(
-            self, session_mock, mock_exists, mock_open):
+    @mock.patch('s3_sync.sync_swift.swiftclient.client.Connection')
+    def test_handle_container_new_metadata(
+            self, mock_swift, mock_exists, mock_open):
         mock_exists.return_value = True
-        db_entries = {'db-id-1': {'aws_bucket': 'bucket', 'last_row': 5},
-                      'db-id-2': {'aws_bucket': 'old-bucket', 'last_row': 7}}
+        db_entries = {'db-id-1': {'aws_bucket': 'bucket', 'last_row': 5}}
         fake_conf_file = self.MockMetaConf(db_entries)
         mock_open.return_value = fake_conf_file
         settings = {
             'aws_bucket': self.aws_bucket,
             'aws_identity': 'identity',
             'aws_secret': 'credential',
+            'aws_endpoint': 'http://example.com',
             'account': 'account',
             'sync_container_metadata': True,
             'container': 'container',
-            'propagate_delete': True}
+            'protocol': 'swift'}
+        metadata = {
+            'X-Container-Meta-Foo': ('foo', '1545179217.201453'),
+            'Some-Other-Key': ('val', '1545179217.201453'),
+            'X-Versions-Locations': ('versions', '1545179217.201453'),
+            'X-Container-Meta-Bar': ('bar', '1545179217.201453'),
+        }
+
+        mock_swift.return_value.post_container.return_value = {}
 
         sync = SyncContainer(self.scratch_space, settings)
-        sync.provider = mock.Mock()
-        sync.provider.select_container_metadata.return_value = {}
+        sync.handle_container_metadata(metadata, 'db-id-1')
+
+        mock_swift.assert_called_once_with(
+            authurl='http://example.com', key='credential', user='identity',
+            os_options={}, retries=3)
+        self.assertEqual([mock.call.post_container(
+                          self.aws_bucket,
+                          headers={'X-Container-Meta-Foo': 'foo',
+                                   'X-Container-Meta-Bar': 'bar'})],
+                         mock_swift.return_value.mock_calls)
+
+    @mock.patch('__builtin__.open')
+    @mock.patch('s3_sync.sync_container.os.path.exists')
+    @mock.patch('s3_sync.sync_swift.swiftclient.client.Connection')
+    def test_handle_container_update_metadata(
+            self, mock_swift, mock_exists, mock_open):
+        mock_exists.return_value = True
+        old_hash = hash_dict({'X-Container-Meta': 'foo'})
+        db_entries = {'db-id-1': {'aws_bucket': 'bucket',
+                                  'last_row': 5,
+                                  SyncContainer.METADATA_HASH_KEY: old_hash}}
+        fake_conf_file = self.MockMetaConf(db_entries)
+        mock_open.return_value = fake_conf_file
+
+        settings = {
+            'aws_bucket': self.aws_bucket,
+            'aws_identity': 'identity',
+            'aws_secret': 'credential',
+            'aws_endpoint': 'http://example.com',
+            'account': 'account',
+            'sync_container_metadata': True,
+            'container': 'container',
+            'protocol': 'swift'}
+
+        sync = SyncContainer(self.scratch_space, settings)
+        metadata = {'X-Container-Meta-Foo': ('foo', '1545160000.1234'),
+                    'X-Container-Meta-Bar': ('bar', '1546123456.7896'),
+                    'Some-Other-Key': ('val', '1545179217.201453'),
+                    'X-Versions-Locations': ('versions', '1545179217.201453')}
+        mock_swift.return_value.post_container.return_value = {}
+
+        sync.handle_container_metadata(metadata, 'db-id-1')
+        mock_swift.assert_called_once_with(
+            authurl='http://example.com', key='credential', user='identity',
+            os_options={}, retries=3)
+        self.assertEqual([mock.call.post_container(
+                          self.aws_bucket,
+                          headers={'X-Container-Meta-Foo': 'foo',
+                                   'X-Container-Meta-Bar': 'bar'})],
+                         mock_swift.return_value.mock_calls)
+
+    @mock.patch('__builtin__.open')
+    @mock.patch('s3_sync.sync_container.os.path.exists')
+    @mock.patch('s3_sync.sync_swift.swiftclient.client.Connection')
+    def test_handle_container_same_metadata(
+            self, mock_swift, mock_exists, mock_open):
+        mock_exists.return_value = True
+        metadata = {'X-Container-Meta-Foo': ('foo', '1545160000.1234'),
+                    'X-Container-Meta-Bar': ('bar', '1546123456.7896'),
+                    'Some-Other-Key': ('val', '1545179217.201453'),
+                    'X-Versions-Locations': ('versions', '1545179217.201453')}
+        meta_hash = hash_dict({'X-Container-Meta-Foo': 'foo',
+                               'X-Container-Meta-Bar': 'bar'})
+        db_entries = {'db-id-1': {'aws_bucket': 'bucket',
+                                  'last_row': 5,
+                                  SyncContainer.METADATA_HASH_KEY: meta_hash}}
+        fake_conf_file = self.MockMetaConf(db_entries)
+        mock_open.return_value = fake_conf_file
+
+        settings = {
+            'aws_bucket': self.aws_bucket,
+            'aws_identity': 'identity',
+            'aws_endpoint': 'http://example.com',
+            'aws_secret': 'credential',
+            'account': 'account',
+            'sync_container_metadata': True,
+            'container': 'container',
+            'protocol': 'swift'}
+
+        sync = SyncContainer(self.scratch_space, settings)
+
+        sync.handle_container_metadata(metadata, 'db-id-1')
+        # Connections are lazy-initialized
+        mock_swift.assert_not_called()
+
+    @mock.patch('s3_sync.sync_swift.swiftclient.client.Connection')
+    def test_handle_container_metadata_errors(self, mock_swift):
+        db_entries = {'db-id-1': {'aws_bucket': 'bucket', 'last_row': 5}}
+        settings = {
+            'aws_bucket': self.aws_bucket,
+            'aws_identity': 'identity',
+            'aws_secret': 'credential',
+            'aws_endpoint': 'http://example.com',
+            'account': 'account',
+            'sync_container_metadata': True,
+            'container': 'container',
+            'protocol': 'swift'}
+
         metadata = {
             'X-Container-Meta-Foo': ('foo', '1545179217.201453'),
             'X-Delete-At': ('1645179217', '1545179217.201453'),
@@ -556,26 +665,45 @@ class TestSyncContainer(unittest.TestCase):
             'X-Versions-Locations': ('versions', '1545179217.201453'),
             'X-Container-Meta-Bar': ('bar', '1545179217.201453'),
         }
-        sync.handle_container_metadata(metadata, 'db-id-1')
-        sync.handle_container_metadata(metadata, 'db-id-1')
 
-        # Make sure that we do not make any additional calls
-        self.assertEqual([mock.call.select_container_metadata(metadata),
-                          mock.call.post_container({}),
-                          mock.call.select_container_metadata(metadata)],
-                         sync.provider.mock_calls)
-        sync.provider.reset_mock()
-        new_metadata = {
-            'X-Container-Meta-Foo': 'foo',
-            'X-Container-Meta-Bar': 'bar'
-        }
-        sync.provider.select_container_metadata.return_value = new_metadata
-        sync.handle_container_metadata(metadata, 'db-id-1')
-        sync.handle_container_metadata(metadata, 'db-id-1')
-        self.assertEqual([mock.call.select_container_metadata(metadata),
-                          mock.call.post_container(new_metadata),
-                          mock.call.select_container_metadata(metadata)],
-                         sync.provider.mock_calls)
+        tmpdir = tempfile.mkdtemp()
+        try:
+            os.makedirs(os.path.join(tmpdir, 'account'))
+            with open(os.path.join(
+                    tmpdir, 'account', 'container'), 'w') as fh:
+                fh.write(json.dumps(db_entries))
+
+            sync = SyncContainer(tmpdir, settings)
+            sync.logger = mock.Mock()
+            mock_swift.return_value.post_container.side_effect = RuntimeError(
+                'failed to post container')
+            sync.handle_container_metadata(metadata, 'db-id-1')
+            sync.logger.error.assert_called_once_with(mock.ANY)
+            sync.logger.debug.assert_called_once_with(mock.ANY)
+        finally:
+            shutil.rmtree(tmpdir)
+
+    def test_skips_matching_exclude_rows(self):
+        settings = {
+            'aws_bucket': self.aws_bucket,
+            'aws_identity': 'identity',
+            'aws_secret': 'credential',
+            'account': 'account',
+            'container': 'container',
+            'exclude_pattern': '^foo-\d+$'}
+        sync = SyncContainer(self.scratch_space, settings)
+        sync.provider = mock.Mock()
+        sync.handle({'name': 'foo-1'}, mock.Mock())
+        sync.handle({'name': 'foo-12345', 'deleted': 1}, mock.Mock())
+        sync.handle({'name': 'foo-1-bar',
+                     'deleted': 0,
+                     'created_at': '123456789.1234'}, mock.Mock())
+        self.assertEqual(
+            [mock.call.upload_object(
+                {'name': 'foo-1-bar',
+                 'deleted': 0,
+                 'created_at': '123456789.1234'}, mock.ANY, mock.ANY)],
+            sync.provider.mock_calls)
 
 
 class TestSyncContainerFactory(unittest.TestCase):

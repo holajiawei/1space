@@ -24,6 +24,7 @@ import md5
 import os
 import os.path
 import pystatsd.statsd
+import re
 from swift.common.utils import decode_timestamps
 import time
 import traceback
@@ -60,6 +61,15 @@ class SyncContainer(container_crawler.base_sync.BaseSync):
         self.retain_local_segments = sync_settings.get('retain_local_segments',
                                                        False)
         self.propagate_delete = sync_settings.get('propagate_delete', True)
+        # exclude_objects option allows operators to specify a regular
+        # expression to be used to skip objects. This is useful in the case of
+        # segments being present alongside the large objects (so as to make
+        # sure we do not upload the segments *and* large objects or even remove
+        # segments before copying the manifest.
+        self.exclude_regex = re.compile(
+            # This ensures the expression is valid at the same time
+            sync_settings.get('exclude_pattern', '^$'))
+
         self._settings = sync_settings
         self.provider = create_provider(sync_settings, max_conns,
                                         per_account=self._per_account)
@@ -191,6 +201,11 @@ class SyncContainer(container_crawler.base_sync.BaseSync):
                 ''.join(traceback.format_tb(post_resp.exc_info[2])))
 
     def handle(self, row, swift_client):
+        if self.exclude_regex.match(row['name']) is not None:
+            self.logger.debug('Skipping excluded object: %s/%s' % (
+                self._container, row['name'].decode('utf-8')))
+            return
+
         if row['deleted']:
             if self.propagate_delete:
                 self.provider.delete_object(row['name'])

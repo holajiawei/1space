@@ -360,6 +360,8 @@ class TestCloudSync(TestCloudSyncBase):
                                         obj)
         self.assertIn('x-delete-at', remote_hdrs.keys())
         self.assertEqual(expected_exp, remote_hdrs['x-delete-at'])
+        clear_swift_container(self.swift_src, mapping['container'])
+        clear_swift_container(self.swift_dst, mapping['aws_bucket'])
 
     def test_keystone_sync_v3(self):
         mapping = self._find_mapping(
@@ -468,8 +470,8 @@ class TestCloudSync(TestCloudSyncBase):
         self._assert_stats(mapping, {'copied_objects': 1, 'bytes': 1024})
 
     def test_swift_sync_container_metadata(self):
-        mapping = self._find_mapping(
-            lambda m: m.get('sync_container_metadata'))
+        mapping = dict(self._find_mapping(
+            lambda m: m.get('sync_container_metadata')))
         mapping['sync_container_acl'] = True
         crawler = utils.get_container_crawler(mapping)
         conn = self.conn_for_acct(mapping['account'])
@@ -1196,6 +1198,49 @@ class TestCloudSync(TestCloudSyncBase):
             hdrs = self.remote_swift('head_object', cont, obj)
             self.assertEqual(
                 old_headers[(cont, obj)]['x-timestamp'], hdrs['x-timestamp'])
+        clear_swift_container(self.swift_src, mapping['container'])
+        clear_swift_container(self.swift_dst, mapping['aws_bucket'])
+
+    def test_swift_slo_same_container_segments(self):
+        segment_regex = '\w+/\d+.\d+/\d+$'
+        content = 'A' * 1024 + 'B' * 1024
+        key = 'test_slo'
+        mapping = dict(self.swift_sync_mapping())
+        mapping['exclude_pattern'] = segment_regex
+        crawler = utils.get_container_crawler(mapping, log_level='debug')
+        manifest = [
+            {'size_bytes': 1024, 'path': '/%s/%s/123456.67/00001' %
+                (mapping['container'], key)},
+            {'size_bytes': 1024, 'path': '/%s/%s/123456.789/00002' %
+                (mapping['container'], key)}]
+        self.local_swift('put_object', mapping['container'],
+                         manifest[0]['path'].split('/', 2)[2],
+                         content[:1024])
+        self.local_swift('put_object', mapping['container'],
+                         manifest[1]['path'].split('/', 2)[2],
+                         content[1024:])
+        self.local_swift('put_object', mapping['container'], key,
+                         json.dumps(manifest),
+                         query_string='multipart-manifest=put')
+        self.remote_swift('put_container',
+                          '%s_segments' % mapping['aws_bucket'])
+
+        crawler.run_once()
+        headers, body = self.remote_swift(
+            'get_object', mapping['aws_bucket'], key)
+        self.assertEqual(body, content)
+        self.assertEqual(
+            '"%s"' % hashlib.md5('%s%s' % (
+                hashlib.md5(content[:1024]).hexdigest(),
+                hashlib.md5(content[1024:]).hexdigest())).hexdigest(),
+            headers['etag'])
+
+        _, listing = self.remote_swift('get_container', mapping['aws_bucket'])
+        self.assertEqual(1, len(listing))
+
+        # NOTE: we only record the SLO as being uploaded, not the segments. The
+        # segments should be ignored in this case.
+        self._assert_stats(mapping, {'copied_objects': 1, 'bytes': 2048})
         clear_swift_container(self.swift_src, mapping['container'])
         clear_swift_container(self.swift_dst, mapping['aws_bucket'])
 
