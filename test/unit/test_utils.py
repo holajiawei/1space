@@ -670,6 +670,13 @@ class TestSLOFileWrapper(unittest.TestCase):
             mock.call('account', 'foo', 'part2', {}))
         self.assertEqual(True, part1_content.closed)
         self.assertEqual(True, part2_content.closed)
+        total_etag, segments_etags = slo.etag()
+        content = ['A' * 500, 'B' * 1000]
+        self.assertEqual(
+            total_etag, hashlib.md5(''.join(content)).hexdigest())
+        self.assertEqual(
+            [hashlib.md5(part).hexdigest() for part in content],
+            segments_etags)
 
     @mock.patch.object(utils, 'DEFAULT_CHUNK_SIZE', 10)
     def test_iter_manifest(self):

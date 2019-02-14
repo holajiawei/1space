@@ -24,6 +24,9 @@ import utils
 from itertools import repeat
 from swiftclient.client import ClientException
 from s3_sync.provider_factory import create_provider
+from s3_sync.utils import DLO_ETAG_FIELD, SWIFT_USER_META_PREFIX,\
+    SLO_ETAG_FIELD
+
 from . import TestCloudSyncBase, clear_swift_container, \
     swift_content_location, s3_key_name, clear_s3_bucket
 
@@ -669,6 +672,7 @@ class TestCloudSync(TestCloudSyncBase):
              'bytes': sum([len(segment) for segment in segments])})
         clear_s3_bucket(self.s3_client, s3_mapping['aws_bucket'])
         clear_swift_container(self.swift_src, s3_mapping['container'])
+        clear_swift_container(self.swift_src, segments_container)
 
     def test_s3_archive_slo_restore(self):
         # Satisfy the 5MB minimum MPU part size
@@ -1099,8 +1103,115 @@ class TestCloudSync(TestCloudSyncBase):
             clear_swift_container(conn, container)
             clear_swift_container(conn, container + '_segments')
 
+    def test_swift_slo_sync_resize_segments(self):
+        content = 'A' * 1024 + 'B' * 1024 + 'C' * 512
+        key = 'test_slo'
+        mapping = dict(self.swift_sync_mapping())
+        mapping['min_segment_size'] = 2000
+        mapping['convert_dlo'] = True
+        crawler = utils.get_container_crawler(mapping)
+        manifest = [
+            {'size_bytes': 1024, 'path': '/segments/part1'},
+            {'size_bytes': 1024, 'path': '/segments/part2'},
+            {'size_bytes': 512, 'path': '/segments/part3'}]
+        self.local_swift('put_container', 'segments')
+        self.local_swift('put_object', 'segments', 'part1', content[:1024])
+        self.local_swift('put_object', 'segments', 'part2', content[1024:2048])
+        self.local_swift('put_object', 'segments', 'part3', content[2048:])
+        self.local_swift('put_object', mapping['container'], key,
+                         json.dumps(manifest),
+                         query_string='multipart-manifest=put')
+        self.remote_swift('put_container',
+                          '%s_segments' % mapping['aws_bucket'])
+
+        crawler.run_once()
+
+        headers, body = self.remote_swift(
+            'get_object', mapping['aws_bucket'], key)
+        self.assertEqual(len(content), int(headers['content-length']))
+        self.assertEqual(body, content)
+        self.assertEqual(
+            '"%s"' % hashlib.md5('%s%s' % (
+                hashlib.md5(content[:2048]).hexdigest(),
+                hashlib.md5(content[2048:]).hexdigest())).hexdigest(),
+            headers['etag'])
+        local_headers = self.local_swift(
+            'head_object', mapping['container'], key,
+            query_string='multipart-manifest=get')
+        self.assertEqual(
+            headers[SWIFT_USER_META_PREFIX + SLO_ETAG_FIELD],
+            local_headers['etag'])
+        # NOTE: we only record the SLO as being uploaded, not the segments
+        self._assert_stats(mapping, {'copied_objects': 1, 'bytes': 2560})
+
+        # Reupload should not result in any uploads
+        crawler = utils.get_container_crawler(mapping)
+        crawler.run_once()
+
+        self._assert_stats(mapping, {'copied_objects': 0})
+
+        clear_swift_container(self.swift_src, mapping['container'])
+        clear_swift_container(self.swift_dst, mapping['aws_bucket'])
+        clear_swift_container(self.swift_src, 'segments')
+        clear_swift_container(
+            self.swift_dst, '%s_segments' % mapping['aws_bucket'])
+
+    def test_swift_slo_sync_resize_segments_new_meta(self):
+        content = 'A' * 1024 + 'B' * 1024 + 'C' * 512
+        key = u'test_sl\xef'
+        mapping = dict(self.swift_sync_mapping())
+        mapping['min_segment_size'] = 2000
+        mapping['convert_dlo'] = True
+        crawler = utils.get_container_crawler(mapping)
+        manifest = [
+            {'size_bytes': 1024, 'path': u'/segments/p\xe2rt1'},
+            {'size_bytes': 1024, 'path': u'/segments/p\xe2rt2'},
+            {'size_bytes': 512, 'path': u'/segments/p\xe2rt3'}]
+        self.local_swift('put_container', 'segments')
+        self.local_swift('put_object', 'segments', u'p\xe2rt1', content[:1024])
+        self.local_swift(
+            'put_object', 'segments', u'p\xe2rt2', content[1024:2048])
+        self.local_swift('put_object', 'segments', u'p\xe2rt3', content[2048:])
+        self.local_swift('put_object', mapping['container'], key,
+                         json.dumps(manifest),
+                         query_string='multipart-manifest=put')
+        self.remote_swift('put_container',
+                          '%s_segments' % mapping['aws_bucket'])
+
+        crawler.run_once()
+        remote_headers = self.remote_swift(
+            'head_object', mapping['aws_bucket'], key,
+            query_string='multipart-manifest=get')
+        local_headers = self.local_swift(
+            'head_object', mapping['container'], key,
+            query_string='multipart-manifest=get')
+        self.assertEqual(
+            remote_headers[SWIFT_USER_META_PREFIX + SLO_ETAG_FIELD],
+            local_headers['etag'])
+
+        # NOTE: we only record the SLO as being uploaded, not the segments
+        self._assert_stats(mapping, {'copied_objects': 1, 'bytes': 2560})
+
+        source_conn = self.conn_for_acct_noshunt(mapping['account'])
+        source_conn.post_object(mapping['container'], key,
+                                {u'x-object-meta-fo\xef': u'v\xe2lue'})
+
+        crawler = utils.get_container_crawler(mapping)
+        crawler.run_once()
+
+        headers = self.remote_swift('head_object', mapping['aws_bucket'], key)
+        self.assertEqual(u'v\xe2lue', headers.get(u'x-object-meta-fo\xef'))
+
+        self._assert_stats(mapping, {'copied_objects': 0})
+
+        clear_swift_container(self.swift_src, mapping['container'])
+        clear_swift_container(self.swift_dst, mapping['aws_bucket'])
+        clear_swift_container(self.swift_src, 'segments')
+        clear_swift_container(
+            self.swift_dst, '%s_segments' % mapping['aws_bucket'])
+
     def test_swift_slo_sync_new_meta(self):
-        content = 'A' * 2048
+        content = 'A' * 1024 + 'B' * 1024
         key = 'test_slo'
         mapping = self.swift_sync_mapping()
         crawler = utils.get_container_crawler(mapping)
@@ -1133,8 +1244,8 @@ class TestCloudSync(TestCloudSyncBase):
         self._assert_stats(
             mapping, {'copied_objects': 1, 'bytes': len(content)})
 
-        self.local_swift(
-            'post_object',
+        source_conn = self.conn_for_acct_noshunt(mapping['account'])
+        source_conn.post_object(
             mapping['container'], key,
             headers={'x-object-meta-test-hdr': 'new header'})
         crawler.run_once()
@@ -1154,15 +1265,17 @@ class TestCloudSync(TestCloudSyncBase):
                 self.assertEqual(
                     old_headers[(cont, obj)]['x-timestamp'],
                     hdrs['x-timestamp'])
+
         self._assert_stats(mapping, {'copied_objects': 0, 'bytes': 0})
-        for conn, container in [(self.swift_src, mapping['container']),
-                                (self.swift_dst, mapping['aws_bucket'])]:
-            clear_swift_container(conn, container)
-            clear_swift_container(conn, container + '_segments')
+        clear_swift_container(self.swift_src, mapping['container'])
+        clear_swift_container(self.swift_dst, mapping['aws_bucket'])
+        clear_swift_container(self.swift_src, 'segments')
+        clear_swift_container(
+            self.swift_dst, '%s_segments' % mapping['aws_bucket'])
 
     def test_swift_sync_same_segments_slo(self):
         '''Uploading the same SLO manifest should not duplicate segments'''
-        content = 'A' * 2048
+        content = 'A' * 1024 + 'B' * 1024
         key = 'test_slo'
         mapping = self.swift_sync_mapping()
         crawler = utils.get_container_crawler(mapping)
@@ -1175,7 +1288,8 @@ class TestCloudSync(TestCloudSyncBase):
         self.local_swift('put_object', mapping['container'], key,
                          json.dumps(manifest),
                          query_string='multipart-manifest=put')
-        self.remote_swift('put_container', 'segments')
+        self.remote_swift('put_container',
+                          '%s_segments' % mapping['aws_bucket'])
 
         crawler.run_once()
         # record the last-modified date, so we can check that segments are not
@@ -1200,6 +1314,9 @@ class TestCloudSync(TestCloudSyncBase):
                 old_headers[(cont, obj)]['x-timestamp'], hdrs['x-timestamp'])
         clear_swift_container(self.swift_src, mapping['container'])
         clear_swift_container(self.swift_dst, mapping['aws_bucket'])
+        clear_swift_container(self.swift_src, 'segments')
+        clear_swift_container(
+            self.swift_dst, '%s_segments' % mapping['aws_bucket'])
 
     def test_swift_slo_same_container_segments(self):
         segment_regex = '\w+/\d+.\d+/\d+$'
@@ -1284,6 +1401,124 @@ class TestCloudSync(TestCloudSyncBase):
 
         clear_swift_container(self.swift_src, mapping['container'])
         clear_swift_container(self.swift_dst, mapping['aws_bucket'])
+        clear_swift_container(self.swift_src, 'segments')
+        clear_swift_container(
+            self.swift_dst, '%s_segments' % mapping['aws_bucket'])
+
+    def test_swift_dlo_sync_resize_segments(self):
+        content = [chr(ord('A') + i) * 1024 for i in range(10)]
+        key = u'test_dl\xf4'
+        mapping = dict(self.swift_sync_mapping())
+        # This should result in 2048 byte segments
+        mapping['min_segment_size'] = 2000
+        mapping['convert_dlo'] = True
+        crawler = utils.get_container_crawler(mapping)
+        prefix = u'test-dlo-p\xe3rts-'
+        manifest = u'segments/%s' % prefix
+        self.local_swift('put_container', 'segments')
+        for i in range(len(content)):
+            self.local_swift(
+                'put_object', 'segments', u'%s-%d' % (prefix, i), content[i])
+        self.local_swift(
+            'put_object', mapping['container'], key, '',
+            headers={'x-object-manifest': manifest})
+        self.remote_swift('put_container',
+                          '%s_segments' % mapping['aws_bucket'])
+
+        crawler.run_once()
+
+        headers, body = self.remote_swift(
+            'get_object', mapping['aws_bucket'], key)
+        self.assertEqual(''.join(content), body)
+        dlo_etag = hashlib.md5(''.join(
+            [hashlib.md5(content[i]).hexdigest() for i in range(len(content))]
+        )).hexdigest()
+        self.assertEqual(dlo_etag,
+                         headers.get(SWIFT_USER_META_PREFIX + DLO_ETAG_FIELD))
+        slo_etag = hashlib.md5(''.join(
+            [hashlib.md5(content[i] + content[i + 1]).hexdigest()
+             for i in range(0, len(content), 2)])).hexdigest()
+        self.assertEqual('"%s"' % slo_etag, headers['etag'])
+
+        _, manifest_blob = self.remote_swift(
+            'get_object', mapping['aws_bucket'], key,
+            query_string='multipart-manifest=get')
+        manifest = json.loads(manifest_blob)
+        self.assertEqual(len(content) / 2, len(manifest))
+        for index, segment in enumerate(manifest):
+            content_etag = hashlib.md5(content[index * 2] +
+                                       content[index * 2 + 1]).hexdigest()
+            self.assertEqual(content_etag, segment['hash'])
+
+        self._assert_stats(mapping, {'copied_objects': 1,
+                                     'bytes': sum(map(len, content))})
+
+        # Re-processing the object should be a NOOP
+        crawler = utils.get_container_crawler(mapping)
+        crawler.run_once()
+        self._assert_stats(mapping, {'copied_objects': 0})
+
+        clear_swift_container(self.swift_src, mapping['container'])
+        clear_swift_container(self.swift_dst, mapping['aws_bucket'])
+        clear_swift_container(self.swift_src, 'segments')
+        clear_swift_container(
+            self.swift_dst, '%s_segments' % mapping['aws_bucket'])
+
+    def test_swift_dlo_sync_resize_segments_new_meta(self):
+        raise unittest.SkipTest('')
+        content = [chr(ord('A') + i) * 1024 for i in range(10)]
+        key = u'test_dl\xf4'
+        mapping = dict(self.swift_sync_mapping())
+        # This should result in 2048 byte segments
+        mapping['min_segment_size'] = 2000
+        mapping['convert_dlo'] = True
+        prefix = u'test-dlo-p\xe3rts-'
+        segments_container = u's\xe3gments'
+        manifest = u'%s/%s' % (segments_container, prefix)
+        self.local_swift('put_container', segments_container)
+        for i in range(len(content)):
+            self.local_swift(
+                'put_object', segments_container,
+                u'%s-%d' % (prefix, i), content[i])
+        self.local_swift(
+            'put_object', mapping['container'], key, '',
+            headers={'x-object-manifest': manifest})
+        self.remote_swift('put_container',
+                          '%s_segments' % mapping['aws_bucket'])
+
+        crawler = utils.get_container_crawler(mapping)
+        crawler.run_once()
+
+        headers, body = self.remote_swift(
+            'get_object', mapping['aws_bucket'], key)
+        self.assertEqual(''.join(content), body)
+        dlo_etag = hashlib.md5(''.join(
+            [hashlib.md5(content[i]).hexdigest() for i in range(len(content))]
+        )).hexdigest()
+        self.assertEqual(dlo_etag,
+                         headers.get(SWIFT_USER_META_PREFIX + DLO_ETAG_FIELD))
+        self._assert_stats(mapping, {'copied_objects': 1,
+                                     'bytes': sum(map(len, content))})
+
+        # Updating the metadata on the object should be a NOOP
+        source_conn = self.conn_for_acct_noshunt(mapping['account'])
+        source_conn.post_object(mapping['container'], key,
+                                {u'x-object-meta-fo\xef': u'v\xe2lue',
+                                 'x-object-manifest': manifest})
+
+        crawler = utils.get_container_crawler(mapping, log_level='debug')
+        crawler.run_once()
+
+        headers = self.remote_swift('head_object', mapping['aws_bucket'], key)
+        self.assertEqual(u'v\xe2lue', headers.get(u'x-object-meta-fo\xef'))
+
+        self._assert_stats(mapping, {'copied_objects': 0})
+
+        clear_swift_container(self.swift_src, mapping['container'])
+        clear_swift_container(self.swift_dst, mapping['aws_bucket'])
+        clear_swift_container(self.swift_src, segments_container)
+        clear_swift_container(
+            self.swift_dst, '%s_segments' % mapping['aws_bucket'])
 
     def test_swift_dlo_metadata_update(self):
         content = [chr(ord('A') + i) * 1024 for i in range(10)]
@@ -1310,9 +1545,10 @@ class TestCloudSync(TestCloudSyncBase):
                                        '%s_segments' % mapping['aws_bucket'],
                                        query_string=u'prefix=%s' % prefix)
 
-        self.local_swift('post_object', mapping['container'], key,
-                         headers={u'x-object-meta-fo\xf3': u'fo\xf3',
-                                  'x-object-manifest': manifest})
+        source_conn = self.conn_for_acct_noshunt(mapping['account'])
+        source_conn.post_object(mapping['container'], key,
+                                headers={u'x-object-meta-fo\xf3': u'fo\xf3',
+                                         'x-object-manifest': manifest})
         headers = self.local_swift('head_object', mapping['container'], key)
         self.assertEqual(u'fo\xf3', headers.get(u'x-object-meta-fo\xf3'))
         self.assertEqual(manifest, headers.get('x-object-manifest'))
@@ -1342,6 +1578,9 @@ class TestCloudSync(TestCloudSyncBase):
                                      'bytes': 0})
         clear_swift_container(self.swift_src, mapping['container'])
         clear_swift_container(self.swift_dst, mapping['aws_bucket'])
+        clear_swift_container(self.swift_src, segments_container)
+        clear_swift_container(
+            self.swift_dst, '%s_segments' % mapping['aws_bucket'])
 
     def test_dlo_slo_conversion(self):
         content = [chr(ord('A') + i) * 1024 for i in range(10)]
@@ -1409,9 +1648,10 @@ class TestCloudSync(TestCloudSyncBase):
 
         self._assert_stats(mapping, {'copied_objects': 1,
                                      'bytes': sum(map(len, content))})
-        self.local_swift('post_object', mapping['container'], key,
-                         {u'x-object-meta-new-valu\xe3': u'valu\xe3',
-                          u'x-object-manifest': manifest})
+        source_conn = self.conn_for_acct_noshunt(mapping['account'])
+        source_conn.post_object(mapping['container'], key,
+                                {u'x-object-meta-new-valu\xe3': u'valu\xe3',
+                                 u'x-object-manifest': manifest})
 
         # Re-processing the object should be a POST (which does not count as
         # copied).

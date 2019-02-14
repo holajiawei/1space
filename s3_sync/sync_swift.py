@@ -24,9 +24,10 @@ from container_crawler.exceptions import RetryError
 from swift.common.internal_client import UnexpectedResponse
 from swift.common.utils import decode_timestamps
 from .base_sync import BaseSync, ProviderResponse, match_item
-from .utils import (ClosingResourceIterable, check_slo, DLO_ETAG_FIELD,
-                    FileWrapper, get_dlo_prefix, get_internal_manifest,
-                    iter_internal_listing, MANIFEST_HEADER,
+from .utils import (ClosingResourceIterable, check_slo, COMBINED_ETAG_FIELD,
+                    CombinedFileWrapper, DLO_ETAG_FIELD, FileWrapper,
+                    get_dlo_prefix, get_internal_manifest,
+                    iter_internal_listing, MANIFEST_HEADER, SLO_ETAG_FIELD,
                     SWIFT_USER_META_PREFIX)
 
 # We have to import keystone upfront to avoid green threads issue with the lazy
@@ -58,6 +59,10 @@ class SyncSwift(BaseSync):
                 'propagate_expiration'):
             self.propagated_headers.add('x-delete-at')
         self.convert_dlo = self.settings.get('convert_dlo', False)
+        self.min_segment_size = self.settings.get('min_segment_size', 0)
+        if self.min_segment_size and not self.convert_dlo:
+            raise ValueError('Cannot specify "min_segment_size" without'
+                             'setting "convert_dlo"')
 
     @property
     def remote_container(self):
@@ -171,8 +176,10 @@ class SyncSwift(BaseSync):
             self.verified_container = True
 
         return self._upload_object(
-            self.container, self.remote_container, row, internal_client,
-            segment=False,
+            self.container, self.remote_container, row['name'],
+            internal_client, segment=False,
+            policy_index=row['storage_policy_index'],
+            timestamp=row['created_at'],
             stats_cb=upload_stats_cb)
 
     def delete_object(self, key, bucket=None):
@@ -300,7 +307,7 @@ class SyncSwift(BaseSync):
             try:
                 if not container:
                     resp = getattr(client, op)(**args)
-                elif container and not key:
+                elif not key:
                     resp = getattr(client, op)(container, **args)
                 else:
                     resp = getattr(client, op)(container, key, **args)
@@ -351,13 +358,12 @@ class SyncSwift(BaseSync):
             with self.client_pool.get_client() as swift_client:
                 return _perform_op(swift_client)
 
-    def _upload_object(self, src_container, dst_container, row,
-                       internal_client, segment=False, stats_cb=None):
-        key = row['name']
+    def _upload_object(self, src_container, dst_container, key,
+                       internal_client, segment=False, policy_index=None,
+                       timestamp=None, stats_cb=None):
         req_hdrs = {}
-        if 'storage_policy_index' in row:
-            req_hdrs['X-Backend-Storage-Policy-Index'] = row[
-                'storage_policy_index']
+        if policy_index is not None:
+            req_hdrs['X-Backend-Storage-Policy-Index'] = policy_index
         try:
             with self.client_pool.get_client() as swift_client:
                 remote_meta = swift_client.head_object(
@@ -378,7 +384,7 @@ class SyncSwift(BaseSync):
             raise
 
         if not segment:
-            _, _, internal_timestamp = decode_timestamps(row['created_at'])
+            _, _, internal_timestamp = decode_timestamps(timestamp)
             if float(metadata['x-timestamp']) <\
                     float(internal_timestamp.internal):
                 raise RetryError('Stale object %s' % key)
@@ -432,13 +438,10 @@ class SyncSwift(BaseSync):
             return self.UploadStatus.NOOP
 
         with self.client_pool.get_client() as swift_client:
-            wrapper_stream = FileWrapper(internal_client,
-                                         self.account,
-                                         src_container,
-                                         key,
-                                         req_hdrs,
-                                         stats_cb=stats_cb)
-            headers = self._get_user_headers(wrapper_stream.get_headers())
+            body = FileWrapper(
+                internal_client, self.account, src_container, key, req_hdrs,
+                stats_cb=stats_cb)
+            headers = self._get_user_headers(body.get_headers())
             if self.remote_delete_after:
                 del_after = self.remote_delete_after
                 if segment:
@@ -448,13 +451,90 @@ class SyncSwift(BaseSync):
                 key, headers))
 
             try:
-                swift_client.put_object(
-                    dst_container, key, wrapper_stream,
-                    etag=wrapper_stream.get_headers()['etag'],
-                    headers=self._client_headers(headers),
-                    content_length=len(wrapper_stream))
+                resp = self.put_object(
+                    key, self._client_headers(headers), body,
+                    bucket=dst_container,
+                    etag=body.get_headers()['etag'],
+                    content_length=len(body))
+                if not resp.success:
+                    resp.reraise()
             finally:
-                wrapper_stream.close()
+                body.close()
+            return self.UploadStatus.PUT
+
+    def _upload_combined_objects(self, src_container, dst_container, key,
+                                 objects, internal_client, stats_cb=None):
+        """
+        Upload a list of objects as a single object.
+
+        Similar to _upload_object, but handles a list of objects to upload
+        using the CombinedFileWrapper.
+
+        NOTE: it is not clear what to do about metadata on the segments in
+        this case and for now it is ignored. We could HEAD every object in the
+        list and produce a union of all of the metadata tags, but it's
+        somewhat expensive (HEAD per object) and is not obvious on what to do
+        in case of conflicts.
+        NOTE: ignores metadata tagging and object movement checks -- objects
+        are uploaded unconditionally.
+        NOTE: this method may result in a corrupted upload, as we verify the
+        uploaded ETag only after PUT returns (because otherwise we would have
+        to read from Swift twice).
+
+        :param src_container: source container name.
+        :param dst_container: destination container name.
+        :param key: name of the object in the destination store.
+        :param objects: list of dictionaries, each one containing keys:
+            name, size, etag.
+        :param internal_client: InternalClient instance to use for the upload.
+        """
+        resp = self.head_object(dst_container, key)
+        if resp.success:
+            remote_meta = resp.headers
+        elif resp.status == 404:
+            remote_meta = {}
+        else:
+            resp.reraise()
+
+        combined_etag = hashlib.md5(
+            ''.join([obj['etag'] for obj in objects])).hexdigest()
+        combined_etag_header = SWIFT_USER_META_PREFIX + COMBINED_ETAG_FIELD
+        if remote_meta.get(combined_etag_header) == combined_etag:
+            return self.UploadStatus.NOOP
+        total_size = sum([obj['size'] for obj in objects])
+        body = CombinedFileWrapper(
+            internal_client, self.account,
+            [(src_container, obj['name']) for obj in objects], total_size,
+            stats_cb=stats_cb)
+        try:
+            resp = self.put_object(key, {combined_etag_header: combined_etag},
+                                   body, bucket=dst_container,
+                                   content_length=total_size)
+        finally:
+            body.close()
+        total_etag, segments_etags = body.etag()
+        if not resp.success:
+            resp.reraise()
+        etags_mismatch = total_etag != resp.headers['etag']
+        if len(objects) != len(segments_etags):
+            etags_mismatch = True
+        else:
+            etags_mismatch |= any([objects[i]['etag'] != segments_etags[i]
+                                   for i in range(len(objects))])
+        if etags_mismatch:
+            self.logger.error(
+                'Combined upload of %s returned mismatching ETags; '
+                'removing the destination object %s/%s' % (
+                    objects, dst_container, key))
+            self.logger.error('ETags: destination -- %s; source -- %s' % (
+                resp.headers['etag'], total_etag))
+            resp = self.delete_object(key, bucket=dst_container)
+            if not resp.success and resp.status != 404:
+                self.logger.error(
+                    'Failed to remove corrupt combined object: %s/%s' % (
+                        dst_container, key))
+                resp.reraise()
+            return self.UploadStatus.ETAG_MISMATCH
         return self.UploadStatus.PUT
 
     def _make_content_location(self, bucket):
@@ -496,7 +576,8 @@ class SyncSwift(BaseSync):
                     prefix)
         self.post_object(key, user_headers, bucket)
 
-    def _upload_objects(self, objects_list, internal_client, stats_cb):
+    def _upload_objects(
+            self, objects_list, internal_client, stats_cb=None, prefix=None):
         work_queue = eventlet.queue.Queue(self.SLO_QUEUE_SIZE)
         worker_pool = eventlet.greenpool.GreenPool(self.SLO_WORKERS)
         workers = []
@@ -505,9 +586,40 @@ class SyncSwift(BaseSync):
                 worker_pool.spawn(
                     self._upload_segment_worker, work_queue, internal_client,
                     stats_cb))
+
+        uploaded_keys = []
+
+        def _add_work(container, segments_list, size, segment_index):
+            if not segments_list:
+                return
+
+            if len(segments_list) == 1:
+                entry = segments_list[0]
+                work_queue.put((container, entry['name']))
+                uploaded_keys.append(
+                    (container, entry['name'], entry['etag'], entry['size']))
+            else:
+                dest_key = u'%s/%06d' % (prefix, segment_index)
+                work_queue.put((container, segments_list, dest_key))
+                uploaded_keys.append((container, dest_key, None, size))
+
         # key must be a tuple (container, object)
-        for key in objects_list:
-            work_queue.put(key)
+        segment_size = 0
+        segments_list = []
+        index = 1
+        for container, entry in objects_list:
+            segment_size += entry['size']
+            segments_list.append(entry)
+            if segment_size < self.min_segment_size:
+                continue
+            _add_work(container, segments_list, segment_size, index)
+            segments_list = []
+            segment_size = 0
+            index += 1
+
+        # picks up any last objects if combining uploads
+        _add_work(container, segments_list, segment_size, index)
+
         work_queue.join()
         for _ in range(self.SLO_WORKERS):
             work_queue.put(None)
@@ -517,7 +629,7 @@ class SyncSwift(BaseSync):
             worker_errors, worker_failures = thread.wait()
             errors.extend(worker_errors)
             failures.extend(worker_failures)
-        return errors, failures
+        return uploaded_keys, errors, failures
 
     def _upload_slo(self, key, internal_client, swift_req_headers,
                     stats_cb=None):
@@ -526,9 +638,17 @@ class SyncSwift(BaseSync):
             swift_req_headers)
         self.logger.debug("JSON manifest: %s" % str(manifest))
 
-        errors, failures = self._upload_objects(
-            (segment['name'].split('/', 2)[1:] for segment in manifest),
-            internal_client, stats_cb)
+        def _segments_generator():
+            for segment in manifest:
+                container, key = segment['name'].split('/', 2)[1:]
+                yield (container, {'name': key,
+                                   'size': segment['bytes'],
+                                   'etag': segment['hash']})
+
+        uploaded_objects, errors, failures = self._upload_objects(
+            _segments_generator(), internal_client,
+            prefix=u'%s/%s' % (key.decode('utf-8'), headers['x-timestamp']),
+            stats_cb=stats_cb)
 
         # Check failures first, as it may mean we want to skip this SLO
         if failures:
@@ -541,18 +661,34 @@ class SyncSwift(BaseSync):
         if errors:
             raise RuntimeError('Failed to upload an SLO %s' % key)
 
+        manifest_hdrs = self._client_headers(self._get_user_headers(headers))
         new_manifest = []
-        for segment in manifest:
-            segment_container, obj = segment['name'].split('/', 2)[1:]
-            path = '/%s/%s' % (
-                self.remote_segments_container(segment_container), obj)
+        if any([segment['bytes'] < self.min_segment_size
+                for segment in manifest]):
+            # Since we must have combined segments, we can't rely on
+            # the source manifest
+            for container, obj, etag, size in uploaded_objects:
+                new_manifest.append(
+                    {'path': '/%s/%s' % (
+                        (self.remote_segments_container(container), obj)),
+                     # NOTE: if the segments have been combined, the ETag will
+                     # be None
+                     'etag': etag,
+                     'size_bytes': size})
+            # Preserve the original manifest ETag to verify uploads
+            manifest_hdrs[SWIFT_USER_META_PREFIX + SLO_ETAG_FIELD] =\
+                headers['etag']
+        else:
+            for segment in manifest:
+                segment_container, obj = segment['name'].split('/', 2)[1:]
+                path = '/%s/%s' % (
+                    self.remote_segments_container(segment_container), obj)
 
-            new_manifest.append(dict(path=path,
-                                     etag=segment['hash'],
-                                     size_bytes=segment['bytes']))
+                new_manifest.append(dict(path=path,
+                                         etag=segment['hash'],
+                                         size_bytes=segment['bytes']))
 
         self.logger.debug(json.dumps(new_manifest))
-        manifest_hdrs = self._client_headers(self._get_user_headers(headers))
         if self.remote_delete_after:
             manifest_hdrs.update({'x-delete-after': self.remote_delete_after})
         # Upload the manifest itself
@@ -569,27 +705,33 @@ class SyncSwift(BaseSync):
             .split('/', 1)
         segments_container = self.remote_segments_container(dlo_container)
         dlo_etag_hash = hashlib.md5()
-        if self.convert_dlo:
-            manifest = []
 
         def _keys_generator():
             internal_iterator = iter_internal_listing(
                 internal_client, self.account, container=dlo_container,
                 prefix=prefix)
+
             for entry in internal_iterator:
                 if not entry:
                     return
                 dlo_etag_hash.update(entry['hash'].strip('"'))
-                if self.convert_dlo:
-                    manifest.append(
-                        {'path': (
-                            u'/%s/%s' % (segments_container, entry['name'])),
-                         'etag': entry['hash'],
-                         'size_bytes': entry['bytes']})
-                yield (dlo_container, entry['name'])
+                yield (dlo_container, {'name': entry['name'],
+                                       'size': entry['bytes'],
+                                       'etag': entry['hash'].strip('"')})
 
-        errors, failures = self._upload_objects(
-            _keys_generator(), internal_client, stats_cb)
+        uploaded_objects, errors, failures = self._upload_objects(
+            _keys_generator(), internal_client, prefix=u'%s/%s' % (
+                key.decode('utf-8'), internal_meta['x-timestamp']),
+            stats_cb=stats_cb)
+
+        if self.convert_dlo:
+            manifest = [
+                {'path': u'/%s/%s' %
+                    (self.remote_segments_container(container), obj),
+                 'etag': etag,
+                 'size_bytes': size}
+                for container, obj, etag, size in uploaded_objects]
+
         # Check the failures first, in case we need to skip this DLO
         # altogether. We can return the first failing status, as we don't need
         # to exhaust all the reasons the upload failed.
@@ -664,12 +806,26 @@ class SyncSwift(BaseSync):
                 work_queue.task_done()
                 return (errors, failed)
 
-            container, obj = work
-            dst_container = self.remote_segments_container(container)
+            kwargs = dict(stats_cb=stats_cb)
+            if len(work) == 2:
+                container, obj = work
+                dst_container = self.remote_segments_container(container)
+                args = [container, dst_container, obj, internal_client]
+                kwargs['segment'] = True
+                upload_func = self._upload_object
+                error_msg = 'Failed to upload segment %s/%s/%s' % (
+                    self.account, container, obj)
+            else:
+                container, obj_list, obj = work
+                dst_container = self.remote_segments_container(container)
+                args = [container, dst_container, obj, obj_list,
+                        internal_client]
+                upload_func = self._upload_combined_objects
+                error_msg = 'Failed to upload segments %s from %s/%s' % (
+                    ', '.join([segment['name'] for segment in obj_list]),
+                    self.account, container)
             try:
-                status = self._upload_object(
-                    container, dst_container, {'name': obj},
-                    internal_client, segment=True, stats_cb=stats_cb)
+                status = upload_func(*args, **kwargs)
                 if status not in [self.UploadStatus.PUT,
                                   self.UploadStatus.POST,
                                   self.UploadStatus.NOOP]:
@@ -693,24 +849,31 @@ class SyncSwift(BaseSync):
                             (dst_container, resp.to_wsgi()))
                     errors.append(work)
                 else:
-                    self.logger.error('Failed to upload segment %s/%s/%s: %s' %
-                                      (self.account, container, obj, e.msg))
+                    self.logger.error('%s: %s' % (error_msg, e.msg))
                     self.logger.debug('%s' % traceback.format_exc())
+                    errors.append(work)
             except Exception as e:
                 errors.append(work)
-                self.logger.error('Failed to upload segment %s/%s/%s: %s' % (
-                    self.account, container, obj, str(e)))
+                self.logger.error('%s: %s' % (error_msg, str(e)))
                 self.logger.debug('%s' % traceback.format_exc())
             finally:
                 work_queue.task_done()
 
     def _check_slo_uploaded(self, key, remote_meta, internal_client,
                             swift_req_hdrs):
-        _, manifest = get_internal_manifest(
+        headers, manifest = get_internal_manifest(
             self.account, self.container, key, internal_client, swift_req_hdrs)
 
         expected_etag = '"%s"' % hashlib.md5(
             ''.join([segment['hash'] for segment in manifest])).hexdigest()
+
+        slo_etag_field = SWIFT_USER_META_PREFIX + SLO_ETAG_FIELD
+        if slo_etag_field in remote_meta:
+            # TODO: if ETags do not match and we re-upload the SLO, we should
+            # remove the other SLO's segments.
+            self.logger.debug('Found combined SLO header. ETags: %s %s' % (
+                remote_meta[slo_etag_field], headers['etag']))
+            return remote_meta[slo_etag_field] == headers['etag']
 
         self.logger.debug('SLO ETags: %s %s' % (
             remote_meta['etag'], expected_etag))
@@ -746,13 +909,14 @@ class SyncSwift(BaseSync):
             'post_container', self.remote_container, None, headers=metadata)
 
     def _is_meta_synced(self, local_metadata, remote_metadata):
-        dlo_etag_header = SWIFT_USER_META_PREFIX + DLO_ETAG_FIELD
-        remote_keys = [
-            key.lower() for key in remote_metadata.keys()
-            if (key.lower().startswith(SWIFT_USER_META_PREFIX) and
-                # Remove the reserved DLO user-tag]
-                not key.lower() == dlo_etag_header) or
-            key.lower() in self.propagated_headers]
+        exclude_headers = [DLO_ETAG_FIELD, SLO_ETAG_FIELD, COMBINED_ETAG_FIELD]
+        user_exclude_headers = [SWIFT_USER_META_PREFIX + hdr
+                                for hdr in exclude_headers]
+        remote_keys = [key.lower() for key in remote_metadata.keys()
+                       if (key.lower().startswith(SWIFT_USER_META_PREFIX) and
+                           # Remove the reserved headers
+                           key.lower() not in user_exclude_headers) or
+                       key.lower() in self.propagated_headers]
         local_keys = [key.lower() for key in local_metadata.keys()
                       if key.lower().startswith(SWIFT_USER_META_PREFIX) or
                       key.lower() in self.propagated_headers]

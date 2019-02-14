@@ -123,6 +123,7 @@ class BaseSync(object):
         INVALID_SLO = 4  # if the manifest cannot be validated
         NOT_FOUND = 5  # object does not appear to exist in Swift
         SKIPPED_NESTED_SLO = 6
+        ETAG_MISMATCH = 7  # PUT response ETag did not match Swift data
 
     class HttpClientPoolEntry(object):
         def __init__(self, client, pool):

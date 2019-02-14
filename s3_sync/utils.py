@@ -57,6 +57,7 @@ from swift.common.utils import FileLikeIter, close_if_possible, quote
 SWIFT_USER_META_PREFIX = 'x-object-meta-'
 S3_USER_META_PREFIX = 'x-amz-meta-'
 MANIFEST_HEADER = 'x-object-manifest'
+COMBINED_ETAG_FIELD = 'combined-etag'
 DLO_ETAG_FIELD = 'swift-source-dlo-etag'
 SLO_HEADER = 'x-static-large-object'
 SLO_ETAG_FIELD = 'swift-slo-etag'
@@ -384,6 +385,9 @@ class CombinedFileWrapper(object):
         self._segment = None
         self._segment_index = 0
         self._size = total_size
+        self._combined_etag = hashlib.md5()
+        self._segment_etags = []
+        self._current_segment_hash = hashlib.md5()
         self._stats_cb = stats_cb
 
     def seek(self, pos, flag=0):
@@ -394,6 +398,9 @@ class CombinedFileWrapper(object):
         self._segment.close()
         self._segment = None
         self._segment_index = 0
+        self._combined_etag = hashlib.md5()
+        self._current_segment_hash = hashlib.md5()
+        self._segment_etags = []
 
     def reset(self, *args, **kwargs):
         self.seek(0)
@@ -410,10 +417,15 @@ class CombinedFileWrapper(object):
             self._open_next_segment()
         data = self._segment.read(size)
         if not data:
+            self._segment_etags.append(
+                self._current_segment_hash.hexdigest())
+            self._current_segment_hash = hashlib.md5()
             self._segment.close()
             if self._segment_index < len(self._source_objects):
                 self._open_next_segment()
                 data = self._segment.read(size)
+        self._combined_etag.update(data)
+        self._current_segment_hash.update(data)
         return data
 
     def next(self):
@@ -431,6 +443,13 @@ class CombinedFileWrapper(object):
     def close(self):
         if self._segment:
             self._segment.close()
+        # If we close early or read exactly the available number of bytes, the
+        # last segment's ETag is never appended, so we do it on close.
+        if len(self._segment_etags) < len(self._source_objects):
+            self._segment_etags.append(self._current_segment_hash.hexdigest())
+
+    def etag(self):
+        return (self._combined_etag.hexdigest(), self._segment_etags)
 
 
 class SLOFileWrapper(CombinedFileWrapper):
