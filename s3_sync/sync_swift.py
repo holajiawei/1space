@@ -659,7 +659,7 @@ class SyncSwift(BaseSync):
         # TODO: errors list contains the failed segments. We should retry
         # them on failure.
         if errors:
-            raise RuntimeError('Failed to upload an SLO %s' % key)
+            raise RetryError('Failed to upload an SLO %s' % key)
 
         manifest_hdrs = self._client_headers(self._get_user_headers(headers))
         new_manifest = []
@@ -738,7 +738,7 @@ class SyncSwift(BaseSync):
         if failures:
             return failures[0][0]
         if errors:
-            raise RuntimeError('Failed to upload a DLO %s' % key)
+            raise RetryError('Failed to upload a DLO %s' % key)
         dlo_etag = dlo_etag_hash.hexdigest()
         dlo_etag_header = SWIFT_USER_META_PREFIX + DLO_ETAG_FIELD
 

@@ -613,7 +613,7 @@ class TestSyncSwift(unittest.TestCase):
         mock_ic.get_object_metadata.side_effect = get_metadata
         mock_ic.get_object.side_effect = get_object
 
-        with self.assertRaises(RuntimeError):
+        with self.assertRaises(RetryError):
             self.sync_swift.upload_object(
                 {'name': slo_key,
                  'storage_policy_index': storage_policy,
@@ -1439,7 +1439,7 @@ class TestSyncSwift(unittest.TestCase):
         mock_swift.return_value.put_object.side_effect = ClientException(
             'error', http_status=500, http_response_headers={})
 
-        with self.assertRaises(RuntimeError):
+        with self.assertRaises(RetryError):
             self.sync_swift.upload_object(
                 {'name': dlo_key,
                  'storage_policy_index': storage_policy,
