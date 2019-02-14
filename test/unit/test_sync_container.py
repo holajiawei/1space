@@ -478,7 +478,7 @@ class TestSyncContainer(unittest.TestCase):
         sync.provider.upload_object.assert_called_once_with(
             row, swift_client, mock.ANY)
         sync.provider.delete_local_object.assert_called_once_with(
-            swift_client, row, swift_ts, True)
+            swift_client, row, swift_ts, False)
 
     @mock.patch('s3_sync.sync_s3.boto3.session.Session')
     def test_no_propagate_delete(self, session_mock):

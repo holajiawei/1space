@@ -58,7 +58,7 @@ class SyncContainer(container_crawler.base_sync.BaseSync):
         self.copy_after = int(sync_settings.get('copy_after', 0))
         self.retain_local = sync_settings.get('retain_local', True)
         self.retain_local_segments = sync_settings.get('retain_local_segments',
-                                                       True)
+                                                       False)
         self.propagate_delete = sync_settings.get('propagate_delete', True)
         self._settings = sync_settings
         self.provider = create_provider(sync_settings, max_conns,
