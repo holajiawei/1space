@@ -1465,7 +1465,6 @@ class TestCloudSync(TestCloudSyncBase):
             self.swift_dst, '%s_segments' % mapping['aws_bucket'])
 
     def test_swift_dlo_sync_resize_segments_new_meta(self):
-        raise unittest.SkipTest('')
         content = [chr(ord('A') + i) * 1024 for i in range(10)]
         key = u'test_dl\xf4'
         mapping = dict(self.swift_sync_mapping())
