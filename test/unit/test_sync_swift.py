@@ -209,7 +209,7 @@ class TestSyncSwift(unittest.TestCase):
         swift_client.put_object.assert_called_with(
             self.aws_bucket, key,
             contents=wrapper,
-            headers={'Content-Type': 'application/testing'},
+            headers={'content-type': 'application/testing'},
             etag='deadbeef',
             content_length=0,
             response_dict=mock.ANY)
@@ -337,7 +337,7 @@ class TestSyncSwift(unittest.TestCase):
             self.aws_bucket, key, headers={
                 'x-object-meta-new': 'new',
                 'x-object-meta-old': 'updated',
-                'Content-Type': 'application/bar'})
+                'content-type': 'application/bar'})
 
     @mock.patch('s3_sync.sync_swift.swiftclient.client.Connection')
     def test_meta_unicode(self, mock_swift):
@@ -527,7 +527,7 @@ class TestSyncSwift(unittest.TestCase):
                       content_length=1024, headers={}, response_dict=mock.ANY),
             mock.call(self.aws_bucket, slo_key,
                       mock.ANY,
-                      headers={'Content-Type': 'application/slo'},
+                      headers={'content-type': 'application/slo'},
                       query_string='multipart-manifest=put')
         ])
 
@@ -707,7 +707,7 @@ class TestSyncSwift(unittest.TestCase):
                       response_dict=mock.ANY),
             mock.call(self.aws_bucket, slo_key,
                       mock.ANY,
-                      headers={'Content-Type': 'application/slo',
+                      headers={'content-type': 'application/slo',
                                'a': 'b', 'c': 'd'},
                       query_string='multipart-manifest=put')
         ])
@@ -821,7 +821,7 @@ class TestSyncSwift(unittest.TestCase):
                       content_length=1024, headers={}, response_dict=mock.ANY),
             mock.call(mapping['aws_bucket'] + mapping['container'], slo_key,
                       mock.ANY,
-                      headers={'Content-Type': 'application/slo'},
+                      headers={'content-type': 'application/slo'},
                       query_string='multipart-manifest=put')
         ])
 

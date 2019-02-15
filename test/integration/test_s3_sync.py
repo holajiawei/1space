@@ -369,6 +369,70 @@ class TestCloudSync(TestCloudSyncBase):
         clear_swift_container(self.swift_src, mapping['container'])
         clear_swift_container(self.swift_dst, mapping['aws_bucket'])
 
+    def test_swift_propagate_expiration_offset(self):
+        mapping = dict(self.swift_sync_mapping())
+        mapping['propagate_expiration'] = True
+        mapping['propagate_expiration_offset'] = 3600
+        obj = 'obj2expire'
+        crawler = utils.get_container_crawler(mapping)
+        etag = self.local_swift('put_object', mapping['container'],
+                                obj, 'body of obj',
+                                headers={'x-delete-after': '30'})
+        self.assertEqual(hashlib.md5('body of obj').hexdigest(), etag)
+        hdrs = self.local_swift('head_object', mapping['container'], obj)
+        self.assertIn('x-delete-at', hdrs.keys())
+        expected_exp = int(hdrs['x-delete-at']) + 3600
+        crawler.run_once()
+        remote_hdrs = self.remote_swift('head_object', mapping['aws_bucket'],
+                                        obj)
+        self.assertIn('x-delete-at', remote_hdrs.keys())
+        self.assertEqual(expected_exp, int(remote_hdrs['x-delete-at']))
+
+        # re-uploading should be a NOOP
+        last_modified = remote_hdrs['last-modified']
+        crawler = utils.get_container_crawler(mapping)
+        crawler.run_once()
+
+        hdrs = self.remote_swift('head_object', mapping['aws_bucket'], obj)
+        self.assertEqual(last_modified, hdrs['last-modified'])
+
+        clear_swift_container(self.swift_src, mapping['container'])
+        clear_swift_container(self.swift_dst, mapping['aws_bucket'])
+
+    def test_swift_propagate_expiration_offset_update(self):
+        mapping = dict(self.swift_sync_mapping())
+        mapping['propagate_expiration'] = True
+        mapping['propagate_expiration_offset'] = 3600
+        obj = 'obj2expire'
+        crawler = utils.get_container_crawler(mapping)
+        etag = self.local_swift('put_object', mapping['container'],
+                                obj, 'body of obj',
+                                headers={'x-delete-after': '30'})
+        self.assertEqual(hashlib.md5('body of obj').hexdigest(), etag)
+        hdrs = self.local_swift('head_object', mapping['container'], obj)
+        self.assertIn('x-delete-at', hdrs.keys())
+        expected_exp = int(hdrs['x-delete-at']) + 3600
+        crawler.run_once()
+        remote_hdrs = self.remote_swift('head_object', mapping['aws_bucket'],
+                                        obj)
+        self.assertIn('x-delete-at', remote_hdrs.keys())
+        self.assertEqual(expected_exp, int(remote_hdrs['x-delete-at']))
+
+        # Updating expiration should update the remote object's expiration
+        self.local_swift('post_object', mapping['container'], obj,
+                         {'x-delete-after': 1800})
+        hdrs = self.local_swift('head_object', mapping['container'], obj)
+        self.assertIn('x-delete-at', hdrs.keys())
+        expected_exp = int(hdrs['x-delete-at']) + 3600
+        crawler.run_once()
+
+        hdrs = self.remote_swift('head_object', mapping['aws_bucket'], obj)
+        self.assertIn('x-delete-at', hdrs.keys())
+        self.assertEqual(expected_exp, int(hdrs['x-delete-at']))
+
+        clear_swift_container(self.swift_src, mapping['container'])
+        clear_swift_container(self.swift_dst, mapping['aws_bucket'])
+
     def test_keystone_sync_v3(self):
         mapping = self._find_mapping(
             lambda m: m['aws_endpoint'].endswith('v3'))
@@ -474,6 +538,24 @@ class TestCloudSync(TestCloudSyncBase):
         self.assertTrue(int(hdrs['x-delete-at']) <= target_time)
 
         self._assert_stats(mapping, {'copied_objects': 1, 'bytes': 1024})
+
+    def test_swift_update_x_delete_after(self):
+        mapping = self._find_mapping(
+            lambda m: m['aws_bucket'] == 'bit-bucket')
+        crawler = utils.get_container_crawler(mapping)
+        conn = self.conn_for_acct(mapping['account'])
+        conn.put_object(mapping['container'], 'del_after_test', 'B' * 1024)
+        self.remote_swift(
+            'put_object', mapping['aws_bucket'], 'del_after_test', 'B' * 1024)
+
+        crawler.run_once()
+        hdrs = self.remote_swift(
+            'head_object', mapping['aws_bucket'], 'del_after_test')
+        self.assertIn('x-delete-at', hdrs.keys())
+        target_time = int(time.time() + mapping['remote_delete_after'])
+        self.assertTrue(int(hdrs['x-delete-at']) <= target_time)
+
+        self._assert_stats(mapping, {'copied_objects': 0})
 
     def test_swift_sync_container_metadata(self):
         mapping = dict(self._find_mapping(
@@ -862,6 +944,57 @@ class TestCloudSync(TestCloudSyncBase):
         self.assertTrue(int(hdrs['x-delete-at']) >= early_seg_target_time)
         # NOTE: we only record the SLO as being uploaded, not the segments
         self._assert_stats(mapping, {'copied_objects': 1, 'bytes': 2048})
+
+    def test_swift_archive_slo_update_x_delete_after(self):
+        content = 'A' * 2048
+        key = 'test_swift_slo_del_after'
+        mapping = self._find_mapping(
+            lambda m: m['aws_bucket'] == 'bit-bucket')
+        crawler = utils.get_container_crawler(mapping)
+        manifest = [
+            {'size_bytes': 1024, 'path': '/segments/part1'},
+            {'size_bytes': 1024, 'path': '/segments/part2'}]
+        remote_manifest = [
+            {'size_bytes': 1024,
+             'path': '/%s_segments/part1' % mapping['aws_bucket']},
+            {'size_bytes': 1024,
+             'path': '/%s_segments/part2' % mapping['aws_bucket']}]
+        early_target_time = int(time.time() + mapping['remote_delete_after'])
+        conn = self.conn_for_acct(mapping['account'])
+        conn.put_container('segments')
+        conn.put_object('segments', 'part1', content[:1024])
+        conn.put_object('segments', 'part2', content[1024:])
+        conn.put_object(mapping['container'], key,
+                        json.dumps(manifest),
+                        query_string='multipart-manifest=put')
+        self.remote_swift(
+            'put_container', '%s_segments' % mapping['aws_bucket'])
+        self.remote_swift(
+            'put_object', '%s_segments' % mapping['aws_bucket'], 'part1',
+            content[:1024])
+        self.remote_swift(
+            'put_object', '%s_segments' % mapping['aws_bucket'], 'part2',
+            content[1024:])
+        self.remote_swift(
+            'put_object', mapping['aws_bucket'], key,
+            json.dumps(remote_manifest), query_string='multipart-manifest=put')
+
+        crawler.run_once()
+
+        hdrs = self.remote_swift('head_object', mapping['aws_bucket'], key)
+        self.assertIn('x-delete-at', hdrs.keys())
+        target_time = int(time.time() + mapping['remote_delete_after'])
+        self.assertTrue(int(hdrs['x-delete-at']) <= target_time)
+        self.assertTrue(int(hdrs['x-delete-at']) >= early_target_time)
+        # TODO: Verify segments' x-delete-at headers after we properly update
+        # them.
+        self._assert_stats(mapping, {'copied_objects': 0})
+
+        clear_swift_container(self.swift_src, mapping['container'])
+        clear_swift_container(self.swift_src, 'segments')
+        clear_swift_container(self.swift_dst, mapping['aws_bucket'])
+        clear_swift_container(
+            self.swift_dst, '%s_segments' % mapping['aws_bucket'])
 
     def test_s3_archive_slo_w_delete_segments(self):
         s3_mapping = dict(self.s3_archive_mapping())

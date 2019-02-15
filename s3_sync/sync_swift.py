@@ -49,15 +49,22 @@ class SyncSwift(BaseSync):
         self.verified_container = False
         self.remote_delete_after = self.settings.get('remote_delete_after', 0)
         # Remote delete after addition for segments (defaults to 24 hours)
-        self.remote_delete_after_addition = \
-            self.settings.get('remote_delete_after_addition',
-                              DEFAULT_SEGMENT_DELAY)
-        # if policy is set to expire remote objects, then don't sync
+        self.remote_delete_after_addition = self.settings.get(
+            'remote_delete_after_addition', DEFAULT_SEGMENT_DELAY)
+
+        # If policy is set to expire remote objects, then don't sync
         # x-delete-after header, the correct header/value will be set
         # according to policy set by operator
         self.propagated_headers = set(['content-type'])
-        if not self.remote_delete_after and self.settings.get(
-                'propagate_expiration'):
+
+        # Allows an additional offset to be added to the propagated x-delete-at
+        # header value.
+        self.propagate_expiration_offset = self.settings.get(
+            'propagate_expiration_offset', 0)
+
+        if self.settings.get('propagate_expiration') and (
+                not self.remote_delete_after or
+                self.propagate_expiration_offset):
             self.propagated_headers.add('x-delete-at')
         self.convert_dlo = self.settings.get('convert_dlo', False)
         self.min_segment_size = self.settings.get('min_segment_size', 0)
@@ -322,8 +329,9 @@ class SyncSwift(BaseSync):
             entry['content_location'] = self._make_content_location(bucket)
         return resp
 
-    def update_metadata(self, key, metadata, remote_metadata={}, bucket=None):
-        user_headers = self._get_user_headers(metadata)
+    def update_metadata(self, key, metadata, remote_metadata={}, bucket=None,
+                        segment=False):
+        user_headers = self._get_user_headers(metadata, segment)
         dlo_manifest = metadata.get(MANIFEST_HEADER, '').decode('utf-8')
         if dlo_manifest:
             # We have to preserve both our computed DLO ETag *and* the manifest
@@ -464,6 +472,8 @@ class SyncSwift(BaseSync):
             if remote_meta and self._check_slo_uploaded(
                     key, remote_meta, internal_client, req_hdrs):
                 if not self._is_meta_synced(metadata, remote_meta):
+                    # TODO: Update segments' X-Delete-At headers if
+                    # remote_delete_after is applied/updated/removed.
                     self.update_metadata(key, metadata,
                                          remote_metadata=remote_meta,
                                          bucket=dst_container)
@@ -483,16 +493,20 @@ class SyncSwift(BaseSync):
                     self.update_metadata(key, metadata,
                                          remote_metadata=remote_meta,
                                          bucket=dst_container)
+                    # TODO: Update segments' X-Delete-At headers if
+                    # remote_delete_after is applied/updated/removed.
                     return self.UploadStatus.POST
                 return self.UploadStatus.NOOP
             return self._upload_dlo(key, internal_client, metadata, req_hdrs,
                                     stats_cb=stats_cb)
 
         if remote_meta and metadata['etag'] == remote_meta['etag']:
-            if not self._is_meta_synced(metadata, remote_meta):
+            if not self._is_meta_synced(
+                    metadata, remote_meta, segment=segment):
                 self.update_metadata(key, metadata,
                                      remote_metadata=remote_meta,
-                                     bucket=dst_container)
+                                     bucket=dst_container,
+                                     segment=segment)
                 return self.UploadStatus.POST
             return self.UploadStatus.NOOP
 
@@ -500,12 +514,8 @@ class SyncSwift(BaseSync):
             body = FileWrapper(
                 internal_client, self.account, src_container, key, req_hdrs,
                 stats_cb=stats_cb)
-            headers = self._get_user_headers(body.get_headers())
-            if self.remote_delete_after:
-                del_after = self.remote_delete_after
-                if segment:
-                    del_after += self.remote_delete_after_addition
-                headers.update({'x-delete-after': del_after})
+            headers = self._get_user_headers(
+                body.get_headers(), segment=segment)
             self.logger.debug('Uploading %s with meta: %r' % (
                 key, headers))
 
@@ -607,6 +617,9 @@ class SyncSwift(BaseSync):
 
     def _upload_objects(
             self, objects_list, internal_client, stats_cb=None, prefix=None):
+        # TODO: we should accept headers to be set on the objects, as we need a
+        # way to plumb through the expiration header.
+
         work_queue = eventlet.queue.Queue(self.SLO_QUEUE_SIZE)
         worker_pool = eventlet.greenpool.GreenPool(self.SLO_WORKERS)
         workers = []
@@ -958,7 +971,7 @@ class SyncSwift(BaseSync):
             failed_segments.extend(thread.wait())
         return failed_segments
 
-    def _is_meta_synced(self, local_metadata, remote_metadata):
+    def _is_meta_synced(self, local_metadata, remote_metadata, segment=False):
         exclude_headers = [DLO_ETAG_FIELD, SLO_ETAG_FIELD, COMBINED_ETAG_FIELD]
         user_exclude_headers = [SWIFT_USER_META_PREFIX + hdr
                                 for hdr in exclude_headers]
@@ -970,14 +983,46 @@ class SyncSwift(BaseSync):
         local_keys = [key.lower() for key in local_metadata.keys()
                       if key.lower().startswith(SWIFT_USER_META_PREFIX) or
                       key.lower() in self.propagated_headers]
+
         if set(remote_keys) != set(local_keys):
             return False
         for key in local_keys:
-            if local_metadata[key] != remote_metadata[key]:
+            if key == 'x-delete-at' and self.propagate_expiration_offset:
+                expected_remote_expiration = int(local_metadata[key]) +\
+                    self.propagate_expiration_offset
+                if expected_remote_expiration != int(remote_metadata[key]):
+                    return False
+            elif local_metadata[key] != remote_metadata[key]:
                 return False
+
+        if self.remote_delete_after:
+            # X-Delete-At less X-Timestamp should equal remote_delete_after.
+            if 'X-Delete-At' not in remote_metadata:
+                return False
+            delta = int(remote_metadata['X-Delete-At']) -\
+                int(remote_metadata['X-Timestamp'])
+            if segment:
+                expected_delta = self.remote_delete_after_addition
+            else:
+                expected_delta = self.remote_delete_after
+            return delta == expected_delta
+        # TODO: Check remote_delete_after setting being
+        # removed.
+
         return True
 
-    def _get_user_headers(self, all_headers):
-        return dict([(key, value) for key, value in all_headers.items()
-                     if key.lower().startswith(SWIFT_USER_META_PREFIX) or
-                     key.lower() in self.propagated_headers])
+    def _get_user_headers(self, all_headers, segment=False):
+        headers = dict([(key.lower(), value.lower())
+                        for key, value in all_headers.items()
+                        if key.lower().startswith(SWIFT_USER_META_PREFIX) or
+                        key.lower() in self.propagated_headers])
+        if 'x-delete-at' in headers:
+            headers['x-delete-at'] = str(
+                int(headers['x-delete-at']) +
+                self.propagate_expiration_offset)
+        elif self.remote_delete_after:
+            del_after = self.remote_delete_after
+            if segment:
+                del_after += self.remote_delete_after_addition
+            headers.update({'x-delete-after': del_after})
+        return headers

@@ -665,7 +665,7 @@ class TestMainTrackClientCalls(unittest.TestCase):
             mock.call.post_object(
                 'some-bucket', 'cloud_sync_test_object', headers={
                     'content-type': 'text/plain',
-                    'X-Object-Meta-Cloud-Sync': 'fabcab'}),
+                    'x-object-meta-cloud-sync': 'fabcab'}),
             mock.call.head_object('some-bucket', 'cloud_sync_test_object',
                                   headers={}),
             mock.call.get_container('some-bucket', delimiter='', limit=1,
@@ -711,7 +711,7 @@ class TestMainTrackClientCalls(unittest.TestCase):
             mock.call.post_object(
                 'some-bucket', 'cloud_sync_test_object', headers={
                     'content-type': 'text/plain',
-                    'X-Object-Meta-Cloud-Sync': 'fabcab'}),
+                    'x-object-meta-cloud-sync': 'fabcab'}),
             mock.call.head_object('some-bucket', 'cloud_sync_test_object',
                                   headers={}),
             mock.call.get_container('some-bucket', delimiter='', limit=1,

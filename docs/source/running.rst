@@ -48,6 +48,7 @@ all profiles:
                "exclude_pattern": "",
                "propagate_delete": false,
                "propagate_expiration": false,
+               "propagate_expiration_offset": 3600,
                "remote_delete_after": 15552000,
                "remote_delete_after_addition": 86400,
                "retain_local": false,
@@ -91,6 +92,9 @@ Sync Profile
     synced to remote cluster. Note: *remote_delete_after* takes precedence
     over this option (*Optional*. Default: ``False``. This option is only
     available to Swift protocol)
+  - **propagate_expiration_offset**: If set, the value of object's expiration
+    header (X-Delete-At) is incremented by the specified value (*Optional*.
+    Default: 0).
   - **remote_delete_after**: Delete after setting for remote objects. For Swift
     remote clusters, this is applied to each object. For S3, it is applied as a
     lifecycle policy for the prefix. Note that in both cases, the delete after
