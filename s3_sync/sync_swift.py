@@ -510,26 +510,25 @@ class SyncSwift(BaseSync):
                 return self.UploadStatus.POST
             return self.UploadStatus.NOOP
 
-        with self.client_pool.get_client() as swift_client:
-            body = FileWrapper(
-                internal_client, self.account, src_container, key, req_hdrs,
-                stats_cb=stats_cb)
-            headers = self._get_user_headers(
-                body.get_headers(), segment=segment)
-            self.logger.debug('Uploading %s with meta: %r' % (
-                key, headers))
+        body = FileWrapper(
+            internal_client, self.account, src_container, key, req_hdrs,
+            stats_cb=stats_cb)
+        headers = self._get_user_headers(
+            body.get_headers(), segment=segment)
+        self.logger.debug('Uploading %s with meta: %r' % (
+            key, headers))
 
-            try:
-                resp = self.put_object(
-                    key, self._client_headers(headers), body,
-                    bucket=dst_container,
-                    etag=body.get_headers()['etag'],
-                    content_length=len(body))
-                if not resp.success:
-                    resp.reraise()
-            finally:
-                body.close()
-            return self.UploadStatus.PUT
+        try:
+            resp = self.put_object(
+                key, self._client_headers(headers), body,
+                bucket=dst_container,
+                etag=body.get_headers()['etag'],
+                content_length=len(body))
+            if not resp.success:
+                resp.reraise()
+        finally:
+            body.close()
+        return self.UploadStatus.PUT
 
     def _upload_combined_objects(self, src_container, dst_container, key,
                                  objects, internal_client, stats_cb=None):
