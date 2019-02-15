@@ -1,6 +1,30 @@
 History
 =======
 
+0.1.54 (2019-02-15)
+-------------------
+
+Features
+   - Added support for DLOs in swift-s3-sync when the target is Swift.
+   - Allow container ACLs to be optionally synced (when the target is Swift).
+   - Optionally sync object expiration headers when the target is Swift.
+   - DLO can be converted to SLO during sync/archive (lifecycle).
+   - Added an option to remove segments when the large object is archived.
+   - Objects can be excluded from 1space sync operations by specifying an
+   exclude pattern.
+   - Smalled segments can be combined into larger ones during sync/archive if
+   the `min_segment_size` option is set.
+   - Added an option to offset expiration of remote objects by a specified fixed
+   time interval.
+
+Bug fixes
+   - Set Content-Length correctly when handling errors from remote S3
+   blobstores during shunt requests. Otherwise, the clients receive a 500 error.
+
+Improvements
+   - Changed the swift-s3-verify command to avoid a 4-byte unicode sequence, as
+   some S3-clones do not support 4-byte sequences (e.g. BackBlaze).
+
 0.1.53 (2019-01-22)
 -------------------
 
