@@ -11,29 +11,29 @@ Features
    - DLO can be converted to SLO during sync/archive (lifecycle).
    - Added an option to remove segments when the large object is archived.
    - Objects can be excluded from 1space sync operations by specifying an
-   exclude pattern.
+     exclude pattern.
    - Smalled segments can be combined into larger ones during sync/archive if
-   the `min_segment_size` option is set.
+     the `min_segment_size` option is set.
    - Added an option to offset expiration of remote objects by a specified fixed
-   time interval.
+     time interval.
 
 Bug fixes
    - Set Content-Length correctly when handling errors from remote S3
-   blobstores during shunt requests. Otherwise, the clients receive a 500 error.
+     blobstores during shunt requests. Otherwise, the clients receive a 500 error.
 
 Improvements
    - Changed the swift-s3-verify command to avoid a 4-byte unicode sequence, as
-   some S3-clones do not support 4-byte sequences (e.g. BackBlaze).
+     some S3-clones do not support 4-byte sequences (e.g. BackBlaze).
 
 0.1.53 (2019-01-22)
 -------------------
 
 Features
    - When using sync or lifecycle with Swift as the target blobstore, container
-   metadata can now be propagated if `sync_container_metadata` is set.
+     metadata can now be propagated if `sync_container_metadata` is set.
    - The `remote_delete_after` option now applies to the AWS S3 blobstore.
-   1space will attempt to set the lifecycle policy for the required prefixes on
-   the bucket.
+     1space will attempt to set the lifecycle policy for the required prefixes on
+     the bucket.
 
 0.1.52 (2018-12-17)
 -------------------
