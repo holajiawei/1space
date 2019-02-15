@@ -21,7 +21,6 @@ import mock
 from s3_sync.sync_swift import SyncSwift
 from s3_sync import utils
 import StringIO
-import swiftclient
 from swiftclient.exceptions import ClientException
 from swift.common import swob
 from swift.common.internal_client import UnexpectedResponse
@@ -296,9 +295,8 @@ class TestSyncSwift(unittest.TestCase):
                'storage_policy_index': 42}
 
         mock_swift.return_value.head_object.side_effect =\
-            swiftclient.exceptions.ClientException(
-                'something bad', http_status=500)
-        with self.assertRaises(swiftclient.exceptions.ClientException):
+            ClientException('something bad', http_status=500)
+        with self.assertRaises(ClientException):
             self.sync_swift.upload_object(row, mock.Mock())
 
         mock_swift.return_value.reset_mock()
@@ -2114,9 +2112,7 @@ class TestSyncSwift(unittest.TestCase):
                     {'name': '/segment_container/slo-object/part2',
                      'hash': 'beefdead'}]
 
-        swift_client = mock.Mock()
-        mock_swift.return_value = swift_client
-
+        swift_client = mock_swift.return_value
         swift_client.head_object.return_value = {
             'x-static-large-object': 'True',
             'etag': 'deadbeef'
@@ -2133,6 +2129,111 @@ class TestSyncSwift(unittest.TestCase):
 
         swift_client.head_object.assert_called_once_with(
             self.aws_bucket, slo_key, headers={})
+
+    @mock.patch('s3_sync.sync_swift.swiftclient.client.Connection')
+    def test_delete_dlo(self, mock_swift):
+        dlo_key = 'dlo_object'
+        manifest = 'foo_segments/objects-'
+
+        swift_client = mock_swift.return_value
+        swift_client.head_object.return_value = {
+            'x-object-manifest': manifest,
+            'etag': 'deadbeef'
+        }
+
+        swift_client.delete_object.return_value = None
+        swift_client.get_container.side_effect = (
+            [({}, [{'name': 'objects-0'},
+                   {'name': 'objects-1'},
+                   {'name': 'objects-2'}]),
+             ({}, [])])
+
+        self.sync_swift.delete_object(dlo_key)
+
+        self.assertEqual(
+            [mock.call('foo_segments', 'objects-%d' % i, headers={})
+             for i in range(3)] +
+            [mock.call(self.aws_bucket, dlo_key, headers={})],
+            swift_client.delete_object.mock_calls)
+
+    @mock.patch('s3_sync.sync_swift.swiftclient.client.Connection')
+    def test_delete_dlo_failure(self, mock_swift):
+        dlo_key = 'dlo_object'
+        manifest = 'foo_segments/objects-'
+
+        swift_client = mock_swift.return_value
+        swift_client.head_object.return_value = {
+            'x-object-manifest': manifest,
+            'etag': 'deadbeef'
+        }
+
+        swift_client.delete_object.side_effect = ClientException(
+            'error', http_status=500, http_response_headers={})
+        swift_client.get_container.side_effect = (
+            [({}, [{'name': 'objects-0'},
+                   {'name': 'objects-1'},
+                   {'name': 'objects-2'}]),
+             ({}, [])])
+
+        with self.assertRaises(RuntimeError):
+            self.sync_swift.delete_object(dlo_key)
+
+        self.assertEqual(
+            [mock.call('foo_segments', 'objects-%d' % i, headers={})
+             for i in range(3)],
+            swift_client.delete_object.mock_calls)
+
+    @mock.patch('s3_sync.sync_swift.swiftclient.client.Connection')
+    def test_delete_dlo_not_found_segments_container(self, mock_swift):
+        dlo_key = 'dlo_object'
+        manifest = 'foo_segments/objects-'
+
+        swift_client = mock_swift.return_value
+        swift_client.head_object.return_value = {
+            'x-object-manifest': manifest,
+            'etag': 'deadbeef'
+        }
+
+        swift_client.delete_object.return_value = None
+        swift_client.get_container.side_effect = self.not_found
+
+        self.sync_swift.delete_object(dlo_key)
+
+        self.assertEqual(
+            [mock.call(self.aws_bucket, dlo_key, headers={})],
+            swift_client.delete_object.mock_calls)
+
+    @mock.patch('s3_sync.sync_swift.swiftclient.client.Connection')
+    def test_delete_dlo_not_found_segments(self, mock_swift):
+        dlo_key = 'dlo_object'
+        manifest = 'foo_segments/objects-'
+
+        swift_client = mock_swift.return_value
+        swift_client.head_object.return_value = {
+            'x-object-manifest': manifest,
+            'etag': 'deadbeef'
+        }
+
+        def _fake_delete(container, key, *args, **kwargs):
+            if key == dlo_key:
+                return None
+            else:
+                raise self.not_found
+
+        swift_client.delete_object.side_effect = _fake_delete
+        swift_client.get_container.side_effect = (
+            [({}, [{'name': 'objects-0'},
+                   {'name': 'objects-1'},
+                   {'name': 'objects-2'}]),
+             ({}, [])])
+
+        self.sync_swift.delete_object(dlo_key)
+
+        self.assertEqual(
+            [mock.call('foo_segments', 'objects-%d' % i, headers={})
+             for i in range(3)] +
+            [mock.call(self.aws_bucket, dlo_key, headers={})],
+            swift_client.delete_object.mock_calls)
 
     @mock.patch('s3_sync.sync_swift.swiftclient.client.Connection')
     def test_shunt_object(self, mock_swift):

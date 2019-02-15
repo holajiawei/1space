@@ -21,14 +21,15 @@ import traceback
 import urllib
 
 from container_crawler.exceptions import RetryError
+from functools import partial
 from swift.common.internal_client import UnexpectedResponse
 from swift.common.utils import decode_timestamps
 from .base_sync import BaseSync, ProviderResponse, match_item
 from .utils import (ClosingResourceIterable, check_slo, COMBINED_ETAG_FIELD,
                     CombinedFileWrapper, DLO_ETAG_FIELD, FileWrapper,
                     get_dlo_prefix, get_internal_manifest,
-                    iter_internal_listing, MANIFEST_HEADER, SLO_ETAG_FIELD,
-                    SWIFT_USER_META_PREFIX)
+                    iter_internal_listing, iter_listing, MANIFEST_HEADER,
+                    SLO_ETAG_FIELD, SWIFT_USER_META_PREFIX)
 
 # We have to import keystone upfront to avoid green threads issue with the lazy
 # importer
@@ -145,14 +146,36 @@ class SyncSwift(BaseSync):
         headers.update(self.extra_headers)
         return headers
 
+    def head_account(self):
+        return self._call_swiftclient('head_account', None, None)
+
+    def head_bucket(self, bucket=None, **options):
+        if bucket is None:
+            bucket = self.remote_container
+        return self._call_swiftclient(
+            'head_container', bucket, None, **options)
+
+    def list_buckets(self, marker='', limit=None, prefix='', **kwargs):
+        # NOTE: swiftclient does not currently support delimiter, so we ignore
+        # it
+        resp = self._call_swiftclient('get_account', None, None, marker=marker,
+                                      prefix=prefix, limit=limit)
+        if resp.status != 200:
+            return resp
+        for entry in resp.body:
+            entry['content_location'] = self._make_content_location(
+                entry['name'])
+        return resp
+
+    def post_container(self, metadata):
+        return self._call_swiftclient(
+            'post_container', self.remote_container, None, headers=metadata)
+
     def post_object(self, key, headers, bucket=None):
         if not bucket:
             bucket = self.remote_container
         return self._call_swiftclient(
             'post_object', bucket, key, headers=headers)
-
-    def head_account(self):
-        return self._call_swiftclient('head_account', None, None)
 
     def put_object(self, key, headers, body, bucket=None, **options):
         if not bucket:
@@ -186,8 +209,8 @@ class SyncSwift(BaseSync):
         """Delete an object from the remote cluster.
 
         This is slightly more complex than when we deal with S3/GCS, as the
-        remote store may have SLO manifests, as well. Because of that, this
-        turns into HEAD+DELETE.
+        remote store may have SLO and DLO manifests, as well. Because of that,
+        this turns into HEAD+DELETE.
         """
         if not bucket:
             bucket = self.remote_container
@@ -197,11 +220,19 @@ class SyncSwift(BaseSync):
                 return resp
             resp.reraise()
 
+        dlo_manifest = resp.headers.get(MANIFEST_HEADER, '').decode('utf-8')
+        if dlo_manifest:
+            failed_segments = self._delete_remote_dlo_segments(dlo_manifest)
+            if failed_segments:
+                self.logger.debug('Failing to remove segments %s' %
+                                  str(failed_segments))
+                raise RuntimeError('Failed to remove segments for DLO %s/%s' %
+                                   (bucket, key))
+
         delete_kwargs = {'headers': self._client_headers()}
         if check_slo(resp.headers):
             delete_kwargs['query_string'] = 'multipart-manifest=delete'
-        resp = self._call_swiftclient('delete_object',
-                                      self.remote_container, key,
+        resp = self._call_swiftclient('delete_object', bucket, key,
                                       **delete_kwargs)
         if not resp.success and resp.status != 404:
             resp.reraise()
@@ -276,23 +307,51 @@ class SyncSwift(BaseSync):
         return self._call_swiftclient(
             'get_object', bucket, key, **options)
 
-    def head_bucket(self, bucket=None, **options):
+    def list_objects(self, marker, limit, prefix, delimiter=None,
+                     bucket=None):
         if bucket is None:
             bucket = self.remote_container
-        return self._call_swiftclient(
-            'head_container', bucket, None, **options)
+        resp = self._call_swiftclient(
+            'get_container', bucket, None,
+            marker=marker, limit=limit, prefix=prefix, delimiter=delimiter)
 
-    def list_buckets(self, marker='', limit=None, prefix='', **kwargs):
-        # NOTE: swiftclient does not currently support delimiter, so we ignore
-        # it
-        resp = self._call_swiftclient('get_account', None, None, marker=marker,
-                                      prefix=prefix, limit=limit)
-        if resp.status != 200:
+        if not resp.success:
             return resp
+
         for entry in resp.body:
-            entry['content_location'] = self._make_content_location(
-                entry['name'])
+            entry['content_location'] = self._make_content_location(bucket)
         return resp
+
+    def update_metadata(self, key, metadata, remote_metadata={}, bucket=None):
+        user_headers = self._get_user_headers(metadata)
+        dlo_manifest = metadata.get(MANIFEST_HEADER, '').decode('utf-8')
+        if dlo_manifest:
+            # We have to preserve both our computed DLO ETag *and* the manifest
+            # header.
+            dlo_etag_field = SWIFT_USER_META_PREFIX + DLO_ETAG_FIELD
+            user_headers[dlo_etag_field] = remote_metadata.get(dlo_etag_field)
+            if not self.convert_dlo:
+                segments_bucket, prefix = dlo_manifest.split('/', 1)
+                user_headers[MANIFEST_HEADER] = '%s/%s' % (
+                    self.remote_segments_container(segments_bucket),
+                    prefix)
+        self.post_object(key, user_headers, bucket)
+
+    def get_manifest(self, key, bucket=None):
+        if bucket is None:
+            bucket = self.remote_container
+        with self.client_pool.get_client() as swift_client:
+            try:
+                headers, body = swift_client.get_object(
+                    bucket, key,
+                    query_string='multipart-manifest=get',
+                    headers=self._client_headers())
+                if 'x-static-large-object' not in headers:
+                    return None
+                return json.loads(body)
+            except Exception as e:
+                self.logger.warning('Failed to fetch the manifest: %s' % e)
+                return None
 
     def _call_swiftclient(self, op, container, key, **args):
         def translate(header, value):
@@ -546,36 +605,6 @@ class SyncSwift(BaseSync):
             self.settings['aws_identity'].decode('utf8')
         return '%s;%s;%s' % (self.endpoint, u_ident, bucket)
 
-    def list_objects(self, marker, limit, prefix, delimiter=None,
-                     bucket=None):
-        if bucket is None:
-            bucket = self.remote_container
-        resp = self._call_swiftclient(
-            'get_container', bucket, None,
-            marker=marker, limit=limit, prefix=prefix, delimiter=delimiter)
-
-        if not resp.success:
-            return resp
-
-        for entry in resp.body:
-            entry['content_location'] = self._make_content_location(bucket)
-        return resp
-
-    def update_metadata(self, key, metadata, remote_metadata={}, bucket=None):
-        user_headers = self._get_user_headers(metadata)
-        dlo_manifest = metadata.get(MANIFEST_HEADER, '').decode('utf-8')
-        if dlo_manifest:
-            # We have to preserve both our computed DLO ETag *and* the manifest
-            # header.
-            dlo_etag_field = SWIFT_USER_META_PREFIX + DLO_ETAG_FIELD
-            user_headers[dlo_etag_field] = remote_metadata.get(dlo_etag_field)
-            if not self.convert_dlo:
-                segments_bucket, prefix = dlo_manifest.split('/', 1)
-                user_headers[MANIFEST_HEADER] = '%s/%s' % (
-                    self.remote_segments_container(segments_bucket),
-                    prefix)
-        self.post_object(key, user_headers, bucket)
-
     def _upload_objects(
             self, objects_list, internal_client, stats_cb=None, prefix=None):
         work_queue = eventlet.queue.Queue(self.SLO_QUEUE_SIZE)
@@ -621,7 +650,7 @@ class SyncSwift(BaseSync):
         _add_work(container, segments_list, segment_size, index)
 
         work_queue.join()
-        for _ in range(self.SLO_WORKERS):
+        for _ in range(worker_pool.running()):
             work_queue.put(None)
         errors = []
         failures = []
@@ -780,22 +809,6 @@ class SyncSwift(BaseSync):
                     manifest_body.close()
         return self.UploadStatus.PUT
 
-    def get_manifest(self, key, bucket=None):
-        if bucket is None:
-            bucket = self.remote_container
-        with self.client_pool.get_client() as swift_client:
-            try:
-                headers, body = swift_client.get_object(
-                    bucket, key,
-                    query_string='multipart-manifest=get',
-                    headers=self._client_headers())
-                if 'x-static-large-object' not in headers:
-                    return None
-                return json.loads(body)
-            except Exception as e:
-                self.logger.warning('Failed to fetch the manifest: %s' % e)
-                return None
-
     def _upload_segment_worker(self, work_queue, internal_client,
                                stats_cb=None):
         errors = []
@@ -904,9 +917,46 @@ class SyncSwift(BaseSync):
                           (remote_metadata.get(remote_dlo_header), dlo_etag))
         return remote_metadata.get(remote_dlo_header) == dlo_etag
 
-    def post_container(self, metadata):
-        return self._call_swiftclient(
-            'post_container', self.remote_container, None, headers=metadata)
+    def _delete_remote_dlo_segments(self, manifest):
+        def _delete_worker(queue):
+            failures = []
+            while True:
+                work = queue.get()
+                if work is None:
+                    queue.task_done()
+                    return failures
+                try:
+                    container, obj = work
+                    resp = self._call_swiftclient(
+                        'delete_object', container, obj)
+                    if not resp.success and resp.status != 404:
+                        failures.append(work)
+                finally:
+                    queue.task_done()
+
+        segments_container, prefix = manifest.split('/', 1)
+        resp, segments_iterator = iter_listing(
+            partial(self.list_objects, bucket=segments_container),
+            self.logger, None, None, prefix, None)
+        if not resp.success:
+            if resp.status != 404:
+                resp.reraise()
+            return
+
+        segments_queue = eventlet.queue.Queue(self.SLO_QUEUE_SIZE)
+        pool = eventlet.greenpool.GreenPool(self.SLO_WORKERS)
+        workers = [pool.spawn(_delete_worker, segments_queue)]
+        for entry, _ in segments_iterator:
+            if not entry:
+                break
+            segments_queue.put((segments_container, entry['name']))
+        segments_queue.join()
+        for _ in range(pool.running()):
+            segments_queue.put(None)
+        failed_segments = []
+        for thread in workers:
+            failed_segments.extend(thread.wait())
+        return failed_segments
 
     def _is_meta_synced(self, local_metadata, remote_metadata):
         exclude_headers = [DLO_ETAG_FIELD, SLO_ETAG_FIELD, COMBINED_ETAG_FIELD]

@@ -36,6 +36,9 @@ DAY_F = DAY * 1.0
 
 
 class TestCloudSync(TestCloudSyncBase):
+    def setUp(self):
+        self.statsd_server.clear()
+
     def tearDown(self):
         self.statsd_server.clear()
 
@@ -919,8 +922,8 @@ class TestCloudSync(TestCloudSyncBase):
     def test_swift_archive_slo_w_delete_segments(self):
         content = 'A' * 2048
         key = 'test_swift_slo_del_segments'
-        mapping = self._find_mapping(
-            lambda m: m['aws_bucket'] == 'bit-bucket')
+        mapping = dict(self._find_mapping(
+            lambda m: m['aws_bucket'] == 'bit-bucket'))
         mapping['retain_local_segments'] = False
 
         crawler = utils.get_container_crawler(mapping)
@@ -972,8 +975,8 @@ class TestCloudSync(TestCloudSyncBase):
     def test_swift_archive_dlo_w_delete_segments(self):
         content = [chr(ord('A') + i) * 1024 for i in range(10)]
         key = 'test_swift_dlo_del_segments'
-        mapping = self._find_mapping(
-            lambda m: m['aws_bucket'] == 'bit-bucket')
+        mapping = dict(self._find_mapping(
+            lambda m: m['aws_bucket'] == 'bit-bucket'))
         mapping['retain_local_segments'] = False
         crawler = utils.get_container_crawler(mapping)
         manifest = 'segments/test-dlo-parts-'
@@ -1717,6 +1720,55 @@ class TestCloudSync(TestCloudSyncBase):
         clear_swift_container(self.swift_src, segments_container)
         clear_swift_container(self.swift_dst,
                               '%s_segments' % mapping['aws_bucket'])
+
+    def test_swift_sync_delete_dlo(self):
+        content = [chr(ord('A') + i) * 1024 for i in range(10)]
+        key = 'test_dlo'
+        mapping = self.swift_sync_mapping()
+        crawler = utils.get_container_crawler(mapping)
+        segments_container = 'segments'
+        manifest = '%s/test-dlo-parts-' % segments_container
+        self.local_swift('put_container', segments_container)
+        for i in range(len(content)):
+            self.local_swift(
+                'put_object', 'segments', 'test-dlo-parts-%d' % i, content[i])
+        self.local_swift(
+            'put_object', mapping['container'], key, '',
+            headers={'x-object-manifest': manifest})
+        self.remote_swift('put_container',
+                          '%s_segments' % mapping['aws_bucket'])
+
+        crawler.run_once()
+
+        headers = self.remote_swift('head_object', mapping['aws_bucket'], key)
+        dlo_etag = hashlib.md5(''.join(
+            [hashlib.md5(content[i]).hexdigest() for i in range(len(content))]
+        )).hexdigest()
+        self.assertEqual('"%s"' % dlo_etag, headers['etag'])
+        self.assertEqual(dlo_etag,
+                         headers.get('x-object-meta-swift-source-dlo-etag'))
+
+        self._assert_stats(
+            mapping,
+            {'copied_objects': 1,
+             'bytes': sum(map(len, content))})
+
+        # Deleting the object should remove the remote segments 0a0s0 well
+        self.local_swift('delete_object', mapping['container'], key)
+        crawler.run_once()
+        _, listing = self.remote_swift(
+            'get_container', '%s_segments' % mapping['aws_bucket'])
+        self.assertEqual(0, len(listing))
+
+        with self.assertRaises(ClientException) as ctx:
+            self.remote_swift('head_object', mapping['aws_bucket'], key)
+        self.assertEqual(404, ctx.exception.http_status)
+
+        clear_swift_container(self.swift_src, mapping['container'])
+        clear_swift_container(self.swift_src, segments_container)
+        clear_swift_container(self.swift_dst, mapping['aws_bucket'])
+        clear_swift_container(
+            self.swift_dst, '%s_segments ' % mapping['aws_bucket'])
 
     def test_swift_dont_shunt_post(self):
         # shunt middleware only shunts POST request for migration profiles
