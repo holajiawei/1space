@@ -1,6 +1,12 @@
 History
 =======
 
+0.1.55 (2019-02-15)
+-------------------
+
+Bug fixes
+   - Resolved a deadlock introduced in 0.1.54.
+
 0.1.54 (2019-02-15)
 -------------------
 
@@ -12,7 +18,7 @@ Features
    - Added an option to remove segments when the large object is archived.
    - Objects can be excluded from 1space sync operations by specifying an
      exclude pattern.
-   - Smalled segments can be combined into larger ones during sync/archive if
+   - Smaller segments can be combined into larger ones during sync/archive if
      the `min_segment_size` option is set.
    - Added an option to offset expiration of remote objects by a specified fixed
      time interval.
