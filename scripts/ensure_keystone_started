@@ -2,7 +2,7 @@
 set -e
 
 # The following method is cross-platform (OS X and Linux)
-MYDIR=$(dirname $(python -c 'import os,sys;print os.path.realpath(sys.argv[1])' $0))
+MYDIR=$(python -c 'import os,sys;print(os.path.dirname(os.path.realpath(sys.argv[1])))' $0)
 cd "$MYDIR"/..
 
 # Build the image
