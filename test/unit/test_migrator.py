@@ -2459,6 +2459,7 @@ class TestMain(unittest.TestCase):
             'poll_interval': 30,
             'segment_size': 1000000,
             'once': True,
+            'statsd_client': None,
         }
 
     @contextmanager
@@ -2547,10 +2548,10 @@ class TestMain(unittest.TestCase):
             mock_status.assert_called_once_with('/test/status')
             mock_migrator.assert_called_once_with(
                 config['migrations'][0], mock_status.return_value, 42, 1337,
-                mock.ANY, mock.ANY, mock.ANY, 100000000)
+                mock.ANY, mock.ANY, mock.ANY, 100000000, None)
             mock_run.assert_called_once_with(
                 config['migrations'], mock_status.return_value, mock.ANY,
-                mock.ANY, 42, 1337, mock.ANY, 60, 100000000, True)
+                mock.ANY, 42, 1337, mock.ANY, 60, 100000000, None, True)
 
     @mock.patch('s3_sync.migrator.create_provider')
     def test_migrate_all_containers_error(self, create_provider_mock):
@@ -2583,5 +2584,5 @@ class TestMain(unittest.TestCase):
 
         s3_sync.migrator.run(
             migrations, status, mock.Mock(max_size=10), logging.getLogger(),
-            1000, 10, mock.Mock(return_value=True), 10, 1000000, True)
+            1000, 10, mock.Mock(return_value=True), 10, 1000000, None, True)
         self.assertEqual(old_list, status.status_list)
