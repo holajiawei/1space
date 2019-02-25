@@ -339,7 +339,9 @@ class Migrator(object):
         self.gthread_local = eventlet.corolocal.local()
         self.segment_size = segment_size
         self.statsd_client = statsd_client
+        self.handled_containers = []
 
+    def statsd_increment(self, metric, value):
         statsd_prefix_parts = [
             self.config.get('aws_endpoint', 'S3'),
             '/'.join(filter(
@@ -348,17 +350,15 @@ class Migrator(object):
             self.config.get('account'),
             self.config.get('container')
         ]
-        self.statsd_prefix = '.'.join(
+
+        statsd_prefix = '.'.join(
             [urllib.quote(part.encode('utf-8'), safe='').replace('.', '%2E')
              for part in statsd_prefix_parts])
 
-        self.handled_containers = []
-
-    def statsd_increment(self, metric, value):
         if not self.statsd_client:
             return
         self.statsd_client.update_stats(
-            '.'.join([self.statsd_prefix, metric]), value)
+            '.'.join([statsd_prefix, metric]), value)
 
     def next_pass(self):
         if self.config['aws_bucket'] != '/*':
@@ -483,7 +483,7 @@ class Migrator(object):
 
     def _next_pass(self):
         self.object_queue = self.primary_queue
-        self.stats = MigratorPassStats()
+        self.stats = MigratorPassStats(self.statsd_increment)
         self._process_account_metadata()
         worker_pool = eventlet.GreenPool(self.workers)
         for _ in xrange(self.workers):
@@ -951,7 +951,6 @@ class Migrator(object):
                     marker = remote['name']
 
         self.stats.update(scanned=scanned)
-        self.statsd_increment('scanned', scanned)
 
         while local and (not marker or local['name'] < marker or scanned == 0):
             # We may have objects left behind that need to be removed
@@ -1238,9 +1237,6 @@ class Migrator(object):
         self.stats.update(
             copied=self.gthread_local.uploaded_objects,
             bytes_copied=self.gthread_local.bytes_copied)
-        self.statsd_increment('copied_objects',
-                              self.gthread_local.uploaded_objects)
-        self.statsd_increment('bytes', self.gthread_local.bytes_copied)
 
     def close(self):
         if not self.provider:

@@ -26,13 +26,20 @@ class AtomicStats(object):
 
 
 class MigratorPassStats(AtomicStats):
-    def __init__(self):
+    def __init__(self, statsd_increment):
         super(MigratorPassStats, self).__init__()
+        self.statsd_increment = statsd_increment
         self.copied = 0
         self.scanned = 0
         self.bytes_copied = 0
 
     def _update_stats(self, copied=0, scanned=0, bytes_copied=0):
-        self.copied += copied
-        self.scanned += scanned
-        self.bytes_copied += bytes_copied
+        if copied > 0:
+            self.copied += copied
+            self.statsd_increment('copied_objects', copied)
+        if scanned > 0:
+            self.scanned += scanned
+            self.statsd_increment('scanned', scanned)
+        if bytes_copied > 0:
+            self.bytes_copied += bytes_copied
+            self.statsd_increment('bytes', bytes_copied)

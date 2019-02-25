@@ -32,6 +32,7 @@ import unittest
 from tempfile import NamedTemporaryFile, mkdtemp
 import shutil
 import os
+from s3_sync.stats import MigratorPassStats
 
 
 def create_timestamp(epoch_ts):
@@ -2586,3 +2587,30 @@ class TestMain(unittest.TestCase):
             migrations, status, mock.Mock(max_size=10), logging.getLogger(),
             1000, 10, mock.Mock(return_value=True), 10, 1000000, None, True)
         self.assertEqual(old_list, status.status_list)
+
+    def test_migrator_stats(self):
+        config = {
+            "account": "AUTH_dev",
+            "aws_bucket": "bucket.example.com",
+            "aws_identity": "identity",
+            "aws_secret": "secret",
+            "container": "bucket.example.com",
+            "all_buckets": True,
+            "prefix": "",
+            "protocol": "s3",
+            "remote_account": "",
+        }
+
+        statsd_client = mock.Mock()
+
+        migrator = s3_sync.migrator.Migrator(config, mock.Mock(),
+                                             10, 5, mock.Mock(max_size=1),
+                                             None, mock.Mock(), 1000000,
+                                             statsd_client)
+
+        stats = MigratorPassStats(migrator.statsd_increment)
+        stats.update(scanned=1)
+
+        statsd_client.update_stats.assert_called_once_with(
+            'S3.bucket%2Eexample%2Ecom.AUTH_dev.bucket%2Eexample%2Ecom.'
+            'scanned', 1)
