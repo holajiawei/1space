@@ -340,8 +340,8 @@ class Migrator(object):
         self.segment_size = segment_size
         self.statsd_client = statsd_client
         self.handled_containers = []
+        self.start_time = time.time()
 
-    def statsd_increment(self, metric, value):
         statsd_prefix_parts = [
             self.config.get('aws_endpoint', 'S3'),
             '/'.join(filter(
@@ -351,14 +351,21 @@ class Migrator(object):
             self.config.get('container')
         ]
 
-        statsd_prefix = '.'.join(
+        self.statsd_prefix = '.'.join(
             [urllib.quote(part.encode('utf-8'), safe='').replace('.', '%2E')
              for part in statsd_prefix_parts])
 
+    def statsd_increment(self, metric, value):
         if not self.statsd_client:
             return
         self.statsd_client.update_stats(
-            '.'.join([statsd_prefix, metric]), value)
+            '.'.join([self.statsd_prefix, metric]), value)
+
+    def statsd_timing(self, metric, value):
+        if not self.statsd_client:
+            return
+        self.statsd_client.timing(
+            '.'.join([self.statsd_prefix, metric]), value)
 
     def next_pass(self):
         if self.config['aws_bucket'] != '/*':
@@ -527,6 +534,7 @@ class Migrator(object):
     def check_errors(self):
         while not self.errors.empty():
             container, key, err = self.errors.get()
+            self.statsd_increment('error_count', 1)
             if type(err) == str:
                 self.logger.error('Failed to migrate "%s/%s": %s' % (
                     container, key, err))
@@ -1239,6 +1247,9 @@ class Migrator(object):
             bytes_copied=self.gthread_local.bytes_copied)
 
     def close(self):
+        elapsed = time.time() - self.start_time
+        self.statsd_timing('cycle_time', elapsed * 1000)
+
         if not self.provider:
             return
         self.provider.close()
@@ -1285,6 +1296,9 @@ def run(migrations, migration_status, internal_pool, logger, items_chunk,
         elapsed = time.time() - cycle_start
         naptime = max(0, poll_interval - elapsed)
         msg = 'Finished cycle in %0.2fs' % elapsed
+        if statsd_client:
+            statsd_client.timing('1space.migrator.cycle_time', elapsed * 1000)
+
         if once:
             logger.info(msg)
             return

@@ -283,7 +283,7 @@ class S3SyncShunt(object):
     def iter_remote_objects(
             self, sync_profile, per_account, marker, limit, prefix, delimiter):
         provider = create_provider(sync_profile, max_conns=1,
-                                   per_account=per_account)
+                                   per_account=per_account, logger=self.logger)
         return iter_listing(
             provider.list_objects, self.logger, marker, limit, prefix,
             delimiter)
@@ -291,7 +291,8 @@ class S3SyncShunt(object):
     def iter_remote_account(
             self, sync_profile, marker, limit, prefix, delimiter):
         '''Iterate through the remote listing of containers.'''
-        provider = create_provider(sync_profile, max_conns=1)
+        provider = create_provider(sync_profile, max_conns=1,
+                                   logger=self.logger)
         return iter_listing(provider.list_buckets, self.logger, marker, limit,
                             prefix, delimiter)
 
@@ -332,7 +333,7 @@ class S3SyncShunt(object):
             return app_iter
 
         provider = create_provider(sync_profile, max_conns=1,
-                                   per_account=per_account)
+                                   per_account=per_account, logger=self.logger)
         headers = {}
         if sync_profile.get('protocol') == 'swift':
             try:
@@ -425,7 +426,7 @@ class S3SyncShunt(object):
             'x-trans-id', 'x-openstack-request-id')]
 
         provider = create_provider(sync_profile, max_conns=1,
-                                   per_account=per_account)
+                                   per_account=per_account, logger=self.logger)
 
         resp = provider.head_bucket(sync_profile['aws_bucket'])
         if resp.status != 200:
@@ -471,7 +472,7 @@ class S3SyncShunt(object):
         # NOTE: we may need to make auxiliary requests and hence need two
         # connections.
         provider = create_provider(sync_profile, max_conns=2,
-                                   per_account=per_account)
+                                   per_account=per_account, logger=self.logger)
         if req.method == 'GET' and sync_profile.get('restore_object', False) \
                 and 'range' not in req.headers:
 
@@ -559,7 +560,8 @@ class S3SyncShunt(object):
 
         if sync_profile.get('migration'):
             provider = create_provider(sync_profile, max_conns=1,
-                                       per_account=per_account)
+                                       per_account=per_account,
+                                       logger=self.logger)
             remote_resp = provider.shunt_delete(req, obj)
 
         if status.startswith('404'):
@@ -600,7 +602,7 @@ class S3SyncShunt(object):
             return app_iter
 
         provider = create_provider(sync_profile, max_conns=1,
-                                   per_account=per_account)
+                                   per_account=per_account, logger=self.logger)
         status, headers, app_iter = provider.shunt_post(req, obj)
         start_response(status, headers)
         return app_iter

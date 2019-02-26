@@ -975,7 +975,10 @@ class TestShunt(unittest.TestCase):
             'propagate_delete': False,
             'aws_bucket': 'dest-bucket',
             'aws_identity': 'user',
-            'aws_secret': 'key'}, max_conns=1, per_account=True)
+            'aws_secret': 'key'},
+            logger=self.app.shunted_app.logger,
+            max_conns=1,
+            per_account=True)
 
         # Follow it up with another request to a *different* container to make
         # sure we didn't bleed state
@@ -993,7 +996,10 @@ class TestShunt(unittest.TestCase):
             'propagate_delete': False,
             'aws_bucket': 'dest-bucket',
             'aws_identity': 'user',
-            'aws_secret': 'key'}, max_conns=1, per_account=True)
+            'aws_secret': 'key'},
+            logger=self.app.shunted_app.logger,
+            max_conns=1,
+            per_account=True)
 
     def test_list_container_shunt_swift(self):
         self.mock_list_swift.side_effect = [
