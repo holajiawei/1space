@@ -44,10 +44,10 @@ class StatsReporter(object):
         self.statsd_client = statsd_client
         self.metric_prefix = metric_prefix
 
-    def increment(self, metric, count=1):
+    def increment(self, metric, count):
         if self.statsd_client:
             stat_name = '.'.join([self.metric_prefix, metric])
-            self.statsd_client.increment(stat_name, count)
+            self.statsd_client.update_stats(stat_name, count)
 
     def timing(self, metric, timing):
         if self.statsd_client:

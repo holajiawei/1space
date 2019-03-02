@@ -30,8 +30,8 @@ class TestStatsReporter(unittest.TestCase):
     def test_statsd_client(self):
         instance = self.factory.instance('metric_prefix')
 
-        instance.increment('metric')
-        self.factory.statsd_client.increment.assert_called_once_with(
+        instance.increment('metric', 1)
+        self.factory.statsd_client.update_stats.assert_called_once_with(
             'metric_prefix.metric', 1)
 
         instance.timing('timing_metric', 100)
