@@ -3,6 +3,7 @@ import json
 import logging
 import s3_sync.daemon_utils
 import s3_sync.migrator
+from s3_sync.stats import StatsReporterFactory
 from swift.common.utils import whataremyips
 from . import CONTAINER_RING
 
@@ -44,6 +45,7 @@ class MigratorFactory(object):
         if not self.logger.handlers:
             s3_sync.daemon_utils.setup_logger(
                 s3_sync.migrator.LOGGER_NAME, self.migrator_config)
+        self.stats_factory = StatsReporterFactory(None, 8125, None)
 
     def get_migrator(self, migration, status):
         ic_pool = s3_sync.migrator.create_ic_pool(
@@ -52,4 +54,5 @@ class MigratorFactory(object):
         return s3_sync.migrator.Migrator(
             migration, status, self.migrator_config['items_chunk'],
             self.migrator_config['workers'], ic_pool, self.logger,
-            selector, self.migrator_config.get('segment_size', 100000000))
+            selector, self.migrator_config.get('segment_size', 100000000),
+            self.stats_factory)

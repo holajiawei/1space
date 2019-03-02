@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import eventlet
+import pystatsd.statsd
 
 
 class AtomicStats(object):
@@ -26,20 +27,44 @@ class AtomicStats(object):
 
 
 class MigratorPassStats(AtomicStats):
-    def __init__(self, statsd_increment):
+    def __init__(self):
         super(MigratorPassStats, self).__init__()
-        self.statsd_increment = statsd_increment
         self.copied = 0
         self.scanned = 0
         self.bytes_copied = 0
 
     def _update_stats(self, copied=0, scanned=0, bytes_copied=0):
-        if copied > 0:
-            self.copied += copied
-            self.statsd_increment('copied_objects', copied)
-        if scanned > 0:
-            self.scanned += scanned
-            self.statsd_increment('scanned', scanned)
-        if bytes_copied > 0:
-            self.bytes_copied += bytes_copied
-            self.statsd_increment('bytes', bytes_copied)
+        self.copied += copied
+        self.scanned += scanned
+        self.bytes_copied += bytes_copied
+
+
+class StatsReporter(object):
+    def __init__(self, statsd_client, metric_prefix):
+        self.statsd_client = statsd_client
+        self.metric_prefix = metric_prefix
+
+    def increment(self, metric, count=1):
+        if self.statsd_client:
+            stat_name = '.'.join([self.metric_prefix, metric])
+            self.statsd_client.increment(stat_name, count)
+
+    def timing(self, metric, timing):
+        if self.statsd_client:
+            stat_name = '.'.join([self.metric_prefix, metric])
+            self.statsd_client.timing(stat_name, timing)
+
+
+class StatsReporterFactory(object):
+    def __init__(self, statsd_host, statsd_port, statsd_prefix,
+                 handler_class=StatsReporter):
+        self._handler_class = handler_class
+        self.statsd_client = pystatsd.statsd.Client(
+            statsd_host, statsd_port, statsd_prefix
+        )
+
+    def __str__(self):
+        return 'StatsReporter'
+
+    def instance(self, metric_prefix):
+        return self._handler_class(self.statsd_client, metric_prefix)

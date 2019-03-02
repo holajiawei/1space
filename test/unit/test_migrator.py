@@ -32,7 +32,6 @@ import unittest
 from tempfile import NamedTemporaryFile, mkdtemp
 import shutil
 import os
-from s3_sync.stats import MigratorPassStats
 
 
 def create_timestamp(epoch_ts):
@@ -570,7 +569,7 @@ class TestMigratorUtils(unittest.TestCase):
         is_local_cont.return_value = True
         migrator = s3_sync.migrator.Migrator(
             config, status, 10, 5, mock.Mock(max_size=1), None, is_local_cont,
-            1000000)
+            1000000, mock.Mock())
         self.assertIn('custom_prefix', migrator.config)
         self.assertEqual('', migrator.config['custom_prefix'])
         status.save_migration(
@@ -685,6 +684,10 @@ class TestMigrator(unittest.TestCase):
         self.segment_size = 500 * 1024 * 1024
         self.logger.addHandler(logging.StreamHandler(self.stream))
 
+        self.stats_factory = mock.Mock()
+        stats_reporter = mock.Mock()
+        self.stats_factory.instance.return_value = stats_reporter
+
         selector = mock.Mock()
         selector.is_local_container.return_value = True
 
@@ -700,7 +703,7 @@ class TestMigrator(unittest.TestCase):
 
         self.migrator = s3_sync.migrator.Migrator(
             config, None, 1000, 5, pool, self.logger, selector,
-            self.segment_size)
+            self.segment_size, self.stats_factory)
         self.migrator.status = mock.Mock()
 
     def get_log_lines(self):
@@ -757,6 +760,8 @@ class TestMigrator(unittest.TestCase):
         self.migrator.next_pass()
         self.assertEqual('Failed to migrate "bucket"',
                          self.stream.getvalue().splitlines()[0])
+        self.migrator.stats_reporter.increment.assert_any_call('error_count',
+                                                               1)
 
     @mock.patch('s3_sync.migrator.create_provider')
     def test_all_containers(self, create_provider_mock):
@@ -1195,6 +1200,9 @@ class TestMigrator(unittest.TestCase):
             except AssertionError as e:
                 e.args += ('\nTest case: ', test_case)
                 raise
+            self.migrator.stats_reporter.increment.assert_any_call('bytes', 0)
+            self.migrator.stats_reporter.increment.assert_any_call(
+                'copied_objects', mock.ANY)
 
     @mock.patch('s3_sync.migrator.create_provider')
     def test_migrate_big_object(self, create_provider_mock):
@@ -2168,6 +2176,10 @@ class TestMigrator(unittest.TestCase):
                 mock.call(self.migrator.config['account'], 'foo', 'bar',
                           headers=hdrs))
 
+    def test_stats_reporting_prefix(self):
+        self.stats_factory.instance.assert_called_once_with(
+            'S3.bucket.AUTH_test.bucket')
+
 
 class TestStatus(unittest.TestCase):
 
@@ -2449,6 +2461,7 @@ class TestMain(unittest.TestCase):
         self.logger = logging.getLogger()
         self.stream = StringIO()
         self.logger.addHandler(logging.StreamHandler(self.stream))
+        self.stats_factory = mock.Mock()
         self.conf = {
             'migrations': [],
             'migration_status': mock.Mock(),
@@ -2460,7 +2473,7 @@ class TestMain(unittest.TestCase):
             'poll_interval': 30,
             'segment_size': 1000000,
             'once': True,
-            'statsd_client': None,
+            'stats_factory': self.stats_factory
         }
 
     @contextmanager
@@ -2549,10 +2562,10 @@ class TestMain(unittest.TestCase):
             mock_status.assert_called_once_with('/test/status')
             mock_migrator.assert_called_once_with(
                 config['migrations'][0], mock_status.return_value, 42, 1337,
-                mock.ANY, mock.ANY, mock.ANY, 100000000, None)
+                mock.ANY, mock.ANY, mock.ANY, 100000000, mock.ANY)
             mock_run.assert_called_once_with(
                 config['migrations'], mock_status.return_value, mock.ANY,
-                mock.ANY, 42, 1337, mock.ANY, 60, 100000000, None, True)
+                mock.ANY, 42, 1337, mock.ANY, 60, 100000000, mock.ANY, True)
 
     @mock.patch('s3_sync.migrator.create_provider')
     def test_migrate_all_containers_error(self, create_provider_mock):
@@ -2585,32 +2598,6 @@ class TestMain(unittest.TestCase):
 
         s3_sync.migrator.run(
             migrations, status, mock.Mock(max_size=10), logging.getLogger(),
-            1000, 10, mock.Mock(return_value=True), 10, 1000000, None, True)
+            1000, 10, mock.Mock(return_value=True), 10, 1000000,
+            self.stats_factory, True)
         self.assertEqual(old_list, status.status_list)
-
-    def test_migrator_stats(self):
-        config = {
-            "account": "AUTH_dev",
-            "aws_bucket": "bucket.example.com",
-            "aws_identity": "identity",
-            "aws_secret": "secret",
-            "container": "bucket.example.com",
-            "all_buckets": True,
-            "prefix": "",
-            "protocol": "s3",
-            "remote_account": "",
-        }
-
-        statsd_client = mock.Mock()
-
-        migrator = s3_sync.migrator.Migrator(config, mock.Mock(),
-                                             10, 5, mock.Mock(max_size=1),
-                                             None, mock.Mock(), 1000000,
-                                             statsd_client)
-
-        stats = MigratorPassStats(migrator.statsd_increment)
-        stats.update(scanned=1)
-
-        statsd_client.update_stats.assert_called_once_with(
-            'S3.bucket%2Eexample%2Ecom.AUTH_dev.bucket%2Eexample%2Ecom.'
-            'scanned', 1)
