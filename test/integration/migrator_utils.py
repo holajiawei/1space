@@ -45,7 +45,10 @@ class MigratorFactory(object):
         if not self.logger.handlers:
             s3_sync.daemon_utils.setup_logger(
                 s3_sync.migrator.LOGGER_NAME, self.migrator_config)
-        self.stats_factory = StatsReporterFactory(None, 8125, None)
+        self.stats_factory = StatsReporterFactory(
+            self.config.get('statsd_host', None),
+            self.config.get('statsd_port', 8125),
+            self.config.get('statsd_prefix'))
 
     def get_migrator(self, migration, status):
         ic_pool = s3_sync.migrator.create_ic_pool(
