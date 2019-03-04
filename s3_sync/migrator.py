@@ -340,21 +340,26 @@ class Migrator(object):
         self.segment_size = segment_size
         self.handled_containers = []
         self.start_time = time.time()
+        self.stats_factory = stats_factory
 
+        statsd_prefix = self._build_statsd_prefix(self.config)
+        self.stats_reporter = self.stats_factory.instance(statsd_prefix)
+
+    def _build_statsd_prefix(self, config):
         statsd_prefix_parts = [
-            self.config.get('aws_endpoint', 'S3'),
+            config.get('aws_endpoint', 'S3'),
             '/'.join(filter(
-                None, [self.config.get('aws_bucket'),
-                       self.config.get('custom_prefix')])),
-            self.config.get('account'),
-            self.config.get('container')
+                None, [config.get('aws_bucket'),
+                       config.get('custom_prefix')])),
+            config.get('account'),
+            config.get('container')
         ]
 
         statsd_prefix = '.'.join(
             [urllib.quote(part.encode('utf-8'), safe='').replace('.', '%2E')
              for part in statsd_prefix_parts])
 
-        self.stats_reporter = stats_factory.instance(statsd_prefix)
+        return statsd_prefix
 
     def next_pass(self):
         if self.config['aws_bucket'] != '/*':
@@ -416,6 +421,10 @@ class Migrator(object):
                 self.config['container'] = remote_container
                 self.provider.aws_bucket = remote_container
                 self.handled_containers.append(dict(self.config))
+                # Update the stats reporter
+                statsd_prefix = self._build_statsd_prefix(self.config)
+                self.stats_reporter = self.stats_factory.instance(
+                    statsd_prefix)
                 self._next_pass()
             if local_container and local_container['name'] == remote_container:
                 local_container = next(local_iterator)
@@ -501,7 +510,6 @@ class Migrator(object):
             self.logger.error('Failed to migrate "%s"' %
                               self.config['aws_bucket'])
             self.logger.error(''.join(traceback.format_exc()))
-            self.stats_reporter.increment('error_count', 1)
         self.object_queue.join()
         self._process_dlos()
         self.object_queue.join()
@@ -1205,6 +1213,9 @@ class Migrator(object):
         if result.status_int == 201:
             self.gthread_local.uploaded_objects += 1
             self.gthread_local.bytes_copied += size
+            self.stats_reporter.increment('copied_objects', 1)
+            if size > 0:
+                self.stats_reporter.increment('bytes', size)
         return result
 
     def _upload_worker(self):
@@ -1236,14 +1247,8 @@ class Migrator(object):
         self.stats.update(
             copied=self.gthread_local.uploaded_objects,
             bytes_copied=self.gthread_local.bytes_copied)
-        self.stats_reporter.increment('copied_objects',
-                                      self.gthread_local.uploaded_objects)
-        self.stats_reporter.increment('bytes', self.gthread_local.bytes_copied)
 
     def close(self):
-        elapsed = time.time() - self.start_time
-        self.stats_reporter.timing('cycle_time', elapsed * 1000)
-
         if not self.provider:
             return
         self.provider.close()
@@ -1290,8 +1295,6 @@ def run(migrations, migration_status, internal_pool, logger, items_chunk,
         elapsed = time.time() - cycle_start
         naptime = max(0, poll_interval - elapsed)
         msg = 'Finished cycle in %0.2fs' % elapsed
-        # if statsd_client:
-        #    statsd_client.timing('1space.migrator.cycle_time', elapsed * 1000)
 
         if once:
             logger.info(msg)

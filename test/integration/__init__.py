@@ -181,6 +181,9 @@ class TestCloudSyncBase(unittest.TestCase):
     conn_by_acct_noshunt = {}  # as above, but bypasses any shunt
     conn_by_acct_cc = {}  # as above, but through cloud-connector
 
+    def setUp(self):
+        self.statsd_messages = []
+
     @classmethod
     def _add_conn_for_swift_acct(klass, mapping, storage_base, acct_utf8,
                                  admin_token):
@@ -534,12 +537,18 @@ class TestCloudSyncBase(unittest.TestCase):
         # NOTE: There may be multiple messages and we need to accumulate all of
         # the increments from them.
         def _assert_stats_helper():
+            messages_to_check = self.statsd_messages
             # stats format: [key, (timestamp, count)]
             for messages in self.statsd_server.get_messages():
                 for msg in messages:
-                    if msg[0] not in stats.keys():
-                        continue
-                    stats[msg[0]] += msg[1][1]
+                    messages_to_check.append(msg)
+            messages_to_save = []
+            for msg in messages_to_check:
+                if msg[0] not in stats.keys():
+                    messages_to_save.append(msg)
+                    continue
+                stats[msg[0]] += msg[1][1]
+            self.statsd_messages = messages_to_save
             try:
                 for action, expected_count in expected_stats.items():
                     self.assertEqual(
