@@ -37,6 +37,7 @@ DAY_F = DAY * 1.0
 
 class TestCloudSync(TestCloudSyncBase):
     def setUp(self):
+        super(TestCloudSync, self).setUp()
         self.statsd_server.clear()
 
     def tearDown(self):

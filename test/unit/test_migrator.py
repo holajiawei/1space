@@ -760,8 +760,6 @@ class TestMigrator(unittest.TestCase):
         self.migrator.next_pass()
         self.assertEqual('Failed to migrate "bucket"',
                          self.stream.getvalue().splitlines()[0])
-        self.migrator.stats_reporter.increment.assert_any_call('error_count',
-                                                               1)
 
     @mock.patch('s3_sync.migrator.create_provider')
     def test_all_containers(self, create_provider_mock):
@@ -1200,9 +1198,6 @@ class TestMigrator(unittest.TestCase):
             except AssertionError as e:
                 e.args += ('\nTest case: ', test_case)
                 raise
-            self.migrator.stats_reporter.increment.assert_any_call('bytes', 0)
-            self.migrator.stats_reporter.increment.assert_any_call(
-                'copied_objects', mock.ANY)
 
     @mock.patch('s3_sync.migrator.create_provider')
     def test_migrate_big_object(self, create_provider_mock):
