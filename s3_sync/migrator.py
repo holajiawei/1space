@@ -50,6 +50,7 @@ import swift.common.constraints
 from swift.common.http import HTTP_NOT_FOUND, HTTP_CONFLICT
 from swift.common.internal_client import UnexpectedResponse
 from swift.common import swob
+from swift.common.storage_policy import POLICIES
 from swift.common.ring import Ring
 from swift.common.ring.utils import is_local_device
 from swift.common.utils import Timestamp, whataremyips
@@ -360,6 +361,16 @@ class Migrator(object):
         self.gthread_local = eventlet.corolocal.local()
         self.segment_size = segment_size
         self.handled_containers = []
+        self.storage_policy_idx = None
+        if self.config.get('storage_policy'):
+            policy = POLICIES.get_by_name(self.config['storage_policy'])
+            if policy:
+                self.storage_policy_idx = policy.idx
+            else:
+                self.storage_policy_idx = -1
+                self.logger.error('Unable to parse storage_policy: %s, will '
+                                  'not be able to create containers' %
+                                  self.config['storage_policy'])
         self.stats_factory = stats_factory
 
         self.stats_reporter = self.stats_factory.instance(
@@ -617,6 +628,14 @@ class Migrator(object):
 
         headers[get_sys_migrator_header('container')] =\
             MigrationContainerStates.MIGRATING
+
+        if self.storage_policy_idx is not None:
+            if self.storage_policy_idx == -1:
+                raise MigrationError('Unable to create container %s (invalid '
+                                     'storage_policy specified.' % container)
+            else:
+                headers['X-Backend-Storage-Policy-Index'] = \
+                    self.storage_policy_idx
 
         req = swob.Request.blank(
             internal_client.make_path(self.config['account'], container),

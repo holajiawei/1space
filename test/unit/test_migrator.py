@@ -2870,3 +2870,37 @@ class TestMain(unittest.TestCase):
             1000, 10, mock.Mock(return_value=True), 10, 1000000,
             self.stats_factory, True)
         self.assertEqual(old_list, status.status_list)
+
+    def test_invalid_storage_policy_name(self):
+        config = {'aws_bucket': 'bucket',
+                  'account': 'AUTH_test',
+                  'aws_identity': 'source-account'}
+        swift_client = mock.Mock()
+        pool = mock.Mock()
+        pool.item.return_value.__enter__ = lambda *args: swift_client
+        pool.item.return_value.__exit__ = lambda *args: None
+        pool.max_size = 11
+        logger = logging.getLogger()
+        stream = StringIO()
+        segment_size = 500 * 1024 * 1024
+        logger.addHandler(logging.StreamHandler(stream))
+
+        selector = mock.Mock()
+        selector.is_local_container.return_value = True
+
+        selector.is_primary = mock.Mock()
+
+        migrator = s3_sync.migrator.Migrator(
+            config, None, 1000, 5, pool, logger, selector,
+            segment_size, mock.Mock())
+        self.assertEqual(migrator.storage_policy_idx, None)
+        config['storage_policy'] = 'NotAPolicy'
+        migrator = s3_sync.migrator.Migrator(
+            config, None, 1000, 5, pool, logger, selector,
+            segment_size, mock.Mock())
+        self.assertEqual(migrator.storage_policy_idx, -1)
+        config['storage_policy'] = 'Policy-0'
+        migrator = s3_sync.migrator.Migrator(
+            config, None, 1000, 5, pool, logger, selector,
+            segment_size, mock.Mock())
+        self.assertEqual(migrator.storage_policy_idx, 0)
