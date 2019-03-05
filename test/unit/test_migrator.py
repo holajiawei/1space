@@ -26,7 +26,6 @@ from s3_sync.base_sync import ProviderResponse
 import s3_sync.migrator
 from StringIO import StringIO
 from swift.common.internal_client import UnexpectedResponse
-from swift.common.utils import Timestamp
 import time
 import unittest
 from tempfile import NamedTemporaryFile, mkdtemp
@@ -862,12 +861,12 @@ class TestMigrator(unittest.TestCase):
                         'Content-Length': '1024'},
                     'expected_headers': {
                         'x-object-meta-custom': 'custom',
-                        'x-timestamp': Timestamp(1499999999.66).internal,
+                        'x-timestamp': 1499999999.66,
                         'etag': 'f001a4f001',
-                        s3_sync.utils.get_sys_migrator_header('object'): str(
-                            Timestamp(1499999999.66).internal),
+                        s3_sync.utils.get_sys_migrator_header('object'):
+                            1499999999.66,
                         'Content-Length': '1024'},
-                    'list-time': create_list_timestamp(1.5e9),
+                    'list-time': create_list_timestamp(1499999999.66),
                     'hash': 'etag-7',
                     'bytes': '1024'
                 },
@@ -884,12 +883,12 @@ class TestMigrator(unittest.TestCase):
                         'Content-Length': '1024'},
                     'expected_headers': {
                         'x-object-meta-custom': 'custom',
-                        'x-timestamp': Timestamp(1499999999.66).internal,
+                        'x-timestamp': 1499999999.66,
                         'etag': 'f001a4foo2',
-                        s3_sync.utils.get_sys_migrator_header('object'): str(
-                            Timestamp(1499999999.66).internal),
+                        s3_sync.utils.get_sys_migrator_header('object'):
+                            1499999999.66,
                         'Content-Length': '1024'},
-                    'list-time': create_list_timestamp(1.5e9),
+                    'list-time': create_list_timestamp(1499999999.66),
                     'hash': 'etag',
                     'bytes': '1024',
                 },
@@ -901,10 +900,10 @@ class TestMigrator(unittest.TestCase):
                         'Content-Length': '1024'},
                     'expected_headers': {
                         'x-object-meta-custom': 'custom',
-                        'x-timestamp': Timestamp(1.4e9).internal,
+                        'x-timestamp': 1.4e9,
                         'etag': 'ba3bar',
-                        s3_sync.utils.get_sys_migrator_header('object'): str(
-                            Timestamp(1.4e9).internal),
+                        s3_sync.utils.get_sys_migrator_header('object'):
+                            1.4e9,
                         'Content-Length': '1024'},
                     'list-time': create_list_timestamp(1.4e9),
                     'hash': 'etag',
@@ -922,10 +921,10 @@ class TestMigrator(unittest.TestCase):
                         'Content-Length': '1024'},
                     'expected_headers': {
                         'x-object-meta-custom': 'custom',
-                        'x-timestamp': Timestamp(1.5e9).internal,
+                        'x-timestamp': 1.5e9,
                         'etag': 'f001a4f00',
-                        s3_sync.utils.get_sys_migrator_header('object'): str(
-                            Timestamp(1.5e9).internal),
+                        s3_sync.utils.get_sys_migrator_header('object'):
+                            1.5e9,
                         'Content-Length': '1024'},
                     'list-time': create_list_timestamp(1.5e9),
                     'hash': 'etag',
@@ -939,10 +938,10 @@ class TestMigrator(unittest.TestCase):
                         'Content-Length': '1024'},
                     'expected_headers': {
                         'x-object-meta-custom': 'custom',
-                        'x-timestamp': Timestamp(1.4e9).internal,
+                        'x-timestamp': 1.4e9,
                         'etag': 'ba3',
-                        s3_sync.utils.get_sys_migrator_header('object'): str(
-                            Timestamp(1.4e9).internal),
+                        s3_sync.utils.get_sys_migrator_header('object'):
+                            1.4e9,
                         'Content-Length': '1024'},
                     'list-time': create_list_timestamp(1.4e9),
                     'hash': 'etag',
@@ -964,10 +963,10 @@ class TestMigrator(unittest.TestCase):
                         'Content-Length': '1024'},
                     'expected_headers': {
                         'x-object-meta-custom': 'custom',
-                        'x-timestamp': Timestamp(1.5e9).internal,
+                        'x-timestamp': 1.5e9,
                         'etag': 'f001a4f003',
-                        s3_sync.utils.get_sys_migrator_header('object'): str(
-                            Timestamp(1.5e9).internal),
+                        s3_sync.utils.get_sys_migrator_header('object'):
+                            1.5e9,
                         'Content-Length': '1024'},
                     'list-time': create_list_timestamp(1.5e9),
                     'hash': 'etag',
@@ -981,11 +980,11 @@ class TestMigrator(unittest.TestCase):
                         'Content-Length': '1024'},
                     'expected_headers': {
                         'x-object-meta-custom': 'custom',
-                        'x-timestamp': Timestamp(1.4e9).internal,
+                        'x-timestamp': 1.4e9,
                         'etag': 'ba3',
                         'Content-Length': '1024',
-                        s3_sync.utils.get_sys_migrator_header('object'): str(
-                            Timestamp(1.4e9).internal)},
+                        s3_sync.utils.get_sys_migrator_header('object'):
+                            1.4e9},
                     'list-time': create_list_timestamp(1.4e9),
                     'hash': 'etag',
                     'bytes': '1024',
@@ -1014,11 +1013,11 @@ class TestMigrator(unittest.TestCase):
                         'Content-Length': '1024'},
                     'expected_headers': {
                         'x-object-meta-custom': 'custom',
-                        'x-timestamp': Timestamp(1.5e9).internal,
+                        'x-timestamp': 1.5e9,
                         'etag': 'f001a4f004',
                         'Content-Length': '1024',
-                        s3_sync.utils.get_sys_migrator_header('object'): str(
-                            Timestamp(1.5e9).internal)},
+                        s3_sync.utils.get_sys_migrator_header('object'):
+                            1.5e9},
                     'list-time': create_list_timestamp(1.5e9),
                     'hash': 'etag',
                     'bytes': '1024',
@@ -1031,11 +1030,11 @@ class TestMigrator(unittest.TestCase):
                         'Content-Length': '1024'},
                     'expected_headers': {
                         'x-object-meta-custom': 'custom',
-                        'x-timestamp': Timestamp(1.4e9).internal,
+                        'x-timestamp': 1.4e9,
                         'etag': 'ba3',
                         'Content-Length': '1024',
-                        s3_sync.utils.get_sys_migrator_header('object'): str(
-                            Timestamp(1.4e9).internal)},
+                        s3_sync.utils.get_sys_migrator_header('object'):
+                            1.4e9},
                     'list-time': create_list_timestamp(1.4e9),
                     'hash': 'etag',
                     'bytes': '1024',
@@ -1064,11 +1063,11 @@ class TestMigrator(unittest.TestCase):
                         'Content-Length': '1024'},
                     'expected_headers': {
                         'x-object-meta-custom': 'custom',
-                        'x-timestamp': Timestamp(1.5e9).internal,
+                        'x-timestamp': 1.5e9,
                         'etag': 'f001a4f005',
                         'Content-Length': '1024',
-                        s3_sync.utils.get_sys_migrator_header('object'): str(
-                            Timestamp(1.5e9).internal)},
+                        s3_sync.utils.get_sys_migrator_header('object'):
+                            1.5e9},
                     'list-time': create_list_timestamp(1.5e9),
                     'hash': 'etag',
                     'bytes': '1024',
@@ -1082,11 +1081,10 @@ class TestMigrator(unittest.TestCase):
                     'expected_headers': {
                         'x-object-meta-custom': 'custom',
                         'etag': 'ba3',
-                        'x-timestamp':
-                            Timestamp(math.floor(now - 35.0)).internal,
+                        'x-timestamp': now - 35,
                         'Content-Length': '1024',
-                        s3_sync.utils.get_sys_migrator_header('object'): str(
-                            Timestamp(math.floor(now - 35.0)).internal)},
+                        s3_sync.utils.get_sys_migrator_header('object'):
+                            now - 35},
                     'list-time': create_list_timestamp(now - 35.0),
                     'hash': 'etag',
                     'bytes': '1024',
@@ -1101,11 +1099,10 @@ class TestMigrator(unittest.TestCase):
                     'expected_headers': {
                         'x-object-meta-custom': 'custom',
                         'etag': 'ba33',
-                        'x-timestamp': Timestamp(math.floor(now)).internal,
+                        'x-timestamp': now,
                         'Content-Length': '1024',
-                        s3_sync.utils.get_sys_migrator_header('object'): str(
-                            Timestamp(math.floor(now)).internal)},
-                    'list-time': create_list_timestamp(math.floor(now)),
+                        s3_sync.utils.get_sys_migrator_header('object'): now},
+                    'list-time': create_list_timestamp(now),
                     'hash': 'etag',
                     'bytes': '1024',
                 }
@@ -1116,13 +1113,96 @@ class TestMigrator(unittest.TestCase):
                 'older_than': 30,
             },
             'local_objects': [
+                {'name': 'bar',
+                 'last_modified': create_list_timestamp(1.3e9),
+                 'hash': 'old-etag'},
                 {'name': 'foo',
                  'last_modified': create_list_timestamp(1.4e9),
                  'hash': 'old-etag'},
-                {'name': 'bar',
-                 'last_modified': create_list_timestamp(1.3e9),
-                 'hash': 'old-etag'}
             ],
+            'migrated': ['bar', 'foo']
+        }, {
+            # Check that an earlier, but more precise list timestamp supersedes
+            # the later, but less precise object Last-Modified header if times
+            # are within 1 second
+            'objects': {
+                'bar': {
+                    'remote_headers': {
+                        'x-object-meta-custom': 'custom',
+                        'last-modified': create_timestamp(1.5e9),
+                        'etag': 'f001a4f005',
+                        'Content-Length': '1024'},
+                    'expected_headers': {
+                        'x-object-meta-custom': 'custom',
+                        'x-timestamp': 1.5e9,
+                        'etag': 'f001a4f005',
+                        'Content-Length': '1024',
+                        s3_sync.utils.get_sys_migrator_header('object'):
+                            1.5e9},
+                    'list-time': create_list_timestamp(1.5e9 - 1.6),
+                    'hash': 'etag',
+                    'bytes': '1024',
+                },
+                'foo': {
+                    'remote_headers': {
+                        'x-object-meta-custom': 'custom',
+                        'last-modified': create_timestamp(1.5e9 - 1),
+                        'etag': 'f001a4f005',
+                        'Content-Length': '1024'},
+                    'expected_headers': {
+                        'x-object-meta-custom': 'custom',
+                        'x-timestamp': 1.5e9 - 0.5,
+                        'etag': 'f001a4f005',
+                        'Content-Length': '1024',
+                        s3_sync.utils.get_sys_migrator_header('object'):
+                            1.5e9 - 0.5},
+                    'list-time': create_list_timestamp(1.5e9 - 0.5),
+                    'hash': 'etag',
+                    'bytes': '1024',
+                }
+            },
+            'migrated': ['foo', 'bar']
+        }, {
+            # If both the header and listing are not within 1 second,
+            # the latest one should be used.
+            'objects': {
+                'bar': {
+                    'remote_headers': {
+                        'x-object-meta-custom': 'custom',
+                        'last-modified': create_timestamp(1312345678.1234),
+                        'x-timestamp': 1312345678.1234,
+                        'etag': 'f001a4f005',
+                        'Content-Length': '1024'},
+                    'expected_headers': {
+                        'x-object-meta-custom': 'custom',
+                        'x-timestamp': 1412345678.1234,
+                        'etag': 'f001a4f005',
+                        'Content-Length': '1024',
+                        s3_sync.utils.get_sys_migrator_header('object'):
+                            1412345678.1234},
+                    'list-time': create_list_timestamp(1412345678.1234),
+                    'hash': 'etag',
+                    'bytes': '1024',
+                },
+                'foo': {
+                    'remote_headers': {
+                        'x-object-meta-custom': 'custom',
+                        'last-modified': create_timestamp(1512345678.1234),
+                        'x-timestamp': 1512345678.1234,
+                        'etag': 'f001a4f005',
+                        'Content-Length': '1024'},
+                    'expected_headers': {
+                        'x-object-meta-custom': 'custom',
+                        'x-timestamp': 1512345678.1234,
+                        'etag': 'f001a4f005',
+                        'Content-Length': '1024',
+                        s3_sync.utils.get_sys_migrator_header('object'):
+                            1512345678.1234},
+                    'list-time': create_list_timestamp(1412345678.1234),
+                    'hash': 'etag',
+                    'bytes': '1024',
+                }
+            },
             'migrated': ['bar', 'foo']
         }]
         config = self.migrator.config
@@ -1151,7 +1231,8 @@ class TestMigrator(unittest.TestCase):
                 lambda *args: '/'.join(args)
             provider.head_account.return_value = {}
 
-            local_objects = test.get('local_objects', [])
+            local_objects = sorted(test.get('local_objects', []),
+                                   key=lambda entry: entry['name'])
 
             def get_object(name, **args):
                 if name not in objects.keys():
@@ -1182,13 +1263,20 @@ class TestMigrator(unittest.TestCase):
             self.swift_client.make_request.return_value = swift_seg_resp
 
             self.migrator.next_pass()
+            expected_calls = [
+                mock.call(
+                    'PUT', '{}/{}/{}'.format(self.migrator.config['account'],
+                                             self.migrator.config['container'],
+                                             name),
+                    objects[name]['expected_headers'], (2,), mock.ANY)
+                for name in sorted(migrated)]
+            actual_calls = self.swift_client.make_request.mock_calls
             try:
+                # sort the actual calls because they can be re-ordered to be
+                # "verified"
                 self.assertEqual(
-                    [mock.call(
-                        'PUT', mock.ANY,
-                        objects[name]['expected_headers'], (2,), mock.ANY)
-                     for name in sorted(migrated)],
-                    self.swift_client.make_request.mock_calls)
+                    expected_calls,
+                    sorted(actual_calls, key=lambda call: call[1][1]))
                 for call in self.swift_client.upload_object.mock_calls:
                     self.assertEqual('object body', ''.join(call[1][0]))
             except AssertionError as e:
@@ -1209,11 +1297,10 @@ class TestMigrator(unittest.TestCase):
             'Content-Length': '10240000000'}
         expected_headers = {
             'x-object-meta-custom': 'custom',
-            'x-timestamp': Timestamp(1.4e9).internal,
+            'x-timestamp': 1.4e9,
             s3_sync.utils.REMOTE_ETAG: 'ba3',
             'X-Static-Large-Object': str(True),
-            s3_sync.utils.get_sys_migrator_header('object'): str(
-                Timestamp(1.4e9).internal),
+            s3_sync.utils.get_sys_migrator_header('object'): 1.4e9,
             # This is the manifest size
             'Content-Length': 2360}
         expected_segment_headers = {
@@ -1303,6 +1390,7 @@ class TestMigrator(unittest.TestCase):
             ProviderResponse(True, 200, [], [])]
         provider_mock.list_objects.return_value = ProviderResponse(
             True, 200, {}, [{'name': 'obj', 'hash': 'deadbeef',
+                             'last_modified': create_list_timestamp(1.5e9),
                              'bytes': '1337'}])
         provider_mock.get_object.return_value = ProviderResponse(
             True, 200, {'last-modified': create_timestamp(1.5e9),
@@ -1582,12 +1670,11 @@ class TestMigrator(unittest.TestCase):
                     'etag': manifest_etag},
                 'expected_headers': {
                     'x-object-meta-custom': 'slo-meta',
-                    'x-timestamp': Timestamp(1.5e9).internal,
+                    'x-timestamp': 1.5e9,
                     'x-static-large-object': 'True',
                     'Content-Length': str(len(json.dumps(manifest))),
                     'etag': manifest_etag,
-                    s3_sync.utils.get_sys_migrator_header('object'): str(
-                        Timestamp(1.5e9).internal)}
+                    s3_sync.utils.get_sys_migrator_header('object'): 1.5e9}
             },
             'part1': {
                 'remote_headers': {
@@ -1597,10 +1684,9 @@ class TestMigrator(unittest.TestCase):
                     'Content-Length': '1024'},
                 'expected_headers': {
                     'x-object-meta-part': 'part-1',
-                    'x-timestamp': Timestamp(1.4e9).internal,
+                    'x-timestamp': 1.4e9,
                     'etag': 'part1',
-                    s3_sync.utils.get_sys_migrator_header('object'): str(
-                        Timestamp(1.4e9).internal),
+                    s3_sync.utils.get_sys_migrator_header('object'): 1.4e9,
                     'Content-Length': '1024'}
             },
             'part2': {
@@ -1611,10 +1697,9 @@ class TestMigrator(unittest.TestCase):
                     'Content-Length': '1024'},
                 'expected_headers': {
                     'x-object-meta-part': 'part-2',
-                    'x-timestamp': Timestamp(1.1e9).internal,
+                    'x-timestamp': 1.1e9,
                     'etag': 'part2',
-                    s3_sync.utils.get_sys_migrator_header('object'): str(
-                        Timestamp(1.1e9).internal),
+                    s3_sync.utils.get_sys_migrator_header('object'): 1.1e9,
                     'Content-Length': '1024'}
             }
         }
@@ -1698,7 +1783,8 @@ class TestMigrator(unittest.TestCase):
         provider.head_bucket.return_value = bucket_resp
         provider.list_objects.return_value = ProviderResponse(
             True, 200, {},
-            [{'name': 'slo', 'hash': 'deadbeef', 'bytes': '2000'}])
+            [{'name': 'slo', 'hash': 'deadbeef', 'bytes': '2000',
+              'last_modified': create_list_timestamp(1.5e9)}])
         provider.get_object.side_effect = get_object
         provider.head_object.side_effect = head_object
 
@@ -1841,12 +1927,12 @@ class TestMigrator(unittest.TestCase):
                     'Content-Length': '10'},
                 'expected_headers': {
                     'x-object-meta-custom': 'dlo-meta',
-                    'x-timestamp': Timestamp(1.5e9).internal,
+                    'x-timestamp': 1.5e9,
                     'x-object-manifest': '%s/' % segments_container,
                     'etag': 'd10',
                     'Content-Length': '10',
-                    s3_sync.utils.get_sys_migrator_header('object'): str(
-                        Timestamp(1.5e9).internal)}
+                    s3_sync.utils.get_sys_migrator_header('object'):
+                        1.5e9}
             },
             '1': {
                 'remote_headers': {
@@ -1857,10 +1943,10 @@ class TestMigrator(unittest.TestCase):
                 'expected_headers': {
                     'x-object-meta-part': 'part-1',
                     'etag': '3e41',
-                    'x-timestamp': Timestamp(1.4e9).internal,
+                    'x-timestamp': 1.4e9,
                     'Content-Length': '1',
-                    s3_sync.utils.get_sys_migrator_header('object'): str(
-                        Timestamp(1.4e9).internal)}
+                    s3_sync.utils.get_sys_migrator_header('object'):
+                        1.4e9}
             },
             '2': {
                 'remote_headers': {
@@ -1871,10 +1957,10 @@ class TestMigrator(unittest.TestCase):
                 'expected_headers': {
                     'x-object-meta-part': 'part-2',
                     'etag': '3e42',
-                    'x-timestamp': Timestamp(1.1e9).internal,
+                    'x-timestamp': 1.1e9,
                     'Content-Length': '2',
-                    s3_sync.utils.get_sys_migrator_header('object'): str(
-                        Timestamp(1.1e9).internal)}
+                    s3_sync.utils.get_sys_migrator_header('object'):
+                        1.1e9}
             },
             '3': {
                 'remote_headers': {
@@ -1885,10 +1971,10 @@ class TestMigrator(unittest.TestCase):
                 'expected_headers': {
                     'x-object-meta-part': 'part-3',
                     'etag': '3e43',
-                    'x-timestamp': Timestamp(1.2e9).internal,
+                    'x-timestamp': 1.2e9,
                     'Content-Length': '3',
-                    s3_sync.utils.get_sys_migrator_header('object'): str(
-                        Timestamp(1.2e9).internal)}
+                    s3_sync.utils.get_sys_migrator_header('object'):
+                        1.2e9}
             }
         }
 
@@ -1937,18 +2023,24 @@ class TestMigrator(unittest.TestCase):
                 container = args[1].split('/')[5]
                 if not containers[container]:
                     raise UnexpectedResponse('', swift_404_resp)
+            return mock.Mock(status_int=201, body='')
 
         def list_objects(marker, chunk, prefix, bucket=None):
             if bucket is None or bucket == self.migrator.config['container']:
                 return ProviderResponse(True, 200, {}, [{
-                    'name': 'dlo', 'hash': 'd10', 'bytes': '10'}])
+                    'name': 'dlo', 'hash': 'd10', 'bytes': '10',
+                    'last_modified': create_list_timestamp(1.5e9)}])
             elif bucket == segments_container:
                 if marker == '':
                     return ProviderResponse(
                         True, 200, {},
-                        [{'name': '1', 'hash': '3e41', 'bytes': '1'},
-                         {'name': '2', 'hash': '3e42', 'bytes': '2'},
-                         {'name': '3', 'hash': '3e43', 'bytes': '3'}])
+                        [{'name': name,
+                          'hash': objects[name]['remote_headers']['etag'],
+                          'bytes':
+                          objects[name]['remote_headers']['Content-Length'],
+                          'last_modified': create_list_timestamp(0)}
+                         for name in sorted(objects.keys())
+                         if name != 'dlo'])
                 if marker == '3':
                     return ProviderResponse(True, 200, {}, [])
             raise RuntimeError('Unknown container')
@@ -2084,8 +2176,9 @@ class TestMigrator(unittest.TestCase):
     def test_reconcile_deleted_object(self, create_provider_mock):
         provider_mock = create_provider_mock.return_value
         provider_mock.list_objects.side_effect = [
-            ProviderResponse(True, 200, {}, [{
-                'name': 'qux', 'hash': 'deadbeef', 'bytes': str(2**10)}]),
+            ProviderResponse(True, 200, {}, [
+                {'name': 'qux', 'hash': 'deadbeef', 'bytes': str(2**10),
+                 'last_modified': create_list_timestamp(1.5e9)}]),
             ProviderResponse(True, 200, {}, [])]
         provider_mock.get_object.return_value = ProviderResponse(
             True, 200,
@@ -2098,7 +2191,8 @@ class TestMigrator(unittest.TestCase):
         self.migrator.status.get_migration.return_value = {}
 
         self.swift_client.make_request.side_effect = [
-            mock.Mock(status_int=200, body='[{"name": "foo"}]'),
+            mock.Mock(status_int=200,
+                      body='[{"name": "foo"}]'),
             mock.Mock(status_int=200, body='[]')]
         self.swift_client.get_object_metadata.side_effect = UnexpectedResponse(
             '', swift_404_resp)
@@ -2109,8 +2203,8 @@ class TestMigrator(unittest.TestCase):
         self.swift_client.make_request.assert_called_with(
             'PUT',
             mock.ANY,
-            {internal_header: '1500000000.00000',
-             'x-timestamp': '1500000000.00000',
+            {internal_header: 1500000000.0,
+             'x-timestamp': 1500000000.0,
              'etag': 'deadbeef',
              'Content-Length': str(2**10)},
             (2,),
