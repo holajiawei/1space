@@ -1,6 +1,18 @@
 History
 =======
 
+0.1.56 (2019-03-05)
+-------------------
+
+Bug fixes
+   - The migrator now uses the more precise timestamp when copying objects from
+     Google Cloud Storage (GCS). GCS has a higher resolution returned in the
+     bucket listing (millisecond precision), but floors the response returned back
+     to a HEAD request on the object. The migrator will now use the LIST response
+     timestamp (assuming the HEAD request response is older).
+   - Using swift-s3-verify against an S3 account that has no buckets no longer
+     fails with an error.
+
 0.1.55 (2019-02-15)
 -------------------
 
