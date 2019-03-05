@@ -482,7 +482,12 @@ class SyncS3(BaseSync):
         def _perform_op(s3_client):
             try:
                 resp = getattr(s3_client, op)(**args)
-                body = resp.get('Body') or resp.get('Buckets') or iter([''])
+                if 'Body' in resp:
+                    body = resp['Body']
+                elif 'Buckets' in resp:
+                    body = resp['Buckets']
+                else:
+                    body = iter([''])
 
                 # S3 API responses are inconsistent, so there will be various
                 # special-cases here.  This one about CopyObjectResult is for
