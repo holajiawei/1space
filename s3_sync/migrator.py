@@ -339,20 +339,19 @@ class Migrator(object):
         self.gthread_local = eventlet.corolocal.local()
         self.segment_size = segment_size
         self.handled_containers = []
-        self.start_time = time.time()
         self.stats_factory = stats_factory
 
-        statsd_prefix = self._build_statsd_prefix(self.config)
-        self.stats_reporter = self.stats_factory.instance(statsd_prefix)
+        self.stats_reporter = self.stats_factory.instance(
+            self._build_statsd_prefix())
 
-    def _build_statsd_prefix(self, config):
+    def _build_statsd_prefix(self):
         statsd_prefix_parts = [
-            config.get('aws_endpoint', 'S3'),
+            self.config.get('aws_endpoint', 'S3'),
             '/'.join(filter(
-                None, [config.get('aws_bucket'),
-                       config.get('custom_prefix')])),
-            config.get('account'),
-            config.get('container')
+                None, [self.config.get('aws_bucket'),
+                       self.config.get('custom_prefix')])),
+            self.config.get('account'),
+            self.config.get('container')
         ]
 
         statsd_prefix = '.'.join(
@@ -422,9 +421,8 @@ class Migrator(object):
                 self.provider.aws_bucket = remote_container
                 self.handled_containers.append(dict(self.config))
                 # Update the stats reporter
-                statsd_prefix = self._build_statsd_prefix(self.config)
                 self.stats_reporter = self.stats_factory.instance(
-                    statsd_prefix)
+                    self._build_statsd_prefix())
                 self._next_pass()
             if local_container and local_container['name'] == remote_container:
                 local_container = next(local_iterator)
@@ -532,7 +530,6 @@ class Migrator(object):
     def check_errors(self):
         while not self.errors.empty():
             container, key, err = self.errors.get()
-            self.stats_reporter.increment('error_count', 1)
             if type(err) == str:
                 self.logger.error('Failed to migrate "%s/%s": %s' % (
                     container, key, err))

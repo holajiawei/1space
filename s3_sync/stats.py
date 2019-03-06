@@ -59,9 +59,12 @@ class StatsReporterFactory(object):
     def __init__(self, statsd_host, statsd_port, statsd_prefix,
                  handler_class=StatsReporter):
         self._handler_class = handler_class
-        self.statsd_client = pystatsd.statsd.Client(
-            statsd_host, statsd_port, statsd_prefix
-        )
+        if statsd_host:
+            self.statsd_client = pystatsd.statsd.Client(
+                statsd_host, statsd_port, statsd_prefix
+            )
+        else:
+            self.statsd_client = None
 
     def __str__(self):
         return 'StatsReporter'
