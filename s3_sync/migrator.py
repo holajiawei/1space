@@ -1,4 +1,4 @@
-# Copyright 2017 SwiftStack
+# Copyright 2019 SwiftStack
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -39,7 +39,7 @@ from .stats import MigratorPassStats, StatsReporterFactory
 
 from .utils import (convert_to_local_headers, convert_to_swift_headers,
                     create_x_timestamp_from_hdrs, diff_container_headers,
-                    diff_account_headers, get_container_headers,
+                    diff_account_headers, EPOCH, get_container_headers,
                     get_slo_etag, get_sys_migrator_header,
                     iter_internal_listing, iter_listing, MANIFEST_HEADER,
                     MigrationContainerStates, REMOTE_ETAG, RemoteHTTPError,
@@ -59,7 +59,8 @@ LOGGER_NAME = 'swift-s3-migrator'
 
 IGNORE_KEYS = set(('status', 'aws_secret', 'all_buckets', 'custom_prefix'))
 
-MigrateObjectWork = namedtuple('MigrateObjectWork', 'aws_bucket container key')
+MigrateObjectWork = namedtuple('MigrateObjectWork',
+                               'aws_bucket container key ts')
 UploadObjectWork = namedtuple('UploadObjectWork', 'container key object '
                               'headers aws_bucket')
 S3_MPU_RE = re.compile('[0-9a-z]+-(\d+)$')
@@ -201,6 +202,23 @@ def _update_status_counts(status, moved_count, scanned_count, bytes_count,
         status['bytes_count'] = status.get('bytes_count', 0) + bytes_count
     # this is the end of this current pass
     status['finished'] = now
+
+
+def _create_put_headers(headers, timestamp=0):
+    ret = convert_to_local_headers(headers)
+    ts_from_headers = create_x_timestamp_from_hdrs(dict(headers))
+
+    if int(timestamp) != timestamp and abs(timestamp - ts_from_headers) < 1:
+        # Some providers have more resolution in their LIST bucket entries than
+        # HEAD request responses (e.g. Google Cloud Storage).
+        ret['x-timestamp'] = timestamp
+    else:
+        ret['x-timestamp'] = max(timestamp, ts_from_headers)
+
+    ret[get_sys_migrator_header('object')] = ret['x-timestamp']
+    if 'last-modified' in ret:
+        del ret['last-modified']
+    return ret
 
 
 class Status(object):
@@ -480,9 +498,9 @@ class Migrator(object):
 
         # We process the DLO manifests separately. This is to avoid a situation
         # of an object appearing before its corresponding segments do.
-        for aws_bucket, container, dlo in self._manifests:
+        for aws_bucket, container, dlo, timestamp in self._manifests:
             self.object_queue.put(
-                MigrateObjectWork(aws_bucket, container, dlo))
+                MigrateObjectWork(aws_bucket, container, dlo, timestamp))
 
     def _next_pass(self):
         self.object_queue = self.primary_queue
@@ -889,10 +907,12 @@ class Migrator(object):
             remote['last_modified'], SWIFT_TIME_FMT)
         return remote_time < now - older_than
 
-    def object_queue_put(self, aws_bucket, container, remote, use_primary):
+    def object_queue_put(
+            self, aws_bucket, container, remote, timestamp, use_primary):
         if not self._old_enough(remote):
             return
-        work = MigrateObjectWork(aws_bucket, container, remote['name'])
+        work = MigrateObjectWork(
+            aws_bucket, container, remote['name'], timestamp)
         if use_primary:
             self.primary_queue.put(work)
         else:
@@ -918,9 +938,18 @@ class Migrator(object):
             # the number of items we should process. We will process all of
             # the keys that were returned in the listing and restart on the
             # following iteration.
+
+            # Some object stores (e.g. GCS) have differing values in object
+            # listings vs HEAD on the object (specifically, listings allow for
+            # sub-second resolution). When we copy the object, we have to set
+            # the X-Timestamp according to the listing date in that case.
+            remote_ts = (
+                datetime.datetime.strptime(remote['last_modified'],
+                                           SWIFT_TIME_FMT) - EPOCH)\
+                .total_seconds()
             if not local or local['name'] > remote['name']:
                 self.object_queue_put(
-                    aws_bucket, container, remote,
+                    aws_bucket, container, remote, remote_ts,
                     list_all or self.selector.is_primary(
                         self.config['account'], container, remote['name']))
                 scanned += 1
@@ -942,7 +971,7 @@ class Migrator(object):
                 else:
                     if cmp_ret < 0:
                         self.object_queue_put(
-                            aws_bucket, container, remote,
+                            aws_bucket, container, remote, remote_ts,
                             list_all or
                             self.selector.is_primary(
                                 self.config['account'], container,
@@ -962,7 +991,7 @@ class Migrator(object):
             local = next(local_iter)
         return marker
 
-    def _migrate_object(self, aws_bucket, container, key):
+    def _migrate_object(self, aws_bucket, container, key, list_ts=0):
         args = {'bucket': aws_bucket}
         if self.config.get('protocol', 's3') == 'swift':
             args['query_string'] = 'multipart-manifest=get'
@@ -973,8 +1002,10 @@ class Migrator(object):
             resp.body.close()
             raise MigrationError('Failed to GET "%s/%s": %s' % (
                 aws_bucket, key, resp.body))
+        put_headers = _create_put_headers(resp.headers.items(), list_ts)
 
-        if (aws_bucket, container, key) in self._manifests:
+        if (aws_bucket, container, key, put_headers['x-timestamp'])\
+                in self._manifests:
             # Special handling for the DLO manifests
             if MANIFEST_HEADER not in resp.headers:
                 self.logger.warning('DLO object changed before upload: %s/%s' %
@@ -983,34 +1014,29 @@ class Migrator(object):
                 return
             self._upload_object(UploadObjectWork(
                 container, key, FileLikeIter(resp.body),
-                convert_to_local_headers(resp.headers.items(),
-                                         remove_timestamp=False),
-                aws_bucket))
+                put_headers, aws_bucket))
             return
 
         if MANIFEST_HEADER in resp.headers:
-            if (aws_bucket, container, key) in self._manifests:
-                # This means the DLO has already been handled
-                return
-
+            # We know this manifest has not yet been migrated, as it is not in
+            # the self._manifests set (checked above).
             self.logger.warning(
                 'Migrating Dynamic Large Object "%s/%s" -- '
                 'results may not be consistent' % (container, key))
-            self._migrate_dlo(aws_bucket, container, key, resp)
+            self._migrate_dlo(aws_bucket, container, key, resp, put_headers)
             return
+
         if 'x-static-large-object' in resp.headers:
             # We have to move the segments and then move the manifest file
-            self._migrate_slo(aws_bucket, container, key, resp)
+            self._migrate_slo(aws_bucket, container, key, resp, put_headers)
             return
         if S3_MPU_RE.match(resp.headers.get('etag', '')):
-            self._migrate_mpu(aws_bucket, container, key, resp)
+            self._migrate_mpu(aws_bucket, container, key, resp, put_headers)
             return
         content_length = int(resp.headers['Content-Length'])
         if (content_length > swift.common.constraints.MAX_FILE_SIZE):
-            self._migrate_as_slo(aws_bucket, container, key, resp)
+            self._migrate_as_slo(aws_bucket, container, key, resp, put_headers)
             return
-        put_headers = convert_to_local_headers(
-            resp.headers.items(), remove_timestamp=False)
         work = UploadObjectWork(
             container, key, FileLikeIter(resp.body), put_headers, aws_bucket)
         self._upload_object(work)
@@ -1022,16 +1048,14 @@ class Migrator(object):
                 ic.delete_object(self.config['account'], seg_container, key,
                                  {})
 
-    def _migrate_mpu(self, aws_bucket, container, key, resp):
+    def _migrate_mpu(self, aws_bucket, container, key, resp, put_headers):
         # TODO (MSD): Parallelize the downloads (another queue??)
-        headers = dict(resp.headers.items())
-        remote_etag = headers['etag']
+        remote_etag = put_headers['etag']
         # The etag for S3 multipart objects is computed differently and can't
         # be used for swift
-        nparts = nparts_from_headers(headers)
-        del(headers['etag'])
+        nparts = nparts_from_headers(put_headers)
+        del(put_headers['etag'])
         segments = []
-        ts = create_x_timestamp_from_hdrs(headers)
         segment_container = "%s_segments" % (container,)
         content_length = int(resp.headers['Content-Length'])
         segment_prefix = None
@@ -1045,16 +1069,19 @@ class Migrator(object):
                 part_resp.body.close()
                 self._delete_parts(segment_container, segments)
                 part_resp.reraise()
-            put_headers = convert_to_local_headers(
-                part_resp.headers.items(), remove_timestamp=False)
-            sz_bytes = int(put_headers['Content-Length'])
+            segment_headers = _create_put_headers(part_resp.headers.items())
+            sz_bytes = int(segment_headers['Content-Length'])
             if segment_prefix is None:
                 segment_prefix = "%s/%s/%s/%s/" % (
-                    key, ts, content_length, sz_bytes)
-            del(put_headers['etag'])
+                    key, put_headers['x-timestamp'], content_length, sz_bytes)
+            del(segment_headers['etag'])
+            # The segments do not exist in S3 -- applying the migrator header
+            # would cause them to be removed on the next iteration.
+            if get_sys_migrator_header('object') in segment_headers:
+                del(segment_headers[get_sys_migrator_header('object')])
             new_seg = self._put_segment(
                 segment_container, segment_prefix, segment_key,
-                FileLikeIter(part_resp.body), sz_bytes, put_headers,
+                FileLikeIter(part_resp.body), sz_bytes, segment_headers,
                 aws_bucket)
             segments.append(new_seg)
         expected_etag = get_slo_etag(segments)
@@ -1064,7 +1091,7 @@ class Migrator(object):
             raise MigrationError('Final etag compare failed for %s/%s' %
                                  (aws_bucket, key))
         self._upload_manifest_from_segments(
-            container, key, aws_bucket, segments, remote_etag, headers)
+            container, key, aws_bucket, segments, remote_etag, put_headers)
 
     def _upload_manifest_from_segments(
             self, container, key, aws_bucket, segments, remote_etag, headers):
@@ -1076,27 +1103,31 @@ class Migrator(object):
                                 headers, aws_bucket)
         self._upload_object(work)
 
-    def _migrate_as_slo(self, aws_bucket, container, key, resp):
+    def _migrate_as_slo(self, aws_bucket, container, key, resp, put_headers):
         data = resp.body
         content_length = int(resp.headers['Content-Length'])
-        headers = convert_to_local_headers(
-            resp.headers.items(), remove_timestamp=False)
-        remote_etag = headers['etag']
-        del(headers['etag'])
+        remote_etag = put_headers['etag']
+        del(put_headers['etag'])
         segments = []
         segment_start = 0
         segment_size = self.segment_size
-        ts = create_x_timestamp_from_hdrs(headers)
         segment_container = "%s_segments" % (container,)
         segment_prefix = "%s/%s/%s/%s/" % (
-            key, ts, content_length, segment_size)
+            key, put_headers['x-timestamp'], content_length, segment_size)
         buf = []
         while segment_start < content_length:
-            segment_headers = dict(headers.items())
+            segment_headers = dict(put_headers.items())
             segment_key = "%08d" % (len(segments) + 1,)
             if segment_start + segment_size > content_length:
                 segment_size = content_length - segment_start
             segment_headers['Content-Length'] = str(segment_size)
+            if 'x-timestamp' in segment_headers:
+                del(segment_headers['x-timestamp'])
+            # The segments do not exist externally -- applying the migrator
+            # header would cause them to be removed on the next iteration.
+            if get_sys_migrator_header('object') in segment_headers:
+                del(segment_headers[get_sys_migrator_header('object')])
+
             wrapped_data = SeekableFileLikeIter(
                 itertools.chain(buf, data), length=segment_size)
             new_seg = self._put_segment(
@@ -1109,35 +1140,31 @@ class Migrator(object):
             segments.append(new_seg)
             segment_start += segment_size
         self._upload_manifest_from_segments(
-            container, key, aws_bucket, segments, remote_etag, headers)
+            container, key, aws_bucket, segments, remote_etag, put_headers)
 
     def _put_segment(self, container, prefix, key, content, size, headers,
                      bucket):
             work = UploadObjectWork(
                 container, prefix + key, content, headers, bucket)
-            put_resp = self._upload_object(
-                work, preserve_timestamp=False)
+            put_resp = self._upload_object(work)
             return {'name': '/'.join(('', container, prefix + key)),
                     'bytes': size,
                     'hash': put_resp.headers['etag']}
 
-    def _migrate_dlo(self, aws_bucket, container, key, resp):
-        put_headers = convert_to_local_headers(
-            resp.headers.items(), remove_timestamp=False)
+    def _migrate_dlo(self, aws_bucket, container, key, resp, put_headers):
         dlo_container, prefix = put_headers[MANIFEST_HEADER].split('/', 1)
         if (aws_bucket, container, key) not in self._manifests:
             # The DLO prefix can include the manifest object, which doesn't
             # have to be 0-sized. We have to be careful not to end up recursing
             # infinitely in that case.
-            self._manifests.add((aws_bucket, container, key))
+            self._manifests.add((aws_bucket, container, key,
+                                 put_headers['x-timestamp']))
             self.container_queue.put((dlo_container, prefix))
         resp.body.close()
 
-    def _migrate_slo(self, aws_bucket, slo_container, key, resp):
+    def _migrate_slo(self, aws_bucket, slo_container, key, resp, put_headers):
         manifest_blob = FileLikeIter(resp.body).read()
         manifest = json.loads(manifest_blob)
-        put_headers = convert_to_local_headers(
-            resp.headers.items(), remove_timestamp=False)
         resp.body.close()
 
         for entry in manifest:
@@ -1169,7 +1196,7 @@ class Migrator(object):
                     self.logger.warning('Object metadata changed for "%s/%s"' %
                                         (container, segment_key))
                     continue
-            work = MigrateObjectWork(container, container, segment_key)
+            work = MigrateObjectWork(container, container, segment_key, 0)
             try:
                 self.object_queue.put(work, block=False)
             except eventlet.queue.Full:
@@ -1183,14 +1210,8 @@ class Migrator(object):
         except eventlet.queue.Full:
             self._upload_object(work)
 
-    def _upload_object(self, work, preserve_timestamp=True):
+    def _upload_object(self, work):
         container, key, content, headers, aws_bucket = work
-        if preserve_timestamp:
-            headers['x-timestamp'] = Timestamp(
-                create_x_timestamp_from_hdrs(headers)).internal
-            headers[get_sys_migrator_header('object')] = headers['x-timestamp']
-        if 'last-modified' in headers:
-            del headers['last-modified']
         size = int(headers['Content-Length'])
         with self.ic_pool.item() as ic:
             try:
@@ -1228,7 +1249,7 @@ class Migrator(object):
                 container = work.container
                 key = work.key
                 if isinstance(work, MigrateObjectWork):
-                    self._migrate_object(aws_bucket, container, key)
+                    self._migrate_object(aws_bucket, container, key, work.ts)
                 else:
                     size = int(work.headers['Content-Length'])
                     self._upload_object(work)

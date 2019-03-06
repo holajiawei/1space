@@ -1,5 +1,5 @@
 """
-Copyright 2018 SwiftStack
+Copyright 2019 SwiftStack
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -376,6 +376,25 @@ class TestMainTrackClientCalls(unittest.TestCase):
             mock.call.list_buckets(),
         ])
 
+    def test_aws_no_bucket_empty_account(self, mock_get_client):
+        mock_client = \
+            mock_get_client.return_value.__enter__.return_value
+        mock_client.list_buckets.return_value = {
+            'Buckets': [],
+            'ResponseMetadata': {
+                'HTTPStatusCode': 200,
+                'HTTPHeaders': {}}}
+        exit_arg = main([
+            '--protocol', 's3',
+            '--endpoint', 'https://s3.amazonaws.com',
+            '--username', 'access id',
+            '--password', 'secret key',
+        ])
+        self.assertEqual(exit_arg, 0)
+        self.assertEqual(mock_client.mock_calls, [
+            mock.call.list_buckets(),
+        ])
+
     def test_aws_with_bucket(self, mock_get_client):
         mock_client = \
             mock_get_client.return_value.__enter__.return_value
@@ -620,6 +639,22 @@ class TestMainTrackClientCalls(unittest.TestCase):
             mock_get_client.return_value.__enter__.return_value
         mock_client.get_account.return_value = (
             {}, [{'name': 'swift-container'}])
+        exit_arg = main([
+            '--protocol', 'swift',
+            '--endpoint', 'https://saio:8080/auth/v1.0',
+            '--username', 'access id',
+            '--password', 'secret key',
+        ])
+        self.assertEqual(exit_arg, 0)
+        self.assertEqual(mock_client.mock_calls, [
+            mock.call.get_account(
+                headers={}, prefix='', limit=1, marker='')
+        ])
+
+    def test_swift_no_bucket_empty_account(self, mock_get_client):
+        mock_client = \
+            mock_get_client.return_value.__enter__.return_value
+        mock_client.get_account.return_value = ({}, [])
         exit_arg = main([
             '--protocol', 'swift',
             '--endpoint', 'https://saio:8080/auth/v1.0',
