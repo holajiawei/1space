@@ -23,7 +23,6 @@ import logging
 import md5
 import os
 import os.path
-import pystatsd.statsd
 import re
 from swift.common.utils import decode_timestamps
 import time
@@ -32,6 +31,7 @@ import urllib
 
 from .base_sync import BaseSync, LOGGER_NAME
 from .provider_factory import create_provider
+from .stats import StatsReporterFactory
 
 
 def hash_dict(data):
@@ -50,8 +50,8 @@ class SyncContainer(container_crawler.base_sync.BaseSync):
     VERIFIED_ROW_KEY = 'last_verified_row'
     METADATA_HASH_KEY = 'metadata_hash'
 
-    def __init__(self, status_dir, sync_settings, max_conns=10,
-                 per_account=False, statsd_client=None):
+    def __init__(self, status_dir, sync_settings, stats_factory,
+                 max_conns=10, per_account=False):
         super(SyncContainer, self).__init__(
             status_dir, sync_settings, per_account)
         self.logger = logging.getLogger(LOGGER_NAME)
@@ -73,7 +73,6 @@ class SyncContainer(container_crawler.base_sync.BaseSync):
         self._settings = sync_settings
         self.provider = create_provider(sync_settings, max_conns,
                                         per_account=self._per_account)
-        self.statsd_client = statsd_client
 
         statsd_prefix_parts = [
             self._settings.get('aws_endpoint', 'S3'),
@@ -82,9 +81,11 @@ class SyncContainer(container_crawler.base_sync.BaseSync):
             self._settings['account'],
             self._settings['container']
         ]
-        self.statsd_prefix = '.'.join(
+        statsd_prefix = '.'.join(
             [urllib.quote(part.encode('utf-8'), safe='').replace('.', '%2E')
              for part in statsd_prefix_parts])
+
+        self.stats_reporter = stats_factory.instance(statsd_prefix)
 
     def _get_status_row(self, row_field, db_id):
         if not os.path.exists(self._status_file):
@@ -166,12 +167,6 @@ class SyncContainer(container_crawler.base_sync.BaseSync):
     def save_last_verified_row(self, row, db_id):
         return self._save_status_row(row, self.VERIFIED_ROW_KEY, db_id)
 
-    def statsd_increment(self, metric, value):
-        if not self.statsd_client:
-            return
-        self.statsd_client.update_stats(
-            '.'.join([self.statsd_prefix, metric]), value)
-
     def _get_metadata_hash(self, db_id):
         res = self._get_status_row(self.METADATA_HASH_KEY, db_id)
         # if the row doesn't exist or if there is a KeyError it returns 0
@@ -209,7 +204,7 @@ class SyncContainer(container_crawler.base_sync.BaseSync):
         if row['deleted']:
             if self.propagate_delete:
                 self.provider.delete_object(row['name'])
-                self.statsd_increment('deleted_objects', 1)
+                self.stats_reporter.increment('deleted_objects', 1)
         else:
             # The metadata timestamp should always be the latest timestamp
             _, _, meta_ts = decode_timestamps(row['created_at'])
@@ -217,10 +212,10 @@ class SyncContainer(container_crawler.base_sync.BaseSync):
                 raise RetryError('Object is not yet eligible for archive')
             status = self.provider.upload_object(
                 row, swift_client,
-                lambda bytes_uploaded: self.statsd_increment(
+                lambda bytes_uploaded: self.stats_reporter.increment(
                     'bytes', bytes_uploaded))
             if status == BaseSync.UploadStatus.PUT:
-                self.statsd_increment('copied_objects', 1)
+                self.stats_reporter.increment('copied_objects', 1)
 
             uploaded_statuses = [
                 BaseSync.UploadStatus.PUT,
@@ -243,16 +238,13 @@ class SyncContainerFactory(object):
         return 'SyncContainer'
 
     def instance(self, settings, per_account=False):
-        if 'statsd_host' in self.config:
-            statsd_client = pystatsd.statsd.Client(
-                self.config['statsd_host'],
-                self.config.get('statsd_port', 8125),
-                self.config.get('statsd_prefix'))
-        else:
-            statsd_client = None
+        stats_factory = StatsReporterFactory(
+            self.config.get('statsd_host', None),
+            self.config.get('statsd_port', 8125),
+            self.config.get('statsd_prefix'))
 
         return self._handler_class(
             self.config['status_dir'],
             settings,
             per_account=per_account,
-            statsd_client=statsd_client)
+            stats_factory=stats_factory)

@@ -73,12 +73,18 @@ class TestSyncContainer(unittest.TestCase):
 
         self.aws_bucket = 'bucket'
         self.scratch_space = 'scratch'
+
+        self.stats_factory = mock.Mock()
+        stats_reporter = mock.Mock()
+        self.stats_factory.instance.return_value = stats_reporter
+
         self.sync_container = SyncContainer(self.scratch_space,
                                             {'aws_bucket': self.aws_bucket,
                                              'aws_identity': 'identity',
                                              'aws_secret': 'credential',
                                              'account': 'account',
-                                             'container': 'container'})
+                                             'container': 'container'},
+                                            self.stats_factory)
 
     def test_load_non_existent_meta(self):
         ret = self.sync_container.get_last_processed_row('db-id')
@@ -399,7 +405,8 @@ class TestSyncContainer(unittest.TestCase):
                          dict(defaults.items() + [('protocol', 's3')])]
 
         for settings in test_settings:
-            sync = SyncContainer(self.scratch_space, settings, max_conns=1)
+            sync = SyncContainer(self.scratch_space, settings,
+                                 self.stats_factory, max_conns=1)
             self.assertIsInstance(sync.provider, SyncS3)
             self.assertEqual(sync.provider.settings, settings)
             self.assertEqual(len(sync.provider.client_pool.client_pool), 0)
@@ -413,7 +420,8 @@ class TestSyncContainer(unittest.TestCase):
                     'account': 'account',
                     'container': 'container',
                     'protocol': 'swift'}
-        sync = SyncContainer(self.scratch_space, settings, max_conns=1)
+        sync = SyncContainer(self.scratch_space, settings,
+                             self.stats_factory, max_conns=1)
         self.assertIsInstance(sync.provider, SyncSwift)
         self.assertEqual(sync.provider.settings, settings)
         self.assertEqual(len(sync.provider.client_pool.client_pool), 0)
@@ -427,7 +435,8 @@ class TestSyncContainer(unittest.TestCase):
                     'container': 'container',
                     'protocol': 'foo'}
         with self.assertRaises(NotImplementedError):
-            SyncContainer(self.scratch_space, settings, 1)
+            SyncContainer(self.scratch_space, settings,
+                          self.stats_factory, max_conns=1)
 
     @mock.patch('s3_sync.sync_s3.boto3.session.Session')
     def test_retry_copy_after(self, session_mock):
@@ -439,7 +448,8 @@ class TestSyncContainer(unittest.TestCase):
             'container': 'container',
             'copy_after': 3600}
         with self.assertRaises(RetryError):
-            sync = SyncContainer(self.scratch_space, settings)
+            sync = SyncContainer(self.scratch_space, settings,
+                                 self.stats_factory)
             sync.handle({'deleted': 0,
                          'created_at': str(time.time()),
                          'name': 'foo'}, None)
@@ -447,7 +457,8 @@ class TestSyncContainer(unittest.TestCase):
         current = time.time()
         with mock.patch('s3_sync.sync_container.time') as time_mock:
             time_mock.time.return_value = current + settings['copy_after'] + 1
-            sync = SyncContainer(self.scratch_space, settings)
+            sync = SyncContainer(self.scratch_space, settings,
+                                 self.stats_factory)
             sync.provider = mock.Mock()
             row = {'deleted': 0,
                    'created_at': str(time.time()),
@@ -456,6 +467,7 @@ class TestSyncContainer(unittest.TestCase):
             sync.handle(row, None)
             sync.provider.upload_object.assert_called_once_with(
                 row, None, mock.ANY)
+            sync.stats_reporter.increment.assert_not_called()
 
     @mock.patch('s3_sync.sync_s3.boto3.session.Session')
     def test_retain_copy(self, session_mock):
@@ -467,7 +479,8 @@ class TestSyncContainer(unittest.TestCase):
             'container': 'container',
             'retain_local': False}
 
-        sync = SyncContainer(self.scratch_space, settings)
+        sync = SyncContainer(self.scratch_space, settings,
+                             self.stats_factory)
         sync.provider = mock.Mock()
         sync.provider.upload_object.return_value = SyncS3.UploadStatus.PUT
         swift_client = mock.Mock()
@@ -484,6 +497,8 @@ class TestSyncContainer(unittest.TestCase):
             row, swift_client, mock.ANY)
         sync.provider.delete_local_object.assert_called_once_with(
             swift_client, row, swift_ts, False)
+        sync.stats_reporter.increment.assert_called_once_with(
+            'copied_objects', 1)
 
     @mock.patch('s3_sync.sync_s3.boto3.session.Session')
     def test_no_propagate_delete(self, session_mock):
@@ -495,7 +510,8 @@ class TestSyncContainer(unittest.TestCase):
             'container': 'container',
             'propagate_delete': False}
 
-        sync = SyncContainer(self.scratch_space, settings)
+        sync = SyncContainer(self.scratch_space, settings,
+                             self.stats_factory)
         sync.provider = mock.Mock()
         row = {'deleted': 1, 'name': 'tombstone'}
         sync.handle(row, None)
@@ -513,7 +529,8 @@ class TestSyncContainer(unittest.TestCase):
             'container': 'container',
             'propagate_delete': True}
 
-        sync = SyncContainer(self.scratch_space, settings)
+        sync = SyncContainer(self.scratch_space, settings,
+                             self.stats_factory)
         sync.provider = mock.Mock()
         row = {'deleted': 1, 'name': 'tombstone'}
         sync.handle(row, None)
@@ -521,6 +538,8 @@ class TestSyncContainer(unittest.TestCase):
         # Make sure that we do not make any additional calls
         self.assertEqual([mock.call.delete_object(row['name'])],
                          sync.provider.mock_calls)
+        sync.stats_reporter.increment.assert_called_once_with(
+            'deleted_objects', 1)
 
     def test_hash_invariance(self):
         testdata = [({}, {}),
@@ -559,7 +578,8 @@ class TestSyncContainer(unittest.TestCase):
 
         mock_swift.return_value.post_container.return_value = {}
 
-        sync = SyncContainer(self.scratch_space, settings)
+        sync = SyncContainer(self.scratch_space, settings,
+                             self.stats_factory)
         sync.handle_container_metadata(metadata, 'db-id-1')
 
         mock_swift.assert_called_once_with(
@@ -594,7 +614,8 @@ class TestSyncContainer(unittest.TestCase):
             'container': 'container',
             'protocol': 'swift'}
 
-        sync = SyncContainer(self.scratch_space, settings)
+        sync = SyncContainer(self.scratch_space, settings,
+                             self.stats_factory)
         metadata = {'X-Container-Meta-Foo': ('foo', '1545160000.1234'),
                     'X-Container-Meta-Bar': ('bar', '1546123456.7896'),
                     'Some-Other-Key': ('val', '1545179217.201453'),
@@ -639,7 +660,8 @@ class TestSyncContainer(unittest.TestCase):
             'container': 'container',
             'protocol': 'swift'}
 
-        sync = SyncContainer(self.scratch_space, settings)
+        sync = SyncContainer(self.scratch_space, settings,
+                             self.stats_factory)
 
         sync.handle_container_metadata(metadata, 'db-id-1')
         # Connections are lazy-initialized
@@ -673,7 +695,8 @@ class TestSyncContainer(unittest.TestCase):
                     tmpdir, 'account', 'container'), 'w') as fh:
                 fh.write(json.dumps(db_entries))
 
-            sync = SyncContainer(tmpdir, settings)
+            sync = SyncContainer(tmpdir, settings,
+                                 self.stats_factory)
             sync.logger = mock.Mock()
             mock_swift.return_value.post_container.side_effect = RuntimeError(
                 'failed to post container')
@@ -691,7 +714,8 @@ class TestSyncContainer(unittest.TestCase):
             'account': 'account',
             'container': 'container',
             'exclude_pattern': '^foo-\d+$'}
-        sync = SyncContainer(self.scratch_space, settings)
+        sync = SyncContainer(self.scratch_space, settings,
+                             self.stats_factory)
         sync.provider = mock.Mock()
         sync.handle({'name': 'foo-1'}, mock.Mock())
         sync.handle({'name': 'foo-12345', 'deleted': 1}, mock.Mock())
@@ -707,6 +731,7 @@ class TestSyncContainer(unittest.TestCase):
 
 
 class TestSyncContainerFactory(unittest.TestCase):
+
     def test_missing_status_dir(self):
         with self.assertRaises(RuntimeError) as ctx:
             SyncContainerFactory({})
@@ -724,14 +749,8 @@ class TestSyncContainerFactory(unittest.TestCase):
         self.assertEqual(status_dir, instance._status_dir)
         self.assertTrue(instance._per_account)
 
-    @mock.patch('s3_sync.sync_container.pystatsd.statsd.Client')
-    def test_statsd_settings(self, mock_statsd):
-        settings = {
-            'status_dir': '/foo/bar',
-            'statsd_host': 'localhost',
-            'statsd_port': 1337,
-            'statsd_prefix': '1space-test'
-        }
+    def test_stats_reporting_prefix(self):
+        status_dir = '/foo/bar'
         instance_settings = {'aws_bucket': 'bucket',
                              'aws_identity': 'identity',
                              'aws_secret': 'credential',
@@ -739,13 +758,10 @@ class TestSyncContainerFactory(unittest.TestCase):
                              'container': u'c\u00f5ntainer',
                              'custom_prefix': u'myobj\u00efcts',
                              'aws_endpoint': 'http://127.0.0.1:5000/auth/v1.0'}
-        factory = SyncContainerFactory(settings)
+        factory = SyncContainerFactory({'status_dir': status_dir})
         instance = factory.instance(instance_settings)
-        mock_statsd.assert_called_once_with(
-            settings['statsd_host'],
-            settings['statsd_port'],
-            settings['statsd_prefix'])
+
         self.assertEqual(
             'http%3A%2F%2F127%2E0%2E0%2E1%3A5000%2Fauth%2Fv1%2E0'
             '.bucket%2Fmyobj%C3%AFcts.acc%C3%B4unt.c%C3%B5ntainer',
-            instance.statsd_prefix)
+            instance.stats_reporter.metric_prefix)

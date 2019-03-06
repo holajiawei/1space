@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 """
 
-
+import copy
 import boto3
 import botocore
 import hashlib
@@ -146,6 +146,12 @@ class TestMigrator(TestCloudSyncBase):
                 self.assertIn(k, resp['ResponseMetadata']['HTTPHeaders'])
                 self.assertEqual(v, resp['ResponseMetadata']['HTTPHeaders'][k])
 
+        self._assert_stats(
+            migration,
+            {'copied_objects': len(test_objects),
+             'scanned': len(test_objects),
+             'bytes': sum(map(lambda obj: len(obj[1]), test_objects))})
+
     def test_swift_migration(self):
         migration = self.swift_migration()
         status = migrator_utils.TempMigratorStatus(migration)
@@ -195,6 +201,12 @@ class TestMigrator(TestCloudSyncBase):
                 for k, v in user_meta.items():
                     self.assertIn(k.decode('utf8'), hdrs)
                     self.assertEqual(v.decode('utf8'), hdrs[k.decode('utf8')])
+
+        self._assert_stats(
+            migration,
+            {'copied_objects': len(test_objects),
+             'scanned': len(test_objects),
+             'bytes': sum(map(lambda obj: len(obj[1]), test_objects))})
 
     def test_swift_migration_unicode_acct(self):
         migration = self._find_migration(
@@ -246,6 +258,12 @@ class TestMigrator(TestCloudSyncBase):
                     self.assertIn(k.decode('utf8'), hdrs)
                     self.assertEqual(v.decode('utf8'), hdrs[k.decode('utf8')])
 
+        self._assert_stats(
+            migration,
+            {'copied_objects': len(test_objects),
+             'scanned': len(test_objects),
+             'bytes': sum(map(lambda obj: len(obj[1]), test_objects))})
+
     def test_swift_large_objects(self):
         migration = self.swift_migration()
         conn_noshunt = self.conn_for_acct_noshunt(migration['account'])
@@ -254,16 +272,18 @@ class TestMigrator(TestCloudSyncBase):
             migration, status)
 
         segments_container = migration['aws_bucket'] + '_segments'
-        content = ''.join([chr(97 + i) * 2**20 for i in range(10)])
+        segment_len = 2**20
+        parts_count = 10
+        content = ''.join([chr(97 + i) * segment_len for i in range(10)])
 
         self.remote_swift(
             'put_container', segments_container)
-        for i in range(10):
+        for i in range(parts_count):
             self.remote_swift('put_object', segments_container,
-                              'slo-part-%d' % i, chr(97 + i) * 2**20,
+                              'slo-part-%d' % i, chr(97 + i) * segment_len,
                               headers={'x-object-meta-part': i})
             self.remote_swift('put_object', segments_container,
-                              'dlo-part-%d' % i, chr(97 + i) * 2**20,
+                              'dlo-part-%d' % i, chr(97 + i) * segment_len,
                               headers={'x-object-meta-part': i})
         # Upload the manifests
         self.remote_swift(
@@ -273,7 +293,7 @@ class TestMigrator(TestCloudSyncBase):
 
         slo_manifest = [
             {'path': '/%s/slo-part-%d' % (segments_container, i)}
-            for i in range(10)]
+            for i in range(parts_count)]
         self.remote_swift(
             'put_object', migration['aws_bucket'], 'slo',
             json.dumps(slo_manifest),
@@ -290,8 +310,8 @@ class TestMigrator(TestCloudSyncBase):
         _, listing = conn_noshunt.get_container(segments_container)
         segments = [obj['name'] for obj in listing]
         expected = sorted(
-            ['slo-part-%d' % i for i in range(10)] +
-            ['dlo-part-%d' % i for i in range(10)])
+            ['slo-part-%d' % i for i in range(parts_count)] +
+            ['dlo-part-%d' % i for i in range(parts_count)])
         self.assertEqual(expected, segments)
 
         mismatched = []
@@ -321,6 +341,13 @@ class TestMigrator(TestCloudSyncBase):
         self.assertEqual('dlo-meta', dlo_hdrs.get('x-object-meta-dlo'))
         self.assertTrue(content == dlo_body)
 
+        self._assert_stats(
+            migration,
+            {'copied_objects': (parts_count * 2) + 2,
+             'scanned': parts_count + 2,
+             'bytes': (segment_len * parts_count * 2) + 2030
+             })
+
     def test_swift_self_contained_dlo(self):
         migration = self.swift_migration()
         conn_noshunt = self.conn_for_acct_noshunt(migration['account'])
@@ -329,7 +356,11 @@ class TestMigrator(TestCloudSyncBase):
             migration, status)
         migrator.work_chunk = 1
 
-        content = ''.join([chr(97 + i) * 2**20 for i in range(10)])
+        segment_len = 2**20
+        parts_count = 10
+
+        content = ''.join([chr(97 + i) * segment_len for i in range(
+            parts_count)])
 
         for i in range(10):
             self.remote_swift('put_object', migration['aws_bucket'],
@@ -352,6 +383,10 @@ class TestMigrator(TestCloudSyncBase):
             'get_object', migration['container'], 'dlo')
         self.assertEqual('dlo-meta', dlo_hdrs.get('x-object-meta-dlo'))
         self.assertTrue(content == dlo_body)
+
+        self._assert_stats(
+            migration,
+            {'copied_objects': 11, 'scanned': 12, 'bytes': len(content)})
 
     def test_swift_migrate_new_container_location(self):
         migration = self._find_migration(
@@ -416,6 +451,12 @@ class TestMigrator(TestCloudSyncBase):
         migrator.next_pass()
         # verify objects are really there
         _verify_objects(conn_noshunt, migration['container'])
+
+        self._assert_stats(
+            migration,
+            {'copied_objects': len(test_objects),
+             'scanned': len(test_objects),
+             'bytes': sum(map(lambda obj: len(obj[1]), test_objects))})
 
     def test_s3_migrate_new_container_location(self):
         migration = self._find_migration(
@@ -489,6 +530,12 @@ class TestMigrator(TestCloudSyncBase):
         migrator.next_pass()
         # verify objects have migrated over
         _verify_local_s3_objects(conn_noshunt, migration['container'])
+
+        self._assert_stats(
+            migration,
+            {'scanned': 3,
+             'copied_objects': 0,
+             'bytes': 0})
 
     def test_container_meta(self):
         migration = self._find_migration(
@@ -586,6 +633,16 @@ class TestMigrator(TestCloudSyncBase):
                 for k, v in user_meta.items():
                     self.assertIn(k, hdrs)
                     self.assertEqual(v, hdrs[k])
+
+        for cont in test_containers:
+            mc = copy.copy(migration)
+            mc['aws_bucket'] = cont
+            mc['container'] = cont
+            self._assert_stats(
+                mc,
+                {'copied_objects': len(test_objects),
+                 'scanned': len(test_objects),
+                 'bytes': sum(map(lambda obj: len(obj[1]), test_objects))})
 
     def test_shunt_list_container_all_containers(self):
         test_objects = [

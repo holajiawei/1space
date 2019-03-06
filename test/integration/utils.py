@@ -10,6 +10,7 @@ import types
 
 import s3_sync.sync_container
 import s3_sync.daemon_utils
+from s3_sync.stats import StatsReporterFactory
 
 
 class StatsdServer(pystatsd.server.Server):
@@ -119,21 +120,17 @@ class TempSyncContainerFactory(s3_sync.sync_container.SyncContainerFactory):
         self._status = {}
 
     def instance(self, settings, per_account=True):
-        # Copied from SyncContainerFactory, but added plumbing for the _status
-        if 'statsd_host' in self.config:
-            statsd_client = pystatsd.statsd.Client(
-                self.config['statsd_host'],
-                self.config.get('statsd_port', 8125),
-                self.config.get('statsd_prefix'))
-        else:
-            statsd_client = None
+        stats_factory = StatsReporterFactory(
+            self.config.get('statsd_host', None),
+            self.config.get('statsd_port', 8125),
+            self.config.get('statsd_prefix'))
 
         return self._handler_class(
             self._status,
             self.config['status_dir'],
             settings,
             per_account=per_account,
-            statsd_client=statsd_client)
+            stats_factory=stats_factory)
 
 
 def get_container_crawler(profile, **kwargs):

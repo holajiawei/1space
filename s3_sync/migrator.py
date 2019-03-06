@@ -29,12 +29,14 @@ import sys
 import tempfile
 import time
 import traceback
+import urllib
 
 from container_crawler.utils import create_internal_client
 from .daemon_utils import (load_swift, setup_context, initialize_loggers,
                            setup_logger)
 from .provider_factory import create_provider
-from .stats import MigratorPassStats
+from .stats import MigratorPassStats, StatsReporterFactory
+
 from .utils import (convert_to_local_headers, convert_to_swift_headers,
                     create_x_timestamp_from_hdrs, diff_container_headers,
                     diff_account_headers, EPOCH, get_container_headers,
@@ -329,7 +331,7 @@ class Status(object):
 class Migrator(object):
     '''List and move objects from a remote store into the Swift cluster'''
     def __init__(self, config, status, work_chunk, workers, swift_pool, logger,
-                 selector, segment_size):
+                 selector, segment_size, stats_factory):
         self.config = dict(config)
         if 'container' not in self.config:
             # NOTE: in the future this may no longer be true, as we may allow
@@ -355,6 +357,26 @@ class Migrator(object):
         self.gthread_local = eventlet.corolocal.local()
         self.segment_size = segment_size
         self.handled_containers = []
+        self.stats_factory = stats_factory
+
+        self.stats_reporter = self.stats_factory.instance(
+            self._build_statsd_prefix())
+
+    def _build_statsd_prefix(self):
+        statsd_prefix_parts = [
+            self.config.get('aws_endpoint', 'S3'),
+            '/'.join(filter(
+                None, [self.config.get('aws_bucket'),
+                       self.config.get('custom_prefix')])),
+            self.config.get('account'),
+            self.config.get('container')
+        ]
+
+        statsd_prefix = '.'.join(
+            [urllib.quote(part.encode('utf-8'), safe='').replace('.', '%2E')
+             for part in statsd_prefix_parts])
+
+        return statsd_prefix
 
     def next_pass(self):
         if self.config['aws_bucket'] != '/*':
@@ -416,6 +438,9 @@ class Migrator(object):
                 self.config['container'] = remote_container
                 self.provider.aws_bucket = remote_container
                 self.handled_containers.append(dict(self.config))
+                # Update the stats reporter
+                self.stats_reporter = self.stats_factory.instance(
+                    self._build_statsd_prefix())
                 self._next_pass()
             if local_container and local_container['name'] == remote_container:
                 local_container = next(local_iterator)
@@ -958,6 +983,8 @@ class Migrator(object):
                     marker = remote['name']
 
         self.stats.update(scanned=scanned)
+        self.stats_reporter.increment('scanned', scanned)
+
         while local and (not marker or local['name'] < marker or scanned == 0):
             # We may have objects left behind that need to be removed
             self._reconcile_deleted_objects(container, local['name'])
@@ -1204,6 +1231,9 @@ class Migrator(object):
         if result.status_int == 201:
             self.gthread_local.uploaded_objects += 1
             self.gthread_local.bytes_copied += size
+            self.stats_reporter.increment('copied_objects', 1)
+            if size > 0:
+                self.stats_reporter.increment('bytes', size)
         return result
 
     def _upload_worker(self):
@@ -1244,7 +1274,8 @@ class Migrator(object):
 
 
 def process_migrations(migrations, migration_status, internal_pool, logger,
-                       items_chunk, workers, selector, segment_size):
+                       items_chunk, workers, selector, segment_size,
+                       stats_factory):
     handled_containers = []
     for index, migration in enumerate(migrations):
         if migration['aws_bucket'] == '/*' or selector.is_local_container(
@@ -1259,7 +1290,7 @@ def process_migrations(migrations, migration_status, internal_pool, logger,
             migrator = Migrator(migration, migration_status,
                                 items_chunk, workers,
                                 internal_pool, logger,
-                                selector, segment_size)
+                                selector, segment_size, stats_factory)
             pass_containers = migrator.next_pass()
             if pass_containers is None:
                 # Happens if there is an error listing containers.
@@ -1273,15 +1304,16 @@ def process_migrations(migrations, migration_status, internal_pool, logger,
 
 
 def run(migrations, migration_status, internal_pool, logger, items_chunk,
-        workers, selector, poll_interval, segment_size, once):
+        workers, selector, poll_interval, segment_size, stats_factory, once):
     while True:
         cycle_start = time.time()
         process_migrations(migrations, migration_status, internal_pool, logger,
                            items_chunk, workers, selector,
-                           segment_size)
+                           segment_size, stats_factory)
         elapsed = time.time() - cycle_start
         naptime = max(0, poll_interval - elapsed)
         msg = 'Finished cycle in %0.2fs' % elapsed
+
         if once:
             logger.info(msg)
             return
@@ -1335,8 +1367,13 @@ def main():
     migrations = conf.get('migrations', [])
     migration_status = Status(migrator_conf['status_file'])
 
+    stats_factory = StatsReporterFactory(conf.get('statsd_host', None),
+                                         conf.get('statsd_port', 8125),
+                                         conf.get('statsd_prefix'))
+
     run(migrations, migration_status, internal_pool, logger, items_chunk,
-        workers, selector, poll_interval, segment_size, args.once)
+        workers, selector, poll_interval, segment_size, stats_factory,
+        args.once)
 
 
 if __name__ == '__main__':

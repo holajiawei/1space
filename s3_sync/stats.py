@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import eventlet
+import pystatsd.statsd
 
 
 class AtomicStats(object):
@@ -36,3 +37,37 @@ class MigratorPassStats(AtomicStats):
         self.copied += copied
         self.scanned += scanned
         self.bytes_copied += bytes_copied
+
+
+class StatsReporter(object):
+    def __init__(self, statsd_client, metric_prefix):
+        self.statsd_client = statsd_client
+        self.metric_prefix = metric_prefix
+
+    def increment(self, metric, count):
+        if self.statsd_client:
+            stat_name = '.'.join([self.metric_prefix, metric])
+            self.statsd_client.update_stats(stat_name, count)
+
+    def timing(self, metric, timing):
+        if self.statsd_client:
+            stat_name = '.'.join([self.metric_prefix, metric])
+            self.statsd_client.timing(stat_name, timing)
+
+
+class StatsReporterFactory(object):
+    def __init__(self, statsd_host, statsd_port, statsd_prefix,
+                 handler_class=StatsReporter):
+        self._handler_class = handler_class
+        if statsd_host:
+            self.statsd_client = pystatsd.statsd.Client(
+                statsd_host, statsd_port, statsd_prefix
+            )
+        else:
+            self.statsd_client = None
+
+    def __str__(self):
+        return 'StatsReporter'
+
+    def instance(self, metric_prefix):
+        return self._handler_class(self.statsd_client, metric_prefix)

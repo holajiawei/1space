@@ -124,6 +124,7 @@ class TestSyncSharded(TestCloudSyncBase):
             self.assertEqual(body, target_body)
 
     def setUp(self):
+        super(TestSyncSharded, self).setUp()
         self.mapping = self._find_mapping(
             lambda m: m['aws_bucket'] == 'sharded-target')
 
