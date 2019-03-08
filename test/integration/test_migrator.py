@@ -185,6 +185,12 @@ class TestMigrator(TestCloudSyncBase):
                                    StringIO.StringIO(body),
                                    headers=headers)
 
+        # store the timestamp so we can make sure they are correct
+        obj_headers = {}
+        for name, _, _ in test_objects:
+            obj_headers[name] = conn_remote.head_object(
+                migration['aws_bucket'], name)
+
         # Sanity-check (not actually migrated yet)
         self.assertFalse(_check_objects_copied(conn_noshunt))
 
@@ -201,6 +207,9 @@ class TestMigrator(TestCloudSyncBase):
                 for k, v in user_meta.items():
                     self.assertIn(k.decode('utf8'), hdrs)
                     self.assertEqual(v.decode('utf8'), hdrs[k.decode('utf8')])
+                self.assertEqual(
+                    obj_headers[name]['x-timestamp'],
+                    hdrs['x-timestamp'])
 
         self._assert_stats(
             migration,
