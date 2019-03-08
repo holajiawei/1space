@@ -13,7 +13,6 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 """
-from contextlib import contextmanager
 import datetime
 import errno
 import hashlib
@@ -22,15 +21,20 @@ import json
 import logging
 import math
 import mock
-from s3_sync.base_sync import ProviderResponse
-import s3_sync.migrator
-from StringIO import StringIO
-from swift.common.internal_client import UnexpectedResponse
+import os
+import shutil
 import time
 import unittest
+
+from contextlib import contextmanager
+from StringIO import StringIO
+from swift.common.internal_client import UnexpectedResponse
 from tempfile import NamedTemporaryFile, mkdtemp
-import shutil
-import os
+
+import s3_sync.migrator
+
+from s3_sync.base_sync import ProviderResponse
+from .utils import FakeStream
 
 
 def create_timestamp(epoch_ts):
@@ -2105,6 +2109,176 @@ class TestMigrator(unittest.TestCase):
                 self.assertEqual(self.migrator.config['container'], cont)
                 self.assertEqual('', ''.join(body))
             parts[obj] = True
+
+    @mock.patch('s3_sync.migrator.create_provider')
+    def test_migrate_mpu_etag_mismatch(self, create_provider_mock):
+        provider = create_provider_mock.return_value
+        self.migrator.status.get_migration.return_value = {}
+
+        key = 'bar'
+        remote_headers = {
+            'x-object-meta-custom': 'custom',
+            'last-modified': create_timestamp(1.4e9),
+            'etag': 'foo-2',
+            'Content-Length': '20000000'}
+        list_time = create_list_timestamp(1.4e9)
+        self.migrator._read_account_headers = mock.Mock(return_value={})
+        swift_seg_resp = mock.Mock()
+        swift_seg_resp.status_int = 200
+        swift_seg_resp.headers = {'etag': 'deadbeef'}
+        self.swift_client.container_exists.return_value = True
+        provider.head_account.return_value = {}
+
+        # to make sure responses are all closed
+        full_mpu = FakeStream(2e7)
+        parts = [FakeStream(1e7), FakeStream(1e7)]
+
+        def get_object(name, **args):
+            if name != key:
+                raise RuntimeError('unknown object')
+            if 'PartNumber' in args:
+                headers = dict(remote_headers)
+                headers['Content-Length'] = str(
+                    len(parts[args['PartNumber'] - 1]))
+                return ProviderResponse(
+                    True, 200, headers, parts[args['PartNumber'] - 1])
+            return ProviderResponse(True, 200, remote_headers, full_mpu)
+
+        provider.list_objects.return_value = ProviderResponse(
+            True, 200, {},
+            [{'name': key, 'last_modified': list_time,
+              'hash': 'foo-2', 'bytes': remote_headers['Content-Length']}])
+
+        provider.head_bucket.return_value = mock.Mock(
+            status=200, headers={})
+        provider.get_object.side_effect = get_object
+
+        def fake_internal_iterator(*args, **kwargs):
+            yield None
+
+        self.migrator._iterate_internal_listing = fake_internal_iterator
+        self.swift_client.make_request.return_value = swift_seg_resp
+        self.swift_client.make_path.side_effect =\
+            lambda *args: '/'.join(args)
+
+        self.migrator.next_pass()
+
+        # First log line after copied parts is the exception message;
+        # the last ones are the traceback.
+        self.assertEqual(
+            'Failed to migrate "bucket"/"bar": '
+            'Final etag compare failed for bucket/bar',
+            self.get_log_lines()[len(parts)])
+
+        expected_calls = [
+            mock.call('PUT',
+                      '%s/%s_segments/%s' % (
+                          self.migrator.config['account'],
+                          self.migrator.config['container'],
+                          '/'.join((key, str(1.4e9),
+                                    remote_headers['Content-Length'],
+                                    str(len(parts[i])),
+                                    '%08d' % (i + 1)))),
+                      {'x-object-meta-custom': 'custom',
+                       'x-timestamp': 1.4e9,
+                       'Content-Length': str(len(parts[i]))},
+                      (2,), mock.ANY)
+            for i in range(len(parts))]
+        self.assertEqual(len(expected_calls),
+                         len(self.swift_client.make_request.mock_calls))
+        for i in range(0, len(expected_calls)):
+            self.assertEqual(expected_calls[i],
+                             self.swift_client.make_request.mock_calls[i])
+        self.assertEqual(
+            [mock.call(self.migrator.config['account'],
+                       '%s_segments' % self.migrator.config['container'],
+                       '/'.join((key, str(1.4e9),
+                                 remote_headers['Content-Length'],
+                                 str(len(parts[i])),
+                                 '%08d' % (i + 1))), {})
+             for i in range(len(parts))],
+            self.swift_client.delete_object.mock_calls)
+        self.assertTrue(full_mpu.closed)
+
+    @mock.patch('s3_sync.migrator.create_provider')
+    def test_mpu_part_get_error(self, create_provider_mock):
+        provider = create_provider_mock.return_value
+        self.migrator.status.get_migration.return_value = {}
+
+        key = 'bar'
+        remote_headers = {
+            'x-object-meta-custom': 'custom',
+            'last-modified': create_timestamp(1.4e9),
+            'etag': 'foo-2',
+            'Content-Length': '20000000'}
+        list_time = create_list_timestamp(1.4e9)
+        self.migrator._read_account_headers = mock.Mock(return_value={})
+        swift_seg_resp = mock.Mock()
+        swift_seg_resp.status_int = 200
+        swift_seg_resp.headers = {'etag': 'deadbeef'}
+        self.swift_client.container_exists.return_value = True
+        provider.head_account.return_value = {}
+
+        # to make sure responses are all closed
+        full_mpu = FakeStream(2e7)
+        part = FakeStream(1e7)
+
+        def get_object(name, **args):
+            if name != key:
+                raise RuntimeError('unknown object')
+            if 'PartNumber' in args:
+                if args['PartNumber'] == 2:
+                    return mock.Mock(
+                        success=False,
+                        status=500,
+                        reraise=mock.Mock(side_effect=RuntimeError('failed')))
+                headers = dict(remote_headers)
+                headers['Content-Length'] = str(len(part))
+                return ProviderResponse(True, 200, headers, part)
+            return ProviderResponse(True, 200, remote_headers, full_mpu)
+
+        provider.list_objects.return_value = ProviderResponse(
+            True, 200, {},
+            [{'name': key, 'last_modified': list_time,
+              'hash': 'foo-2', 'bytes': remote_headers['Content-Length']}])
+
+        provider.head_bucket.return_value = mock.Mock(
+            status=200, headers={})
+        provider.get_object.side_effect = get_object
+
+        def fake_internal_iterator(*args, **kwargs):
+            yield None
+
+        self.migrator._iterate_internal_listing = fake_internal_iterator
+        self.swift_client.make_request.return_value = swift_seg_resp
+        self.swift_client.make_path.side_effect =\
+            lambda *args: '/'.join(args)
+
+        self.migrator.next_pass()
+
+        # First log line after copied parts is the exception message;
+        # the last ones are the traceback.
+        self.assertEqual(
+            'Failed to migrate "bucket"/"bar": failed',
+            self.get_log_lines()[1])
+
+        segment_name = '/'.join(
+            (key, str(1.4e9), remote_headers['Content-Length'],
+             str(len(part)), '%08d' % 1))
+        segment_path = '%s/%s_segments/%s' % (
+            self.migrator.config['account'],
+            self.migrator.config['container'],
+            segment_name)
+        self.swift_client.make_request.assert_called_once_with(
+            'PUT', segment_path,
+            {'x-object-meta-custom': 'custom',
+             'x-timestamp': 1.4e9,
+             'Content-Length': str(len(part))}, (2,), mock.ANY)
+        self.swift_client.delete_object.assert_called_once_with(
+            self.migrator.config['account'],
+            '%s_segments' % self.migrator.config['container'],
+            segment_name, {})
+        self.assertTrue(full_mpu.closed)
 
     @mock.patch('s3_sync.migrator.create_provider')
     def test_etag_mismatch(self, create_provider_mock):

@@ -1022,6 +1022,10 @@ class Migrator(object):
                                  {})
 
     def _migrate_mpu(self, aws_bucket, container, key, resp, put_headers):
+        # The multipart upload object is downloaded using GET on the individual
+        # parts, so we close the initial response stream.
+        resp.body.close()
+
         # TODO (MSD): Parallelize the downloads (another queue??)
         remote_etag = put_headers['etag']
         # The etag for S3 multipart objects is computed differently and can't
@@ -1038,7 +1042,6 @@ class Migrator(object):
                     'IfMatch': remote_etag}
             part_resp = self.provider.get_object(key, **args)
             if not part_resp.success:
-                resp.body.close()
                 part_resp.body.close()
                 self._delete_parts(segment_container, segments)
                 part_resp.reraise()
@@ -1059,8 +1062,7 @@ class Migrator(object):
             segments.append(new_seg)
         expected_etag = get_slo_etag(segments)
         if remote_etag != expected_etag:
-            self._delete_parts(segments)
-            resp.body.close()
+            self._delete_parts(segment_container, segments)
             raise MigrationError('Final etag compare failed for %s/%s' %
                                  (aws_bucket, key))
         self._upload_manifest_from_segments(
