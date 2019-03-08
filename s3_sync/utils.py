@@ -167,14 +167,18 @@ class SeekableFileLikeIter(FileLikeIter):
       it will raise a TypeError.
     * If you specify a `seek_zero_cb`, it will be called when a seek to
       position zero (regardless of args), if any data has already been
-      read.  The callback must return a new iterator, which will be
-      used for subsequent reads.  In other words, the callback must
+      read. The callback must return a new iterator, which will be
+      used for subsequent reads. In other words, the callback must
       actually take some action that allows the data coming out to be
-      correct for an actual offset of zero.  Also, without a callback
+      correct for an actual offset of zero. Also, without a callback
       specified, any attempt to seek after any data has been read will
       result in a RuntimeError.
+    * If `stats_cb` is specified, it will be called before returning from every
+      read() call with the number of bytes about to be read. This can be used
+      for the purposes of tracking data transfer progress.
     """
-    def __init__(self, iterable_or_filelike, length=None, seek_zero_cb=None):
+    def __init__(self, iterable_or_filelike, length=None, seek_zero_cb=None,
+                 stats_cb=None):
         try:
             super(SeekableFileLikeIter, self).__init__(iterable_or_filelike)
         except TypeError as e:
@@ -191,6 +195,7 @@ class SeekableFileLikeIter(FileLikeIter):
         self.length = length
         self.seek_zero_cb = seek_zero_cb
         self._bytes_delivered = 0  # capped by length, if given
+        self._stats_cb = stats_cb
 
     def tell(self):
         return self._bytes_delivered
@@ -230,7 +235,7 @@ class SeekableFileLikeIter(FileLikeIter):
         return data
 
     # This is hoisted in from base class and changed so we can get our
-    # bytes-delivered accounting correct in all cases.  Sigh.
+    # bytes-delivered accounting correct in all cases.
     def next(self, called_from_read=False):
         """
         next(x) -> the next value, or raise StopIteration
@@ -248,6 +253,8 @@ class SeekableFileLikeIter(FileLikeIter):
             # If we *were* called from read(), then it will do the truncation,
             # if necessary, and accounting.
             rv = self._account_data_delivered(rv)
+        if self._stats_cb:
+            self._stats_cb(len(rv))
         return rv
     __next__ = next
 
@@ -297,7 +304,6 @@ class FileWrapper(SeekableFileLikeIter):
         self._container = container
         self._key = key
         self.swift_req_hdrs = headers
-        self._stats_cb = stats_cb
 
         self.iterator = None
         self._swift_stream = None
@@ -307,7 +313,8 @@ class FileWrapper(SeekableFileLikeIter):
 
         super(FileWrapper, self).__init__(self._swift_stream,
                                           length=self.content_length,
-                                          seek_zero_cb=self.open_object_stream)
+                                          seek_zero_cb=self.open_object_stream,
+                                          stats_cb=stats_cb)
 
     def open_object_stream(self):
         if self._swift_stream:
@@ -341,8 +348,6 @@ class FileWrapper(SeekableFileLikeIter):
                 next(self.iterator)
             except StopIteration:
                 pass
-        if self._stats_cb:
-            self._stats_cb(len(the_data))
         return the_data
 
     def get_s3_headers(self):
