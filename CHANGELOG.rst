@@ -1,6 +1,15 @@
 History
 =======
 
+0.1.56.1 (2019-03-07)
+---------------------
+
+Bug fixes
+   - Resolved an issue where failed migrations of multipart objects will leak
+     segments.
+   - Fixed the propagation of original object timestamps into Swift during
+     migrations. This is a regression introduced in 0.1.56.
+
 0.1.56 (2019-03-05)
 -------------------
 
