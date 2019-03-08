@@ -209,9 +209,10 @@ def _create_put_headers(headers, timestamp=0):
     if int(timestamp) != timestamp and abs(timestamp - ts_from_headers) < 1:
         # Some providers have more resolution in their LIST bucket entries than
         # HEAD request responses (e.g. Google Cloud Storage).
-        ret['x-timestamp'] = timestamp
+        ret['x-timestamp'] = Timestamp(timestamp).internal
     else:
-        ret['x-timestamp'] = max(timestamp, ts_from_headers)
+        ret['x-timestamp'] = Timestamp(
+            max(timestamp, ts_from_headers)).internal
 
     ret[get_sys_migrator_header('object')] = ret['x-timestamp']
     if 'last-modified' in ret:
@@ -977,7 +978,7 @@ class Migrator(object):
                 aws_bucket, key, resp.body))
         put_headers = _create_put_headers(resp.headers.items(), list_ts)
 
-        if (aws_bucket, container, key, put_headers['x-timestamp'])\
+        if (aws_bucket, container, key, float(put_headers['x-timestamp']))\
                 in self._manifests:
             # Special handling for the DLO manifests
             if MANIFEST_HEADER not in resp.headers:
@@ -1128,12 +1129,13 @@ class Migrator(object):
 
     def _migrate_dlo(self, aws_bucket, container, key, resp, put_headers):
         dlo_container, prefix = put_headers[MANIFEST_HEADER].split('/', 1)
-        if (aws_bucket, container, key) not in self._manifests:
+        if (aws_bucket, container, key, float(put_headers['x-timestamp'])) \
+                not in self._manifests:
             # The DLO prefix can include the manifest object, which doesn't
             # have to be 0-sized. We have to be careful not to end up recursing
             # infinitely in that case.
             self._manifests.add((aws_bucket, container, key,
-                                 put_headers['x-timestamp']))
+                                 float(put_headers['x-timestamp'])))
             self.container_queue.put((dlo_container, prefix))
         resp.body.close()
 
