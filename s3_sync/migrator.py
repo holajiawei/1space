@@ -17,7 +17,6 @@ import eventlet.corolocal
 import eventlet.pools
 eventlet.patcher.monkey_patch(all=True)
 
-from collections import namedtuple
 import datetime
 import errno
 import itertools
@@ -30,6 +29,9 @@ import tempfile
 import time
 import traceback
 import urllib
+
+from collections import namedtuple
+from functools import partial
 
 from container_crawler.utils import create_internal_client
 from .daemon_utils import (load_swift, setup_context, initialize_loggers,
@@ -50,7 +52,7 @@ from swift.common.internal_client import UnexpectedResponse
 from swift.common import swob
 from swift.common.ring import Ring
 from swift.common.ring.utils import is_local_device
-from swift.common.utils import FileLikeIter, Timestamp, whataremyips
+from swift.common.utils import Timestamp, whataremyips
 
 EQUAL = 0
 ETAG_DIFF = 1
@@ -798,10 +800,11 @@ class Migrator(object):
                 self.config['account'], container, key, {})
             remote_manifest = self.provider.get_manifest(key,
                                                          bucket=aws_bucket)
-            if json.load(FileLikeIter(local_manifest)) != remote_manifest:
-                self.errors.put((
-                    aws_bucket, key,
-                    'Matching date, but differing SLO manifests'))
+            local_json_manifest = json.load(
+                SeekableFileLikeIter(local_manifest))
+            if local_json_manifest != remote_manifest:
+                self.errors.put((aws_bucket, key,
+                                 'Matching date, but differing SLO manifests'))
             return
 
         if REMOTE_ETAG in local_meta:
@@ -1014,8 +1017,7 @@ class Migrator(object):
                 resp.body.close()
                 return
             self._upload_object(UploadObjectWork(
-                container, key, FileLikeIter(resp.body),
-                put_headers, aws_bucket))
+                container, key, resp.body, put_headers, aws_bucket))
             return
 
         if MANIFEST_HEADER in resp.headers:
@@ -1039,7 +1041,7 @@ class Migrator(object):
             self._migrate_as_slo(aws_bucket, container, key, resp, put_headers)
             return
         work = UploadObjectWork(
-            container, key, FileLikeIter(resp.body), put_headers, aws_bucket)
+            container, key, resp.body, put_headers, aws_bucket)
         self._upload_object(work)
 
     def _delete_parts(self, seg_container, segmentlist):
@@ -1084,9 +1086,8 @@ class Migrator(object):
             if get_sys_migrator_header('object') in segment_headers:
                 del(segment_headers[get_sys_migrator_header('object')])
             new_seg = self._put_segment(
-                segment_container, segment_prefix, segment_key,
-                FileLikeIter(part_resp.body), sz_bytes, segment_headers,
-                aws_bucket)
+                segment_container, segment_prefix + segment_key,
+                part_resp.body, sz_bytes, segment_headers, aws_bucket)
             segments.append(new_seg)
         expected_etag = get_slo_etag(segments)
         if remote_etag != expected_etag:
@@ -1102,8 +1103,7 @@ class Migrator(object):
         headers['Content-Length'] = len(manifest)
         headers[REMOTE_ETAG] = remote_etag
         headers['X-Static-Large-Object'] = 'True'
-        work = UploadObjectWork(container, key, FileLikeIter(manifest),
-                                headers, aws_bucket)
+        work = UploadObjectWork(container, key, manifest, headers, aws_bucket)
         self._upload_object(work)
 
     def _migrate_as_slo(self, aws_bucket, container, key, resp, put_headers):
@@ -1134,7 +1134,7 @@ class Migrator(object):
             wrapped_data = SeekableFileLikeIter(
                 itertools.chain(buf, data), length=segment_size)
             new_seg = self._put_segment(
-                segment_container, segment_prefix, segment_key,
+                segment_container, segment_prefix + segment_key,
                 wrapped_data, segment_size, segment_headers, aws_bucket)
             if wrapped_data.buf:
                 buf = wrapped_data.buf
@@ -1145,12 +1145,11 @@ class Migrator(object):
         self._upload_manifest_from_segments(
             container, key, aws_bucket, segments, remote_etag, put_headers)
 
-    def _put_segment(self, container, prefix, key, content, size, headers,
-                     bucket):
+    def _put_segment(self, container, key, content, size, headers, bucket):
             work = UploadObjectWork(
-                container, prefix + key, content, headers, bucket)
+                container, key, content, headers, bucket)
             put_resp = self._upload_object(work)
-            return {'name': '/'.join(('', container, prefix + key)),
+            return {'name': '/'.join(('', container, key)),
                     'bytes': size,
                     'hash': put_resp.headers['etag']}
 
@@ -1167,7 +1166,7 @@ class Migrator(object):
         resp.body.close()
 
     def _migrate_slo(self, aws_bucket, slo_container, key, resp, put_headers):
-        manifest_blob = FileLikeIter(resp.body).read()
+        manifest_blob = SeekableFileLikeIter(resp.body).read()
         manifest = json.loads(manifest_blob)
         resp.body.close()
 
@@ -1206,9 +1205,8 @@ class Migrator(object):
             except eventlet.queue.Full:
                 self._migrate_object(
                     work.aws_bucket, work.container, segment_key)
-        work = UploadObjectWork(slo_container, key,
-                                FileLikeIter(manifest_blob), put_headers,
-                                slo_container)
+        work = UploadObjectWork(
+            slo_container, key, manifest_blob, put_headers, slo_container)
         try:
             self.object_queue.put(work, block=False)
         except eventlet.queue.Full:
@@ -1216,13 +1214,16 @@ class Migrator(object):
 
     def _upload_object(self, work):
         container, key, content, headers, aws_bucket = work
+        file_like_content = SeekableFileLikeIter(
+            content,
+            stats_cb=partial(self.stats_reporter.increment, 'bytes'))
         size = int(headers['Content-Length'])
         with self.ic_pool.item() as ic:
             try:
                 path = ic.make_path(self.config['account'], container, key)
                 # Note using dict(headers) here to make a shallow copy
                 result = ic.make_request(
-                    'PUT', path, dict(headers), (2,), content)
+                    'PUT', path, dict(headers), (2,), file_like_content)
             except UnexpectedResponse as e:
                 if e.resp.status_int != 404:
                     raise
@@ -1230,14 +1231,12 @@ class Migrator(object):
                 path = ic.make_path(self.config['account'], container, key)
                 # Note using dict(headers) here to make a shallow copy
                 result = ic.make_request(
-                    'PUT', path, dict(headers), (2,), content)
+                    'PUT', path, dict(headers), (2,), file_like_content)
             self.logger.debug('Copied "%s/%s"' % (container, key))
         if result.status_int == 201:
             self.gthread_local.uploaded_objects += 1
             self.gthread_local.bytes_copied += size
             self.stats_reporter.increment('copied_objects', 1)
-            if size > 0:
-                self.stats_reporter.increment('bytes', size)
         return result
 
     def _upload_worker(self):
