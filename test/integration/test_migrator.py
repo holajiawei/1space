@@ -216,6 +216,11 @@ class TestMigrator(TestCloudSyncBase):
             {'copied_objects': len(test_objects),
              'scanned': len(test_objects),
              'bytes': sum(map(lambda obj: len(obj[1]), test_objects))})
+        migration_status = status.get_migration(migration)
+        self.assertEqual(3, migration_status['moved_count'])
+        self.assertEqual(3, migration_status['scanned_count'])
+        self.assertEqual(sum(map(lambda obj: len(obj[1]), test_objects)),
+                         migration_status['bytes_count'])
 
     def test_swift_migration_unicode_acct(self):
         migration = self._find_migration(
@@ -345,6 +350,11 @@ class TestMigrator(TestCloudSyncBase):
         self.assertEqual('slo-meta', slo_hdrs.get('x-object-meta-slo'))
         self.assertTrue(content == slo_body)
 
+        manifest_hdrs = conn_noshunt.head_object(
+            migration['container'], 'slo',
+            query_string='multipart-manifest=get')
+        new_manifest_size = int(manifest_hdrs['content-length'])
+
         dlo_hdrs, dlo_body = self.local_swift(
             'get_object', migration['container'], 'dlo')
         self.assertEqual('dlo-meta', dlo_hdrs.get('x-object-meta-dlo'))
@@ -354,8 +364,15 @@ class TestMigrator(TestCloudSyncBase):
             migration,
             {'copied_objects': (parts_count * 2) + 2,
              'scanned': parts_count + 2,
-             'bytes': (segment_len * parts_count * 2) + 2030
+             'bytes': (segment_len * parts_count * 2) + new_manifest_size
              })
+
+        migration_status = status.get_migration(migration)
+        self.assertEqual(22, migration_status['moved_count'])
+        # SLO segments are not *scanned*
+        self.assertEqual(parts_count + 2, migration_status['scanned_count'])
+        self.assertEqual(parts_count * segment_len * 2 + new_manifest_size,
+                         migration_status['bytes_count'])
 
     def test_swift_self_contained_dlo(self):
         migration = self.swift_migration()

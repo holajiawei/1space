@@ -1255,10 +1255,7 @@ class Migrator(object):
                 if isinstance(work, MigrateObjectWork):
                     self._migrate_object(aws_bucket, container, key, work.ts)
                 else:
-                    size = int(work.headers['Content-Length'])
                     self._upload_object(work)
-                    self.gthread_local.uploaded_objects += 1
-                    self.gthread_local.bytes_copied += size
             except Exception:
                 # Avoid killing the worker, as it should only quit explicitly
                 # when we initiate it. Otherwise, we might deadlock if all
