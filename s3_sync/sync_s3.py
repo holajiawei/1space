@@ -563,17 +563,16 @@ class SyncS3(BaseSync):
         try:
             with self.client_pool.get_client() as s3_client:
                 key_prefix = self.get_s3_name('')
-                prefix = '%s%s' % (key_prefix, prefix.decode('utf-8'))
+                prefix = u'%s%s' % (key_prefix, prefix)
                 if prefix:
                     args['Prefix'] = prefix
                 # Works around an S3 proxy bug where empty-string prefix and
                 # delimiter still results in a listing with CommonPrefixes and
                 # no objects
                 if marker:
-                    args['Marker'] = '%s%s' % (
-                        key_prefix, marker.decode('utf-8'))
+                    args['Marker'] = u'%s%s' % (key_prefix, marker)
                 if delimiter:
-                    args['Delimiter'] = delimiter.decode('utf-8')
+                    args['Delimiter'] = delimiter
                 resp = s3_client.list_objects(**args)
                 # s3proxy does not include the ETag information when used with
                 # the filesystem provider

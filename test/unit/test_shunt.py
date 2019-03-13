@@ -819,7 +819,7 @@ class TestShunt(unittest.TestCase):
         self.assertEqual(self.mock_shunt_swift.mock_calls, [])
         self.mock_list_s3.assert_has_calls([
             mock.call(marker='', limit=10000, prefix='', delimiter=''),
-            mock.call(marker='unicod\xc3\xa9', limit=10000, prefix='',
+            mock.call(marker=u'unicod\xe9', limit=10000, prefix='',
                       delimiter='')])
         names = body_iter.split('\n')
         self.assertEqual(['abc', u'unicod\xe9'.encode('utf-8')], names)
@@ -831,7 +831,7 @@ class TestShunt(unittest.TestCase):
                      'last_modified': 'date',
                      'content_type': 'type',
                      'content_location': 'http://some-swift'},
-                    {'name': u'unicod\xc3\xa9',
+                    {'name': u'unicod\xe9',
                      'hash': 'ffff',
                      'bytes': 1000,
                      'last_modified': 'date',
@@ -849,7 +849,7 @@ class TestShunt(unittest.TestCase):
         self.assertEqual(self.mock_shunt_swift.mock_calls, [])
         self.mock_list_s3.assert_has_calls([
             mock.call(marker='', limit=10000, prefix='', delimiter=''),
-            mock.call(marker=u'unicod\xc3\xa9'.encode('utf-8'), limit=10000,
+            mock.call(marker=u'unicod\xe9', limit=10000,
                       prefix='', delimiter='')])
         self._assert_xml_listing(body_iter, elements, 's3')
 
@@ -860,7 +860,7 @@ class TestShunt(unittest.TestCase):
                      'last_modified': 'date',
                      'content_type': 'type',
                      'content_location': 'mock-s3:bucket'},
-                    {'name': u'unicod\xc3\xa9',
+                    {'name': u'unicod\xe9',
                      'hash': 'ffff',
                      'bytes': 1000,
                      'last_modified': 'date',
@@ -880,7 +880,7 @@ class TestShunt(unittest.TestCase):
         self.assertEqual(self.mock_shunt_swift.mock_calls, [])
         self.mock_list_s3.assert_has_calls([
             mock.call(marker='', limit=10000, prefix='', delimiter=''),
-            mock.call(marker=u'unicod\xc3\xa9'.encode('utf-8'), limit=10000,
+            mock.call(marker=u'unicod\xe9', limit=10000,
                       prefix='', delimiter='')])
         self._assert_xml_listing(body_iter, elements, 's3')
 
@@ -891,7 +891,7 @@ class TestShunt(unittest.TestCase):
                      'last_modified': 'date',
                      'content_type': 'type',
                      'content_location': 's3-account:bucket'},
-                    {'name': u'unicod\xc3\xa9',
+                    {'name': u'unicod\xe9',
                      'hash': 'ffff',
                      'bytes': 1000,
                      'last_modified': 'date',
@@ -910,7 +910,7 @@ class TestShunt(unittest.TestCase):
         self.assertEqual(self.mock_shunt_swift.mock_calls, [])
         self.mock_list_s3.assert_has_calls([
             mock.call(marker='', limit=10000, prefix='', delimiter=''),
-            mock.call(marker=u'unicod\xc3\xa9'.encode('utf-8'), limit=10000,
+            mock.call(marker=u'unicod\xe9', limit=10000,
                       prefix='', delimiter='')])
         results = json.loads(body_iter)
         for i, entry in enumerate(results):
@@ -927,7 +927,7 @@ class TestShunt(unittest.TestCase):
                      'last_modified': 'date',
                      'content_type': 'type',
                      'content_location': 'mock-s3:bucket'},
-                    {'name': u'unicod\xc3\xa9',
+                    {'name': u'unicod\xe9',
                      'hash': 'ffff',
                      'bytes': 1000,
                      'last_modified': 'date',
@@ -947,7 +947,7 @@ class TestShunt(unittest.TestCase):
         self.assertEqual(self.mock_shunt_swift.mock_calls, [])
         self.mock_list_s3.assert_has_calls([
             mock.call(marker='', limit=10000, prefix='', delimiter=''),
-            mock.call(marker=u'unicod\xc3\xa9'.encode('utf-8'), limit=10000,
+            mock.call(marker=u'unicod\xe9', limit=10000,
                       prefix='', delimiter='')])
         results = json.loads(body_iter)
         for i, entry in enumerate(results):
@@ -1021,7 +1021,7 @@ class TestShunt(unittest.TestCase):
         self.assertEqual(self.mock_shunt_swift.mock_calls, [])
         self.mock_list_swift.assert_has_calls([
             mock.call(marker='', limit=10000, prefix='', delimiter=''),
-            mock.call(marker=u'unicod\xe9'.encode('utf-8'), limit=10000,
+            mock.call(marker=u'unicod\xe9', limit=10000,
                       prefix='', delimiter='')])
         names = body_iter.split('\n')
         self.assertEqual(['abc', u'unicod\xe9'.encode('utf-8')], names)
@@ -1081,7 +1081,7 @@ class TestShunt(unittest.TestCase):
                      'content_location': 'AWS S3',
                      'count': 0,
                      'bytes': 0},
-                    {'name': u'unicod\xc3\xa9',
+                    {'name': u'unicod\xe9',
                      'last_modified': 'date',
                      'content_location': 'AWS S3',
                      'count': 0,
@@ -1099,7 +1099,7 @@ class TestShunt(unittest.TestCase):
         self.assertEqual(self.mock_shunt_swift.mock_calls, [])
         self.assertEqual(
             [mock.call(marker='', limit=10000, prefix='', delimiter=''),
-             mock.call(marker=u'unicod\xc3\xa9'.encode('utf-8'), limit=10000,
+             mock.call(marker=u'unicod\xe9', limit=10000,
                        prefix='', delimiter='')],
             mock_list_buckets.mock_calls)
         results = json.loads(body_iter)
@@ -1117,7 +1117,7 @@ class TestShunt(unittest.TestCase):
                      'content_location': 'AWS S3',
                      'count': 0,
                      'bytes': 0},
-                    {'name': u'unicod\xc3\xa9',
+                    {'name': u'unicod\xe9',
                      'last_modified': 'date',
                      'content_location': 'AWS S3',
                      'count': 0,
@@ -1135,10 +1135,10 @@ class TestShunt(unittest.TestCase):
         self.assertEqual(self.mock_shunt_swift.mock_calls, [])
         self.assertEqual(
             [mock.call(marker='', limit=10000, prefix='', delimiter=''),
-             mock.call(marker=u'unicod\xc3\xa9'.encode('utf-8'), limit=10000,
+             mock.call(marker=u'unicod\xe9', limit=10000,
                        prefix='', delimiter='')],
             mock_list_buckets.mock_calls)
-        self.assertEqual(['abc', u'unicod\xc3\xa9'.encode('utf-8')],
+        self.assertEqual(['abc', u'unicod\xe9'.encode('utf-8')],
                          body_iter.split('\n'))
 
     @mock.patch('s3_sync.sync_s3.SyncS3.list_buckets')
@@ -1148,7 +1148,7 @@ class TestShunt(unittest.TestCase):
                      'content_location': 'AWS S3',
                      'count': 0,
                      'bytes': 0},
-                    {'name': u'unicod\xc3\xa9',
+                    {'name': u'unicod\xe9',
                      'last_modified': 'date',
                      'content_location': 'AWS S3',
                      'count': 0,
@@ -1166,7 +1166,7 @@ class TestShunt(unittest.TestCase):
         self.assertEqual(self.mock_shunt_swift.mock_calls, [])
         self.assertEqual(
             [mock.call(marker='', limit=10000, prefix='', delimiter=''),
-             mock.call(marker=u'unicod\xc3\xa9'.encode('utf-8'), limit=10000,
+             mock.call(marker=u'unicod\xe9', limit=10000,
                        prefix='', delimiter='')],
             mock_list_buckets.mock_calls)
         self._assert_xml_listing(body_iter, elements,
@@ -1174,7 +1174,7 @@ class TestShunt(unittest.TestCase):
 
     @mock.patch('s3_sync.sync_s3.SyncS3.list_buckets')
     def test_list_account_splice_delimiter(self, mock_list_buckets):
-        mock_result = [{'subdir': u'unicod\xc3\xa9-',
+        mock_result = [{'subdir': u'unicod\xe9-',
                         'content_location': 'AWS S3'}]
         mock_list_buckets.side_effect = [
             ProviderResponse(True, 200, {}, mock_result),
@@ -1189,10 +1189,10 @@ class TestShunt(unittest.TestCase):
         self.assertEqual(self.mock_shunt_swift.mock_calls, [])
         self.assertEqual(
             [mock.call(marker='', limit=10000, prefix='', delimiter='-'),
-             mock.call(marker=u'unicod\xc3\xa9-'.encode('utf-8'), limit=10000,
+             mock.call(marker=u'unicod\xe9-', limit=10000,
                        prefix='', delimiter='-')],
             mock_list_buckets.mock_calls)
-        self.assertEqual(['abc-', u'unicod\xc3\xa9-'.encode('utf-8'), 'xyz-'],
+        self.assertEqual(['abc-', u'unicod\xe9-'.encode('utf-8'), 'xyz-'],
                          body_iter.split('\n'))
 
     def test_shunt_migration_put_object_missing_container(self):

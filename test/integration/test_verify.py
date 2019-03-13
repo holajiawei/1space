@@ -190,16 +190,18 @@ class TestVerify(TestCloudSyncBase):
         self.s3_client.create_bucket(Bucket=bucket)
         self.s3_client.put_object(
             Bucket=bucket, Key='verify-key', Body='A' * 10)
-        self.assertEqual(0, s3_sync.verify.main([
-            '--protocol=s3',
-            '--endpoint=' + self.S3_CREDS['endpoint'],
-            '--username=' + self.S3_CREDS['user'],
-            '--password=' + self.S3_CREDS['key'],
-            '--bucket=/*',
-            '--prefix=',
-            '--read-only']))
-        clear_s3_bucket(self.s3_client, bucket)
-        self.s3_client.delete_bucket(Bucket=bucket)
+        try:
+            self.assertEqual(0, s3_sync.verify.main([
+                '--protocol=s3',
+                '--endpoint=' + self.S3_CREDS['endpoint'],
+                '--username=' + self.S3_CREDS['user'],
+                '--password=' + self.S3_CREDS['key'],
+                '--bucket=/*',
+                '--prefix=',
+                '--read-only']))
+        finally:
+            clear_s3_bucket(self.s3_client, bucket)
+            self.s3_client.delete_bucket(Bucket=bucket)
 
     def test_swift_read_only(self):
         self.swift_dst.put_object(self.swift_container, 'verify-key', 'A' * 10)

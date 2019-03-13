@@ -249,7 +249,7 @@ class BaseSync(object):
         return '<%s: %s/%s>' % (
             self.__class__.__name__,
             's3:/' if self.endpoint is None else self.endpoint.rstrip('/'),
-            self.aws_bucket,
+            self.aws_bucket.encode('utf-8') if self.aws_bucket else '',
         )
 
     def post_container(self, metadata):

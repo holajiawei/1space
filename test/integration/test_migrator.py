@@ -152,6 +152,54 @@ class TestMigrator(TestCloudSyncBase):
              'scanned': len(test_objects),
              'bytes': sum(map(lambda obj: len(obj[1]), test_objects))})
 
+    def test_s3_migration_with_prefix(self):
+        migration = dict(self.s3_migration())
+        migration['prefix'] = u'prefix/objects/\u062a'
+        status = migrator_utils.TempMigratorStatus(migration)
+        migrator = migrator_utils.MigratorFactory().get_migrator(
+            migration, status)
+
+        test_objects = [
+            ('s3-blob', 's3 content', {}),
+            (u'prefix/objects/\u062a-object1', 'content', {}),
+        ]
+
+        expected_objects = [
+            (u'prefix/objects/\u062a-object1', 'content', {})]
+
+        conn_noshunt = self.conn_for_acct_noshunt(migration['account'])
+
+        for name, body, headers in test_objects:
+            self.s3('put_object', Bucket=migration['aws_bucket'],
+                    Key=name,
+                    Body=StringIO.StringIO(body),
+                    Metadata=headers)
+
+        migrator.next_pass()
+
+        for key, content, _ in expected_objects:
+            hdrs, body = conn_noshunt.get_object(migration['container'], key)
+            self.assertEqual(content, body)
+
+        _, listing = conn_noshunt.get_container(migration['container'])
+        migrated_names = [entry['name'] for entry in listing]
+        self.assertEqual(
+            sorted([expected[0] for expected in expected_objects]),
+            migrated_names)
+
+        migration_status = status.get_migration(migration)
+        self.assertEqual(len(expected_objects),
+                         migration_status['moved_count'])
+        self.assertEqual(len(expected_objects),
+                         migration_status['scanned_count'])
+        self.assertEqual(sum(map(lambda obj: len(obj[1]), expected_objects)),
+                         migration_status['bytes_count'])
+        self._assert_stats(
+            migration,
+            {'copied_objects': len(expected_objects),
+             'scanned': len(expected_objects),
+             'bytes': sum(map(lambda obj: len(obj[1]), expected_objects))})
+
     def test_swift_migration(self):
         migration = self.swift_migration()
         status = migrator_utils.TempMigratorStatus(migration)

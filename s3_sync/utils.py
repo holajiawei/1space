@@ -1215,10 +1215,6 @@ def iter_listing(list_func, logger, marker, limit, prefix, delimiter):
                 item['content_location'] = [item['content_location']]
 
                 yield item, marker
-            # WSGI supplies the request parameters as UTF-8 encoded
-            # strings. We should do the same when submitting
-            # subsequent requests.
-            marker = marker.encode('utf-8')
             _resp = list_func(
                 marker=marker, limit=limit, prefix=prefix, delimiter=delimiter)
         yield None, None  # just to simplify some book-keeping
@@ -1387,9 +1383,9 @@ def format_listing_response(list_results, list_format, container):
 
 def get_list_params(req, list_limit):
     limit = int(req.params.get('limit', list_limit))
-    marker = req.params.get('marker', '')
-    prefix = req.params.get('prefix', '')
-    delimiter = req.params.get('delimiter', '')
+    marker = req.params.get('marker', '').decode('utf-8')
+    prefix = req.params.get('prefix', '').decode('utf-8')
+    delimiter = req.params.get('delimiter', '').decode('utf-8')
     path = req.params.get('path', None)
     return limit, marker, prefix, delimiter, path
 
