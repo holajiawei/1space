@@ -32,6 +32,10 @@ RUN git clone --branch 1.12 --single-branch --depth 1 https://github.com/opensta
 COPY containers/swift-s3-sync/rsyslog.conf /etc/rsyslog.conf
 RUN touch /var/log/syslog && chown syslog:adm /var/log/syslog
 
+# customized rings
+COPY containers/swift-s3-sync/remakerings /swift/bin/
+COPY containers/swift-s3-sync/swift.conf /etc/swift/
+
 ENV CONF_BUCKET=cloud-connector-conf
 
 CMD ["/bin/bash", "/swift-s3-sync/containers/swift-s3-sync/launch.sh"]

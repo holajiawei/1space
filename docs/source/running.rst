@@ -111,6 +111,11 @@ Sync Profile
   - **retain_local_segments**: If False, local large object segments will be deleted
     after sync is completed. *retain_local* must also be set to ``False`` for
     segments to be deleted. (*Optional*. Default: ``False``)
+  - **storage_policy**: Specify the storage policy to use for any containers
+    creataed on the remote Swift cluster. If the policy is not a valid choice,
+    an error will be written in the logs and the container create will fail.
+    If unspecified, the default policy of the remote Swift cluster will be
+    used. (*Optional*)
   - **sync_container_acl**: Preserve the container ACL (Read/Write). This
     option applies only for Swift remote clusters, **sync_container_metadata**
     must also be set to True (*Optional*. Default: ``False``).
@@ -161,7 +166,7 @@ can handle multiple profiles, the global settings apply to all profiles:
        },
    }
 
-Sync Profile
+Migrator Profile
   - **account**: local account where data is migrated to.
   - **container**: local container where data is migrated to.
   - **aws_endpoint**: remote object store endpoint (supports either
@@ -170,6 +175,11 @@ Sync Profile
   - **aws_secret**: remote object store identity's secret/password.
   - **aws_bucket**: remote bucket where data is migrated from.
   - **protocol**: remote object store API protocol: ``swift`` or ``s3``.
+  - **storage_policy**: Specify the storage policy to use for any containers
+    creataed on the local Swift cluster. If the policy is not a valid choice,
+    an error will be written in the logs and the container create will fail.
+    If unspecified, the default policy of the local Swift cluster will be
+    used. (*Optional*)
 
 Global settings
   - **items_chunk**: Number of items to process at a time

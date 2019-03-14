@@ -93,6 +93,17 @@ class TestVerify(TestCloudSyncBase):
         ]))
 
     @swift_is_unchanged
+    def test_swift_all_containers_storage_policy(self):
+        self.assertEqual(0, s3_sync.verify.main([
+            '--protocol=swift',
+            '--endpoint=' + self.SWIFT_CREDS['authurl'],
+            '--username=' + self.SWIFT_CREDS['dst']['user'],
+            '--password=' + self.SWIFT_CREDS['dst']['key'],
+            '--storage-policy=gold',
+            '--bucket=/*',
+        ]))
+
+    @swift_is_unchanged
     def test_swift_bad_creds(self):
         msg = ('Unexpected status code checking PUT: 401 Unauthorized')
         self.assertEqual(msg, s3_sync.verify.main([
@@ -101,6 +112,18 @@ class TestVerify(TestCloudSyncBase):
             '--username=' + self.SWIFT_CREDS['dst']['user'],
             '--password=not-the-password',
             '--bucket=' + self.swift_container,
+        ]))
+
+    @swift_is_unchanged
+    def test_swift_bad_storage_policy(self):
+        msg = ('Invalid X-Storage-Policy \'badPolicyName\'')
+        self.assertEqual(msg, s3_sync.verify.main([
+            '--protocol=swift',
+            '--endpoint=' + self.SWIFT_CREDS['authurl'],
+            '--username=' + self.SWIFT_CREDS['dst']['user'],
+            '--password=' + self.SWIFT_CREDS['dst']['key'],
+            '--storage-policy=badPolicyName',
+            '--bucket=/*',
         ]))
 
     def test_swift_bad_creds_no_container(self):

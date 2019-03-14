@@ -168,7 +168,8 @@ class TestMainTrackProvider(unittest.TestCase):
         ])
         self.assertIs(exit_arg, mock_validate.return_value)
         self.assertEqual([mock.ANY], mock_validate.mock_calls)
-        provider, swift_key, create_bucket = mock_validate.mock_calls[0][1]
+        provider, swift_key, create_bucket, _storage_policy =\
+            mock_validate.mock_calls[0][1]
         self.assertEqual({
             k: v for k, v in provider.settings.items() if k != 'container'
         }, {
@@ -195,7 +196,8 @@ class TestMainTrackProvider(unittest.TestCase):
         ])
         self.assertIs(exit_arg, mock_validate.return_value)
         self.assertEqual([mock.ANY], mock_validate.mock_calls)
-        provider, swift_key, create_bucket = mock_validate.mock_calls[0][1]
+        provider, swift_key, create_bucket, _storage_policy =\
+            mock_validate.mock_calls[0][1]
         self.assertEqual({
             'protocol': 's3',
             'aws_endpoint': None,
@@ -219,7 +221,8 @@ class TestMainTrackProvider(unittest.TestCase):
         ])
         self.assertIs(exit_arg, mock_validate.return_value)
         self.assertEqual([mock.ANY], mock_validate.mock_calls)
-        provider, swift_key, create_bucket = mock_validate.mock_calls[0][1]
+        provider, swift_key, create_bucket, _storage_policy =\
+            mock_validate.mock_calls[0][1]
         self.assertEqual({
             k: v for k, v in provider.settings.items()
             if k.startswith('aws_') or k in ('protocol',)
@@ -239,11 +242,13 @@ class TestMainTrackProvider(unittest.TestCase):
             '--endpoint', 'https://saio:8080/auth/v1.0',
             '--username', 'access id',
             '--password', 'secret key',
+            '--storage-policy', 'better',
             '--bucket', 'some-bucket',
         ])
         self.assertIs(exit_arg, mock_validate.return_value)
         self.assertEqual([mock.ANY], mock_validate.mock_calls)
-        provider, swift_key, create_bucket = mock_validate.mock_calls[0][1]
+        provider, swift_key, create_bucket, storage_policy =\
+            mock_validate.mock_calls[0][1]
         self.assertEqual({
             k: v for k, v in provider.settings.items()
             if k.startswith('aws_') or k in ('protocol',)
@@ -256,6 +261,7 @@ class TestMainTrackProvider(unittest.TestCase):
         })
         self.assertEqual(swift_key, 'cloud_sync_test_object')
         self.assertFalse(create_bucket)
+        self.assertEqual(storage_policy, 'better')
 
     def test_swift_all_buckets(self, mock_validate):
         exit_arg = main([
@@ -263,11 +269,13 @@ class TestMainTrackProvider(unittest.TestCase):
             '--endpoint', 'https://saio:8080/auth/v1.0',
             '--username', 'access id',
             '--password', 'secret key',
+            '--storage-policy', 'better',
             '--bucket', '/*',
         ])
         self.assertIs(exit_arg, mock_validate.return_value)
         self.assertEqual([mock.ANY], mock_validate.mock_calls)
-        provider, swift_key, create_bucket = mock_validate.mock_calls[0][1]
+        provider, swift_key, create_bucket, storage_policy =\
+            mock_validate.mock_calls[0][1]
         self.assertEqual({
             k: v for k, v in provider.settings.items()
             if k.startswith('aws_') or k in ('protocol',)
@@ -280,6 +288,7 @@ class TestMainTrackProvider(unittest.TestCase):
         })
         self.assertEqual(swift_key, 'cloud_sync_test_object')
         self.assertTrue(create_bucket)
+        self.assertEqual(storage_policy, 'better')
 
     def test_swift_keystone_v2(self, mock_validate):
         exit_arg = main([
@@ -293,7 +302,8 @@ class TestMainTrackProvider(unittest.TestCase):
         ])
         self.assertIs(exit_arg, mock_validate.return_value)
         self.assertEqual([mock.ANY], mock_validate.mock_calls)
-        provider, swift_key, create_bucket = mock_validate.mock_calls[0][1]
+        provider, swift_key, create_bucket, _storage_policy =\
+            mock_validate.mock_calls[0][1]
         self.assertEqual({
             'protocol': 'swift',
             'aws_endpoint': 'http://1space-keystone:5000/v3',
@@ -324,7 +334,8 @@ class TestMainTrackProvider(unittest.TestCase):
         ])
         self.assertIs(exit_arg, mock_validate.return_value)
         self.assertEqual([mock.ANY], mock_validate.mock_calls)
-        provider, swift_key, create_bucket = mock_validate.mock_calls[0][1]
+        provider, swift_key, create_bucket, _storage_policy =\
+            mock_validate.mock_calls[0][1]
         self.assertEqual({
             'protocol': 'swift',
             'aws_endpoint': 'http://1space-keystone:5000/v3',

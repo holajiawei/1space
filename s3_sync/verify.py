@@ -15,14 +15,22 @@
 import argparse
 import urlparse
 
+from swiftclient.exceptions import ClientException
 from .provider_factory import create_provider
 
 
-def validate_bucket(provider, swift_key, create_bucket):
+def validate_bucket(provider, swift_key, create_bucket, storage_policy):
     if create_bucket:
+        headers = {}
+        if storage_policy:
+            headers['X-Storage-Policy'] = storage_policy
         # This should only be necessary on Swift; reach down to the client
         with provider.client_pool.get_client() as client:
-            result = client.put_container(provider.aws_bucket)
+            try:
+                result = client.put_container(provider.aws_bucket,
+                                              headers=headers)
+            except ClientException as e:
+                result = e.http_response_content
         if result is not None:
             return result
 
@@ -118,6 +126,7 @@ def main(args=None):
     parser.add_argument('--prefix')
     parser.add_argument('--auth-type', choices=('keystone_v2', 'keystone_v3'))
     parser.add_argument('--read-only', action='store_true', default=False)
+    parser.add_argument('--storage-policy')
     # Required arg, if --auth-type=keystone_v2 provided:
     parser.add_argument('--tenant-name')
     # Required args if --auth-type=keystone_v3 provided:
@@ -193,7 +202,8 @@ def main(args=None):
         else:
             result = validate_bucket(
                 provider, swift_key,
-                args.protocol == 'swift' and args.bucket == '/*')
+                args.protocol == 'swift' and args.bucket == '/*',
+                args.storage_policy)
         if result is not None:
             return result
     return 0

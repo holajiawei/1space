@@ -71,6 +71,7 @@ class SyncSwift(BaseSync):
         if self.min_segment_size and not self.convert_dlo:
             raise ValueError('Cannot specify "min_segment_size" without'
                              'setting "convert_dlo"')
+        self.storage_policy = self.settings.get('storage_policy')
 
     @property
     def remote_container(self):
@@ -201,8 +202,11 @@ class SyncSwift(BaseSync):
                 except swiftclient.exceptions.ClientException as e:
                     if e.http_status != 404:
                         raise
+                    headers = self._client_headers()
+                    if self.storage_policy:
+                        headers['X-Storage-Policy'] = self.storage_policy
                     swift_client.put_container(self.remote_container,
-                                               headers=self._client_headers())
+                                               headers=headers)
             self.verified_container = True
 
         return self._upload_object(
@@ -866,8 +870,11 @@ class SyncSwift(BaseSync):
                     # Creating a container may take some (small) amount of time
                     # and we should attempt to re-upload in the following
                     # iteration
+                    headers = {}
+                    if self.storage_policy:
+                        headers['X-Storage-Policy'] = self.storage_policy
                     resp = self._call_swiftclient(
-                        'put_container', dst_container, None)
+                        'put_container', dst_container, None, headers=headers)
                     if not resp.success:
                         self.logger.error(
                             'Failed to create segments container %s: %s' %

@@ -345,7 +345,8 @@ class S3SyncShunt(object):
                 return app_iter
 
         status, headers = self._create_req_container(
-            req, headers, sync_profile.get('migration'))
+            req, headers, sync_profile.get('migration'),
+            sync_profile.get('storage_policy'))
         if int(status.split()[0]) // 100 != 2:
             self.logger.warning('Failed to create container: %s' % status)
 
@@ -395,7 +396,8 @@ class S3SyncShunt(object):
             # For migrations (which is the only case where we shunt container
             # GET requests), we should create the container in Swift.
             if sync_profile.get('migration'):
-                self._create_req_container(req, headers, True)
+                self._create_req_container(req, headers, True,
+                                           sync_profile.get('storage_policy'))
 
             # TODO: If to_wsgi does the utf8 header encoding, we wouldn't have
             # to worry about it here.
@@ -441,7 +443,8 @@ class S3SyncShunt(object):
         # For migrations (which is the only case where we shunt container HEAD
         # requests), we should create the container in Swift.
         if sync_profile.get('migration'):
-            self._create_req_container(req, headers, True)
+            self._create_req_container(req, headers, True,
+                                       sync_profile.get('storage_policy'))
 
         headers.extend(trans_id_headers)
 
@@ -492,7 +495,8 @@ class S3SyncShunt(object):
                         container_headers = filter_hop_by_hop_headers(
                             container_headers)
                         self._create_req_container(
-                            req, container_headers, True)
+                            req, container_headers, True,
+                            sync_profile.get('storage_policy'))
 
             # We incur an extra request hit by checking for a possible SLO.
             obj = obj.decode('utf-8')
@@ -605,7 +609,8 @@ class S3SyncShunt(object):
         start_response(status, headers)
         return app_iter
 
-    def _create_req_container(self, req, headers, migration=False):
+    def _create_req_container(
+            self, req, headers, migration=False, storage_policy=None):
         vers, acct, cont, _ = req.split_path(3, 4, True)
         container_path = '/%s' % '/'.join([
             vers, utils.quote(acct), utils.quote(cont)])
@@ -613,6 +618,8 @@ class S3SyncShunt(object):
         if migration:
             headers[get_sys_migrator_header('container')] =\
                 MigrationContainerStates.MIGRATING
+        if storage_policy:
+            headers['X-Storage-Policy'] = storage_policy
         put_container_req = make_subrequest(
             req.environ,
             method='PUT',

@@ -2473,6 +2473,35 @@ class TestSyncSwift(unittest.TestCase):
             self.aws_bucket + self.mapping['aws_bucket'], 'foo', headers={})
 
     @mock.patch('s3_sync.sync_swift.swiftclient.client.Connection')
+    def test_per_account_container_create_w_sp(self, mock_swift):
+        mock_ic = mock.Mock()
+        mock_ic.get_object_metadata.side_effect = UnexpectedResponse(
+            '404 Not Found', None)
+        swift_client = mock.Mock()
+        mock_swift.return_value = swift_client
+        swift_client.head_container.side_effect = ClientException(
+            'not found', http_status=404, http_reason='Not Found')
+        self.sync_swift._per_account = True
+        self.sync_swift.storage_policy = 'other'
+        self.assertFalse(self.sync_swift.verified_container)
+        self.sync_swift.upload_object(
+            {'name': 'foo',
+             'storage_policy_index': 'policy',
+             'created_at': 1e9}, mock_ic)
+        swift_client.put_container.assert_called_once_with(
+            self.aws_bucket + 'container',
+            headers={'X-Storage-Policy': 'other'})
+        self.assertTrue(self.sync_swift.verified_container)
+
+        swift_client.reset_mock()
+        self.sync_swift.upload_object(
+            {'name': 'foo',
+             'storage_policy_index': 'policy',
+             'created_at': 1e9}, mock_ic)
+        swift_client.head_object.assert_called_once_with(
+            self.aws_bucket + self.mapping['aws_bucket'], 'foo', headers={})
+
+    @mock.patch('s3_sync.sync_swift.swiftclient.client.Connection')
     def test_list_buckets(self, mock_swift):
         containers = [
             {'name': 'a', 'last_modified': '2018-01-01T22:22:22.000000',

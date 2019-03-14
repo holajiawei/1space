@@ -366,11 +366,13 @@ class Migrator(object):
             policy = POLICIES.get_by_name(self.config['storage_policy'])
             if policy:
                 self.storage_policy_idx = policy.idx
+                self.logger.info('Containers should be created with '
+                                 'storage_policy_idx = %d' % policy.idx)
             else:
                 self.storage_policy_idx = -1
-                self.logger.error('Unable to parse storage_policy: %s, will '
-                                  'not be able to create containers' %
-                                  self.config['storage_policy'])
+                raise MigrationError('Unable to create containers (invalid '
+                                     'storage_policy, %s, specified.',
+                                     self.config['storage_policy'])
         self.stats_factory = stats_factory
 
         self.stats_reporter = self.stats_factory.instance(
@@ -634,6 +636,9 @@ class Migrator(object):
                 raise MigrationError('Unable to create container %s (invalid '
                                      'storage_policy specified.' % container)
             else:
+                # Belt and suspenders - internal client pipeline SHOULD
+                # include translation of Policy to Index
+                headers['X-Storage-Policy'] = self.config['storage_policy']
                 headers['X-Backend-Storage-Policy-Index'] = \
                     self.storage_policy_idx
 

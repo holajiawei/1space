@@ -131,6 +131,8 @@ class TestCloudSync(TestCloudSyncBase):
 
         crawler.run_once()
 
+        hdrs = target_conn.head_container(mapping['aws_bucket'] + 'segments')
+        self.assertEqual('gold', hdrs['x-storage-policy'])
         hdrs = target_conn.head_object(
             mapping['aws_bucket'] + 'segments', 'part1')
         self.assertEqual(1024, int(hdrs['content-length']))
@@ -158,6 +160,88 @@ class TestCloudSync(TestCloudSyncBase):
         clear_swift_container(conn, 'segments')
         target_conn.delete_container(mapping['aws_bucket'] + container)
         target_conn.delete_container(mapping['aws_bucket'] + 'segments')
+        conn.delete_container(container)
+        conn.delete_container('segments')
+
+    def test_swift_sync_account_slo_silver(self):
+        mapping = self._find_mapping(
+            lambda m: m['aws_bucket'] == 'crazy-target:')
+        mapping = dict(mapping)
+        mapping['storage_policy'] = 'silver'
+        crawler = utils.get_container_crawler(mapping)
+        target_conn = self.conn_for_acct_noshunt(mapping['aws_account'])
+
+        container = 'test-slo'
+        key = 'slo'
+        content = 'A' * 1024 + 'B' * 1024
+        manifest = [
+            {'size_bytes': 1024, 'path': '/segments/part1'},
+            {'size_bytes': 1024, 'path': '/segments/part2'}]
+        conn = self.conn_for_acct(mapping['account'])
+        conn.put_container('segments')
+        conn.put_container(container)
+        conn.put_object('segments', 'part1', content[:1024])
+        conn.put_object('segments', 'part2', content[1024:])
+        conn.put_object(container, key,
+                        json.dumps(manifest),
+                        query_string='multipart-manifest=put')
+
+        crawler.run_once()
+
+        hdrs = target_conn.head_container(mapping['aws_bucket'] + 'segments')
+        self.assertEqual('silver', hdrs['x-storage-policy'])
+        hdrs = target_conn.head_container(mapping['aws_bucket'] + container)
+        self.assertEqual('silver', hdrs['x-storage-policy'])
+
+        clear_swift_container(
+            target_conn, mapping['aws_bucket'] + container)
+        clear_swift_container(
+            target_conn, mapping['aws_bucket'] + 'segments')
+        clear_swift_container(conn, container)
+        clear_swift_container(conn, 'segments')
+        target_conn.delete_container(mapping['aws_bucket'] + container)
+        target_conn.delete_container(mapping['aws_bucket'] + 'segments')
+        conn.delete_container(container)
+        conn.delete_container('segments')
+
+    def test_swift_sync_account_slo_policy_fake(self):
+        mapping = self._find_mapping(
+            lambda m: m['aws_bucket'] == 'crazy-target:')
+        mapping = dict(mapping)
+        mapping['storage_policy'] = 'notAPolicy'
+        crawler = utils.get_container_crawler(mapping)
+        target_conn = self.conn_for_acct_noshunt(mapping['aws_account'])
+
+        container = 'test-slo'
+        key = 'slo'
+        content = 'A' * 1024 + 'B' * 1024
+        manifest = [
+            {'size_bytes': 1024, 'path': '/segments/part1'},
+            {'size_bytes': 1024, 'path': '/segments/part2'}]
+        conn = self.conn_for_acct(mapping['account'])
+        conn.put_container('segments')
+        conn.put_container(container)
+        conn.put_object('segments', 'part1', content[:1024])
+        conn.put_object('segments', 'part2', content[1024:])
+        conn.put_object(container, key,
+                        json.dumps(manifest),
+                        query_string='multipart-manifest=put')
+
+        crawler.run_once()
+
+        # Should have failed because we don't create using wrong storage policy
+        with self.assertRaises(swiftclient.exceptions.ClientException) as ctx:
+            target_conn.head_container(
+                mapping['aws_bucket'] + 'segments')
+        self.assertEqual(404, ctx.exception.http_status)
+
+        with self.assertRaises(swiftclient.exceptions.ClientException) as ctx:
+            target_conn.head_container(
+                mapping['aws_bucket'] + container)
+        self.assertEqual(404, ctx.exception.http_status)
+
+        clear_swift_container(conn, container)
+        clear_swift_container(conn, 'segments')
         conn.delete_container(container)
         conn.delete_container('segments')
 

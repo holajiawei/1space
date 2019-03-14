@@ -2895,11 +2895,11 @@ class TestMain(unittest.TestCase):
             segment_size, mock.Mock())
         self.assertEqual(migrator.storage_policy_idx, None)
         config['storage_policy'] = 'NotAPolicy'
-        migrator = s3_sync.migrator.Migrator(
-            config, None, 1000, 5, pool, logger, selector,
-            segment_size, mock.Mock())
-        self.assertEqual(migrator.storage_policy_idx, -1)
-        config['storage_policy'] = 'Policy-0'
+        with self.assertRaises(s3_sync.migrator.MigrationError):
+            migrator = s3_sync.migrator.Migrator(
+                config, None, 1000, 5, pool, logger, selector,
+                segment_size, mock.Mock())
+        config['storage_policy'] = 'gold'
         migrator = s3_sync.migrator.Migrator(
             config, None, 1000, 5, pool, logger, selector,
             segment_size, mock.Mock())

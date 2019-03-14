@@ -1087,6 +1087,27 @@ class TestMigrator(TestCloudSyncBase):
         migrator.next_pass()
         self.assertTrue(is_where('local'))
 
+    def test_migrate_storage_policy(self):
+        migration = dict(self._find_migration(
+            lambda cont: cont['aws_bucket'] == '/*'))
+        migration['storage_policy'] = 'silver'
+        conn_local = self.conn_for_acct(migration['account'])
+        conn_remote = self.conn_for_acct(migration['aws_account'])
+
+        status = migrator_utils.TempMigratorStatus(migration)
+        migrator = migrator_utils.MigratorFactory().get_migrator(
+            migration, status)
+
+        container = 'storage_policy_test'
+        conn_remote.put_container(container)
+        hdrs = conn_remote.head_container(container)
+        self.assertEqual('gold', hdrs.get('x-storage-policy'))
+
+        migrator.next_pass()
+
+        hdrs = conn_local.head_container(container)
+        self.assertEqual('silver', hdrs.get('x-storage-policy'))
+
     def test_object_metadata_copied_only_when_newer(self):
         migration = self.swift_migration()
         key = u'test_object-own'
