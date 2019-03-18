@@ -7,6 +7,10 @@ MYDIR=$(python -c 'import os,sys;print(os.path.dirname(os.path.realpath(sys.argv
 cd "$MYDIR"
 
 # Make sure container is running
+if test -z "$(docker ps -f name=1space-keystone -q)"; then
+    ./scripts/ensure_keystone_started
+fi
+
 if test -z "$(docker ps -f name=swift-s3-sync -q)"; then
     ./scripts/rebuild_and_start_main_container
 fi
