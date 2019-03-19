@@ -1,4 +1,6 @@
 from functools import wraps
+import os
+import tempfile
 import s3_sync.verify
 from . import TestCloudSyncBase, clear_swift_container, clear_s3_bucket
 
@@ -23,6 +25,7 @@ def s3_is_unchanged(func):
 
 class TestVerify(TestCloudSyncBase):
     def setUp(self):
+        self.tmpfile = None
         self.swift_container = self.s3_bucket = None
         for container in self.test_conf['containers']:
             if container['protocol'] == 'swift':
@@ -31,37 +34,50 @@ class TestVerify(TestCloudSyncBase):
                 self.s3_bucket = container['aws_bucket']
             if self.swift_container and self.s3_bucket:
                 break
+        fd, self.tmpfile = tempfile.mkstemp()
+        os.close(fd)
 
     def tearDown(self):
         clear_s3_bucket(self.s3_client, self.s3_bucket)
         clear_swift_container(self.swift_dst, self.swift_container)
+        if self.tmpfile:
+            os.unlink(self.tmpfile)
 
     @swift_is_unchanged
     def test_swift_no_container(self):
+        with open(self.tmpfile, 'w') as f:
+            f.write(self.SWIFT_CREDS['dst']['key'])
+
         self.assertEqual(0, s3_sync.verify.main([
             '--protocol=swift',
             '--endpoint=' + self.SWIFT_CREDS['authurl'],
             '--username=' + self.SWIFT_CREDS['dst']['user'],
-            '--password=' + self.SWIFT_CREDS['dst']['key'],
+            '--password=' + self.tmpfile,
         ]))
 
     @swift_is_unchanged
     def test_swift_single_container(self):
+        with open(self.tmpfile, 'w') as f:
+            f.write(self.SWIFT_CREDS['dst']['key'])
+
         self.assertEqual(0, s3_sync.verify.main([
             '--protocol=swift',
             '--endpoint=' + self.SWIFT_CREDS['authurl'],
             '--username=' + self.SWIFT_CREDS['dst']['user'],
-            '--password=' + self.SWIFT_CREDS['dst']['key'],
+            '--password=' + self.tmpfile,
             '--bucket=' + self.swift_container,
         ]))
 
     @swift_is_unchanged
     def test_swift_admin_cross_account(self):
+        with open(self.tmpfile, 'w') as f:
+            f.write(self.SWIFT_CREDS['admin']['key'])
+
         self.assertEqual(0, s3_sync.verify.main([
             '--protocol=swift',
             '--endpoint=' + self.SWIFT_CREDS['authurl'],
             '--username=' + self.SWIFT_CREDS['admin']['user'],
-            '--password=' + self.SWIFT_CREDS['admin']['key'],
+            '--password=' + self.tmpfile,
             '--account=AUTH_\xd8\xaaacct2',
             '--bucket=' + self.swift_container,
         ]))
@@ -73,114 +89,144 @@ class TestVerify(TestCloudSyncBase):
         # ...which is basically the same as `test_swift_bad_container` but with
         # an admin user.
         msg = ('Unexpected status code checking PUT: 404 Not Found')
+        with open(self.tmpfile, 'w') as f:
+            f.write(self.SWIFT_CREDS['admin']['key'])
+
         self.assertEqual(msg, s3_sync.verify.main([
             '--protocol=swift',
             '--endpoint=' + self.SWIFT_CREDS['authurl'],
             '--username=' + self.SWIFT_CREDS['admin']['user'],
-            '--password=' + self.SWIFT_CREDS['admin']['key'],
+            '--password=' + self.tmpfile,
             '--account=AUTH_test',
             '--bucket=' + self.swift_container,
         ]))
 
     @swift_is_unchanged
     def test_swift_all_containers(self):
+        with open(self.tmpfile, 'w') as f:
+            f.write(self.SWIFT_CREDS['dst']['key'])
+
         self.assertEqual(0, s3_sync.verify.main([
             '--protocol=swift',
             '--endpoint=' + self.SWIFT_CREDS['authurl'],
             '--username=' + self.SWIFT_CREDS['dst']['user'],
-            '--password=' + self.SWIFT_CREDS['dst']['key'],
+            '--password=' + self.tmpfile,
             '--bucket=/*',
         ]))
 
     @swift_is_unchanged
     def test_swift_bad_creds(self):
         msg = ('Unexpected status code checking PUT: 401 Unauthorized')
+        with open(self.tmpfile, 'w') as f:
+            f.write('not-the-password')
+
         self.assertEqual(msg, s3_sync.verify.main([
             '--protocol=swift',
             '--endpoint=' + self.SWIFT_CREDS['authurl'],
             '--username=' + self.SWIFT_CREDS['dst']['user'],
-            '--password=not-the-password',
+            '--password=' + self.tmpfile,
             '--bucket=' + self.swift_container,
         ]))
 
     def test_swift_bad_creds_no_container(self):
         msg = 'Failed to list containers/buckets: 401 Unauthorized'
+        with open(self.tmpfile, 'w') as f:
+            f.write('not-the-password')
         self.assertEqual(msg, s3_sync.verify.main([
             '--protocol=swift',
             '--endpoint=' + self.SWIFT_CREDS['authurl'],
             '--username=' + self.SWIFT_CREDS['dst']['user'],
-            '--password=not-the-password'
+            '--password=' + self.tmpfile,
         ]))
 
     @swift_is_unchanged
     def test_swift_bad_container(self):
         msg = ('Unexpected status code checking PUT: 404 Not Found')
+        with open(self.tmpfile, 'w') as f:
+            f.write(self.SWIFT_CREDS['dst']['key'])
+
         self.assertEqual(msg, s3_sync.verify.main([
             '--protocol=swift',
             '--endpoint=' + self.SWIFT_CREDS['authurl'],
             '--username=' + self.SWIFT_CREDS['dst']['user'],
-            '--password=' + self.SWIFT_CREDS['dst']['key'],
+            '--password=' + self.tmpfile,
             '--bucket=does-not-exist',
         ]))
 
     @s3_is_unchanged
     def test_s3_no_bucket(self):
+        with open(self.tmpfile, 'w') as f:
+            f.write(self.S3_CREDS['key'])
+
         self.assertEqual(0, s3_sync.verify.main([
             '--protocol=s3',
             '--endpoint=' + self.S3_CREDS['endpoint'],
             '--username=' + self.S3_CREDS['user'],
-            '--password=' + self.S3_CREDS['key'],
+            '--password=' + self.tmpfile,
         ]))
 
     @s3_is_unchanged
     def test_s3_single_bucket(self):
+        with open(self.tmpfile, 'w') as f:
+            f.write(self.S3_CREDS['key'])
+
         self.assertEqual(0, s3_sync.verify.main([
             '--protocol=s3',
             '--endpoint=' + self.S3_CREDS['endpoint'],
             '--username=' + self.S3_CREDS['user'],
-            '--password=' + self.S3_CREDS['key'],
+            '--password=' + self.tmpfile,
             '--bucket=' + self.s3_bucket,
         ]))
 
     def test_s3_bad_creds_no_bucket(self):
         msg = 'Failed to list containers/buckets: 403 Forbidden'
+        with open(self.tmpfile, 'w') as f:
+            f.write('not a real key')
         self.assertEqual(msg, s3_sync.verify.main([
             '--protocol=s3',
             '--endpoint=' + self.S3_CREDS['endpoint'],
             '--username=' + self.S3_CREDS['user'],
-            '--password=' + 'not a real key',
+            '--password=' + self.tmpfile,
         ]))
 
     @s3_is_unchanged
     def test_s3_bad_creds(self):
         msg = ('Unexpected status code checking PUT: 403 Forbidden')
+        with open(self.tmpfile, 'w') as f:
+            f.write('not-the-password')
+
         self.assertEqual(msg, s3_sync.verify.main([
             '--protocol=s3',
             '--endpoint=' + self.S3_CREDS['endpoint'],
             '--username=' + self.S3_CREDS['user'],
-            '--password=not-the-password',
+            '--password=' + self.tmpfile,
             '--bucket=' + self.s3_bucket,
         ]))
 
     @s3_is_unchanged
     def test_s3_bad_bucket(self):
         msg = ('Unexpected status code checking PUT: 404 Not Found')
+        with open(self.tmpfile, 'w') as f:
+            f.write(self.S3_CREDS['key'])
+
         self.assertEqual(msg, s3_sync.verify.main([
             '--protocol=s3',
             '--endpoint=' + self.S3_CREDS['endpoint'],
             '--username=' + self.S3_CREDS['user'],
-            '--password=' + self.S3_CREDS['key'],
+            '--password=' + self.tmpfile,
             '--bucket=does-not-exist',
         ]))
 
     def test_s3_read_only(self):
         self.s3_client.put_object(
             Bucket=self.s3_bucket, Key='verify-key', Body='A' * 10)
+        with open(self.tmpfile, 'w') as f:
+            f.write(self.S3_CREDS['key'])
         self.assertEqual(0, s3_sync.verify.main([
             '--protocol=s3',
             '--endpoint=' + self.S3_CREDS['endpoint'],
             '--username=' + self.S3_CREDS['user'],
-            '--password=' + self.S3_CREDS['key'],
+            '--password=' + self.tmpfile,
             '--bucket=' + self.s3_bucket,
             '--prefix=',
             '--read-only']))
@@ -190,12 +236,14 @@ class TestVerify(TestCloudSyncBase):
         self.s3_client.create_bucket(Bucket=bucket)
         self.s3_client.put_object(
             Bucket=bucket, Key='verify-key', Body='A' * 10)
+        with open(self.tmpfile, 'w') as f:
+            f.write(self.S3_CREDS['key'])
         try:
             self.assertEqual(0, s3_sync.verify.main([
                 '--protocol=s3',
                 '--endpoint=' + self.S3_CREDS['endpoint'],
                 '--username=' + self.S3_CREDS['user'],
-                '--password=' + self.S3_CREDS['key'],
+                '--password=' + self.tmpfile,
                 '--bucket=/*',
                 '--prefix=',
                 '--read-only']))
@@ -205,11 +253,13 @@ class TestVerify(TestCloudSyncBase):
 
     def test_swift_read_only(self):
         self.swift_dst.put_object(self.swift_container, 'verify-key', 'A' * 10)
+        with open(self.tmpfile, 'w') as f:
+            f.write(self.SWIFT_CREDS['dst']['key'])
         self.assertEqual(0, s3_sync.verify.main([
             '--protocol=swift',
             '--endpoint=' + self.SWIFT_CREDS['authurl'],
             '--username=' + self.SWIFT_CREDS['dst']['user'],
-            '--password=' + self.SWIFT_CREDS['dst']['key'],
+            '--password=' + self.tmpfile,
             '--bucket=' + self.swift_container,
             '--read-only'
         ]))
@@ -218,11 +268,13 @@ class TestVerify(TestCloudSyncBase):
         container = 'a-verify-test'
         self.swift_dst.put_container(container)
         self.swift_dst.put_object(container, 'verify-key', 'A' * 10)
+        with open(self.tmpfile, 'w') as f:
+            f.write(self.SWIFT_CREDS['dst']['key'])
         self.assertEqual(0, s3_sync.verify.main([
             '--protocol=swift',
             '--endpoint=' + self.SWIFT_CREDS['authurl'],
             '--username=' + self.SWIFT_CREDS['dst']['user'],
-            '--password=' + self.SWIFT_CREDS['dst']['key'],
+            '--password=' + self.tmpfile,
             '--bucket=/*',
             '--read-only'
         ]))
@@ -231,44 +283,52 @@ class TestVerify(TestCloudSyncBase):
 
     def test_s3_read_only_bad_bucket(self):
         msg = 'Unexpected status code when listing objects: 404 Not Found'
+        with open(self.tmpfile, 'w') as f:
+            f.write(self.S3_CREDS['key'])
         self.assertEqual(msg, s3_sync.verify.main([
             '--protocol=s3',
             '--endpoint=' + self.S3_CREDS['endpoint'],
             '--username=' + self.S3_CREDS['user'],
-            '--password=' + self.S3_CREDS['key'],
+            '--password=' + self.tmpfile,
             '--bucket=does-not-exist',
             '--read-only'
         ]))
 
     def test_s3_read_only_bad_creds(self):
         msg = ('Unexpected status code when listing objects: 403 Forbidden')
+        with open(self.tmpfile, 'w') as f:
+            f.write('not-the-password')
         self.assertEqual(msg, s3_sync.verify.main([
             '--protocol=s3',
             '--endpoint=' + self.S3_CREDS['endpoint'],
             '--username=' + self.S3_CREDS['user'],
-            '--password=not-the-password',
+            '--password=' + self.tmpfile,
             '--bucket=' + self.s3_bucket,
             '--read-only'
         ]))
 
     def test_swift_read_only_bad_creds(self):
         msg = ('Unexpected status code when listing objects: 401 Unauthorized')
+        with open(self.tmpfile, 'w') as f:
+            f.write('not-the-password')
         self.assertEqual(msg, s3_sync.verify.main([
             '--protocol=swift',
             '--endpoint=' + self.SWIFT_CREDS['authurl'],
             '--username=' + self.SWIFT_CREDS['dst']['user'],
-            '--password=not-the-password',
+            '--password=' + self.tmpfile,
             '--bucket=' + self.swift_container,
             '--read-only'
         ]))
 
     def test_swift_read_only_bad_container(self):
         msg = ('Unexpected status code when listing objects: 404 Not Found')
+        with open(self.tmpfile, 'w') as f:
+            f.write(self.SWIFT_CREDS['dst']['key'])
         self.assertEqual(msg, s3_sync.verify.main([
             '--protocol=swift',
             '--endpoint=' + self.SWIFT_CREDS['authurl'],
             '--username=' + self.SWIFT_CREDS['dst']['user'],
-            '--password=' + self.SWIFT_CREDS['dst']['key'],
+            '--password=' + self.tmpfile,
             '--bucket=does-not-exist',
             '--read-only'
         ]))
