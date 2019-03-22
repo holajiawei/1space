@@ -580,7 +580,7 @@ class TestSyncContainer(unittest.TestCase):
 
         sync = SyncContainer(self.scratch_space, settings,
                              self.stats_factory)
-        sync.handle_container_metadata(metadata, 'db-id-1')
+        sync.handle_container_info({'id': 'db-id-1'}, metadata)
 
         mock_swift.assert_called_once_with(
             authurl='http://example.com', key='credential', user='identity',
@@ -622,7 +622,7 @@ class TestSyncContainer(unittest.TestCase):
                     'X-Versions-Locations': ('versions', '1545179217.201453')}
         mock_swift.return_value.post_container.return_value = {}
 
-        sync.handle_container_metadata(metadata, 'db-id-1')
+        sync.handle_container_info({'id': 'db-id-1'}, metadata)
         mock_swift.assert_called_once_with(
             authurl='http://example.com', key='credential', user='identity',
             os_options={}, retries=3)
@@ -663,12 +663,12 @@ class TestSyncContainer(unittest.TestCase):
         sync = SyncContainer(self.scratch_space, settings,
                              self.stats_factory)
 
-        sync.handle_container_metadata(metadata, 'db-id-1')
+        sync.handle_container_info({'id': 'db-id-1'}, metadata)
         # Connections are lazy-initialized
         mock_swift.assert_not_called()
 
     @mock.patch('s3_sync.sync_swift.swiftclient.client.Connection')
-    def test_handle_container_metadata_errors(self, mock_swift):
+    def test_handle_container_info_errors(self, mock_swift):
         db_entries = {'db-id-1': {'aws_bucket': 'bucket', 'last_row': 5}}
         settings = {
             'aws_bucket': self.aws_bucket,
@@ -700,7 +700,7 @@ class TestSyncContainer(unittest.TestCase):
             sync.logger = mock.Mock()
             mock_swift.return_value.post_container.side_effect = RuntimeError(
                 'failed to post container')
-            sync.handle_container_metadata(metadata, 'db-id-1')
+            sync.handle_container_info({'id': 'db-id-1'}, metadata)
             sync.logger.error.assert_called_once_with(mock.ANY)
             sync.logger.debug.assert_called_once_with(mock.ANY)
         finally:

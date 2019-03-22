@@ -177,16 +177,17 @@ class SyncContainer(container_crawler.base_sync.BaseSync):
             return None
         return res
 
-    def handle_container_metadata(self, metadata_dict, db_id):
+    def handle_container_info(self, db_info, db_metadata):
         relevant_metadata = self.provider.select_container_metadata(
-            metadata_dict)
+            db_metadata)
         metadata_hash = hash_dict(relevant_metadata)
-        last_hash = self._get_metadata_hash(db_id)
+        last_hash = self._get_metadata_hash(db_info['id'])
         if last_hash == metadata_hash:
             return
         post_resp = self.provider.post_container(relevant_metadata)
         if post_resp.success:
-            self._save_status_row(metadata_hash, self.METADATA_HASH_KEY, db_id)
+            self._save_status_row(
+                metadata_hash, self.METADATA_HASH_KEY, db_info['id'])
             self.logger.debug(
                 'Container metadata updated for %s' % (self.aws_bucket,))
         else:
