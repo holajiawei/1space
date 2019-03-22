@@ -1,6 +1,24 @@
 History
 =======
 
+0.1.57 (2019-03-22)
+-------------------
+
+Features
+   - Allows for specifying the storage policy to be used when creating new
+     containers during migrations or sync/lifecycle operations.
+
+Bug fixes
+   - SLO manifests are no longer double-counted during migrations for stats
+     purposes.
+   - Added support for statsd reporting by the migrator. Exposed statistics:
+     number of copied objects, copied bytes, scanned objects.
+
+Improvements
+   - Added support for Container Crawler 0.1.4, which pulls in a change to use
+     stable assignment of processed objects to processes (as opposed to row IDs,
+     which may be out of sync).
+
 0.1.56.1 (2019-03-07)
 ---------------------
 
