@@ -557,8 +557,8 @@ class TestCloudSyncBase(unittest.TestCase):
             except AssertionError:
                 return False
 
-        parts = ['stats', mapping['aws_endpoint'], mapping['aws_bucket'],
-                 mapping['account'], mapping['container']]
+        parts = ['stats', mapping['aws_endpoint'], mapping['account'],
+                 mapping['aws_bucket'], mapping['container']]
         stats = {_action_key(action): 0 for action in expected_stats}
 
         try:

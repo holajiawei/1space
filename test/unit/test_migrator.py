@@ -2447,7 +2447,7 @@ class TestMigrator(unittest.TestCase):
 
     def test_stats_reporting_prefix(self):
         self.stats_factory.instance.assert_called_once_with(
-            'S3.bucket.AUTH_test.bucket')
+            'S3.AUTH_test.bucket.bucket')
 
 
 class TestStatus(unittest.TestCase):

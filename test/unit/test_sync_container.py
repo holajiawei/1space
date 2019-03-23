@@ -763,5 +763,5 @@ class TestSyncContainerFactory(unittest.TestCase):
 
         self.assertEqual(
             'http%3A%2F%2F127%2E0%2E0%2E1%3A5000%2Fauth%2Fv1%2E0'
-            '.bucket%2Fmyobj%C3%AFcts.acc%C3%B4unt.c%C3%B5ntainer',
+            '.acc%C3%B4unt.bucket%2Fmyobj%C3%AFcts.c%C3%B5ntainer',
             instance.stats_reporter.metric_prefix)

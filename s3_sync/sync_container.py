@@ -16,22 +16,21 @@ import eventlet
 eventlet.patcher.monkey_patch(all=True)
 
 import container_crawler.base_sync
-from container_crawler.exceptions import RetryError
-
 import json
 import logging
 import md5
 import os
 import os.path
 import re
-from swift.common.utils import decode_timestamps
 import time
 import traceback
-import urllib
+
+from container_crawler.exceptions import RetryError
+from swift.common.utils import decode_timestamps
 
 from .base_sync import BaseSync, LOGGER_NAME
 from .provider_factory import create_provider
-from .stats import StatsReporterFactory
+from .stats import StatsReporterFactory, build_statsd_prefix
 
 
 def hash_dict(data):
@@ -74,18 +73,8 @@ class SyncContainer(container_crawler.base_sync.BaseSync):
         self.provider = create_provider(sync_settings, max_conns,
                                         per_account=self._per_account)
 
-        statsd_prefix_parts = [
-            self._settings.get('aws_endpoint', 'S3'),
-            '/'.join(filter(
-                None, [self.aws_bucket, self._settings.get('custom_prefix')])),
-            self._settings['account'],
-            self._settings['container']
-        ]
-        statsd_prefix = '.'.join(
-            [urllib.quote(part.encode('utf-8'), safe='').replace('.', '%2E')
-             for part in statsd_prefix_parts])
-
-        self.stats_reporter = stats_factory.instance(statsd_prefix)
+        self.stats_reporter = stats_factory.instance(build_statsd_prefix(
+            self._settings))
 
     def _get_status_row(self, row_field, db_id):
         if not os.path.exists(self._status_file):

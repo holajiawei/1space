@@ -28,24 +28,10 @@ import sys
 import tempfile
 import time
 import traceback
-import urllib
 
 from collections import namedtuple
-from functools import partial
-
 from container_crawler.utils import create_internal_client
-from .daemon_utils import (load_swift, setup_context, initialize_loggers,
-                           setup_logger)
-from .provider_factory import create_provider
-from .stats import MigratorPassStats, StatsReporterFactory
-
-from .utils import (convert_to_local_headers, convert_to_swift_headers,
-                    create_x_timestamp_from_hdrs, diff_container_headers,
-                    diff_account_headers, EPOCH, get_container_headers,
-                    get_slo_etag, get_sys_migrator_header,
-                    iter_internal_listing, iter_listing, MANIFEST_HEADER,
-                    MigrationContainerStates, REMOTE_ETAG, RemoteHTTPError,
-                    SeekableFileLikeIter, SWIFT_TIME_FMT)
+from functools import partial
 import swift.common.constraints
 from swift.common.http import HTTP_NOT_FOUND, HTTP_CONFLICT
 from swift.common.internal_client import UnexpectedResponse
@@ -54,6 +40,19 @@ from swift.common.storage_policy import POLICIES
 from swift.common.ring import Ring
 from swift.common.ring.utils import is_local_device
 from swift.common.utils import Timestamp, whataremyips
+
+from .daemon_utils import (load_swift, setup_context, initialize_loggers,
+                           setup_logger)
+from .provider_factory import create_provider
+from .stats import MigratorPassStats, StatsReporterFactory, build_statsd_prefix
+
+from .utils import (convert_to_local_headers, convert_to_swift_headers,
+                    create_x_timestamp_from_hdrs, diff_container_headers,
+                    diff_account_headers, EPOCH, get_container_headers,
+                    get_slo_etag, get_sys_migrator_header,
+                    iter_internal_listing, iter_listing, MANIFEST_HEADER,
+                    MigrationContainerStates, REMOTE_ETAG, RemoteHTTPError,
+                    SeekableFileLikeIter, SWIFT_TIME_FMT)
 
 EQUAL = 0
 ETAG_DIFF = 1
@@ -376,23 +375,7 @@ class Migrator(object):
         self.stats_factory = stats_factory
 
         self.stats_reporter = self.stats_factory.instance(
-            self._build_statsd_prefix())
-
-    def _build_statsd_prefix(self):
-        statsd_prefix_parts = [
-            self.config.get('aws_endpoint', 'S3'),
-            '/'.join(filter(
-                None, [self.config.get('aws_bucket'),
-                       self.config.get('custom_prefix')])),
-            self.config.get('account'),
-            self.config.get('container')
-        ]
-
-        statsd_prefix = '.'.join(
-            [urllib.quote(part.encode('utf-8'), safe='').replace('.', '%2E')
-             for part in statsd_prefix_parts])
-
-        return statsd_prefix
+            build_statsd_prefix(self.config))
 
     def next_pass(self):
         if self.config['aws_bucket'] != '/*':
@@ -456,7 +439,7 @@ class Migrator(object):
                 self.handled_containers.append(dict(self.config))
                 # Update the stats reporter
                 self.stats_reporter = self.stats_factory.instance(
-                    self._build_statsd_prefix())
+                    build_statsd_prefix(self.config))
                 self._next_pass()
             if local_container and local_container['name'] == remote_container:
                 local_container = next(local_iterator)

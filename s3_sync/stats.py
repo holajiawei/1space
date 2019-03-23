@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import eventlet
+import urllib
 import pystatsd.statsd
 
 
@@ -71,3 +72,27 @@ class StatsReporterFactory(object):
 
     def instance(self, metric_prefix):
         return self._handler_class(self.statsd_client, metric_prefix)
+
+
+# The order here matters a little bit:
+# we allow per-account mappings, which behave in two ways depending on
+# the provider:
+# - Swift maps containers to containers
+#   (with an optional prefix on the container name)
+# - S3 maps all containers into a single bucket
+#   (with an optional prefix on the object name)
+# Letting the remote bucket and container being the last two fields
+# (in that order) allows us to more easily prune them.
+def build_statsd_prefix(settings):
+    statsd_prefix_parts = [
+        settings.get('aws_endpoint', 'S3'),
+        settings.get('account'),
+        '/'.join(filter(
+            None, [settings.get('aws_bucket'),
+                   settings.get('custom_prefix')])),
+        settings.get('container')
+    ]
+
+    return '.'.join(
+        [urllib.quote(part.encode('utf-8'), safe='').replace('.', '%2E')
+         for part in statsd_prefix_parts])
