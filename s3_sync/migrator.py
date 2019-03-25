@@ -1374,9 +1374,11 @@ def main():
     migrations = conf.get('migrations', [])
     migration_status = Status(migrator_conf['status_file'])
 
+    # While the statsd host and port are shared with sync/lifecycle, the prefix
+    # might be different.
     stats_factory = StatsReporterFactory(conf.get('statsd_host', None),
                                          conf.get('statsd_port', 8125),
-                                         conf.get('statsd_prefix'))
+                                         migrator_conf.get('statsd_prefix'))
 
     run(migrations, migration_status, internal_pool, logger, items_chunk,
         workers, selector, poll_interval, segment_size, stats_factory,

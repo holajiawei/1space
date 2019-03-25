@@ -2795,6 +2795,7 @@ class TestMain(unittest.TestCase):
                 'poll_interval': 60,
                 'process': 0,
                 'processes': 15,
+                'statsd_prefix': '1space.migration'
             },
             'migrations': [
                 {'aws_bucket': 'test_bucket',
@@ -2804,6 +2805,8 @@ class TestMain(unittest.TestCase):
                  'container': 'dst-container'}
             ],
             'swift_dir': '/foo/bar/swift',
+            'statsd_host': 'statsd.example.com',
+            'statsd_port': 8133
         }
 
         old_run = s3_sync.migrator.run
@@ -2815,7 +2818,8 @@ class TestMain(unittest.TestCase):
                 self.patch(
                     'run',
                     new_callable=lambda: mock.Mock(side_effect=old_run))\
-                as mock_run:
+                as mock_run,\
+                self.patch('StatsReporterFactory') as mock_statsd_factory:
             fake_container_ring = mock.Mock()
             mock_ring.return_value = fake_container_ring
             fake_container_ring.get_nodes.return_value = ('foo', [
@@ -2835,6 +2839,8 @@ class TestMain(unittest.TestCase):
             mock_run.assert_called_once_with(
                 config['migrations'], mock_status.return_value, mock.ANY,
                 mock.ANY, 42, 1337, mock.ANY, 60, 100000000, mock.ANY, True)
+            mock_statsd_factory.assert_called_once_with(
+                'statsd.example.com', 8133, '1space.migration')
 
     @mock.patch('s3_sync.migrator.create_provider')
     def test_migrate_all_containers_error(self, create_provider_mock):

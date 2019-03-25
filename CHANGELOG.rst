@@ -12,7 +12,8 @@ Bug fixes
    - SLO manifests are no longer double-counted during migrations for stats
      purposes.
    - Added support for statsd reporting by the migrator. Exposed statistics:
-     number of copied objects, copied bytes, scanned objects.
+     number of copied objects, copied bytes, scanned objects. The migrator now
+     accepts a `statsd_prefix` option to configure the emitted stats prefix.
 
 Improvements
    - Added support for Container Crawler 0.1.4, which pulls in a change to use
